@@ -35,6 +35,92 @@ pub fn short_hash(graph_id: &str) -> String {
     )
 }
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use crate::error::CoreError;
+
+const MAX_ENTRIES: usize = 1000;
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct MessageCache {
+    #[serde(default)]
+    pub entries: HashMap<String, CachedMessageRef>,
+}
+
+impl MessageCache {
+    /// Default path: `${XDG_CACHE_HOME:-~/.cache}/pidge/messages.json`.
+    pub fn default_path() -> Result<PathBuf, CoreError> {
+        let dir = dirs::cache_dir().ok_or(CoreError::NoConfigDir)?.join("pidge");
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir.join("messages.json"))
+    }
+
+    /// Load the cache from the default path. Missing file -> empty cache.
+    pub fn load() -> Result<Self, CoreError> {
+        let path = Self::default_path()?;
+        Self::load_from(&path)
+    }
+
+    pub fn load_from(path: &Path) -> Result<Self, CoreError> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(path)?;
+        let cache: MessageCache = serde_json::from_str(&text).map_err(|e| {
+            CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
+        Ok(cache)
+    }
+
+    pub fn save(&self) -> Result<(), CoreError> {
+        let path = Self::default_path()?;
+        self.save_to(&path)
+    }
+
+    pub fn save_to(&self, path: &Path) -> Result<(), CoreError> {
+        let text = serde_json::to_string_pretty(self).map_err(|e| {
+            CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        })?;
+        std::fs::write(path, text)?;
+        Ok(())
+    }
+
+    /// Insert messages and evict oldest entries if over MAX_ENTRIES.
+    /// Each tuple: (graph_id, account_email). Hashes are computed here.
+    pub fn insert_many(&mut self, msgs: &[(String, String)]) {
+        let now = Utc::now();
+        for (graph_id, account) in msgs {
+            let hash = short_hash(graph_id);
+            self.entries.insert(
+                hash,
+                CachedMessageRef {
+                    graph_id: graph_id.clone(),
+                    account: account.clone(),
+                    cached_at: now,
+                },
+            );
+        }
+        self.evict_oldest_if_needed();
+    }
+
+    fn evict_oldest_if_needed(&mut self) {
+        if self.entries.len() <= MAX_ENTRIES {
+            return;
+        }
+        let excess = self.entries.len() - MAX_ENTRIES;
+        let mut sorted: Vec<(String, DateTime<Utc>)> = self
+            .entries
+            .iter()
+            .map(|(k, v)| (k.clone(), v.cached_at))
+            .collect();
+        sorted.sort_by_key(|(_, t)| *t);
+        for (k, _) in sorted.into_iter().take(excess) {
+            self.entries.remove(&k);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +142,73 @@ mod tests {
     #[test]
     fn short_hash_differs_for_different_inputs() {
         assert_ne!(short_hash("x"), short_hash("y"));
+    }
+
+    #[test]
+    fn empty_cache_roundtrips_through_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("messages.json");
+
+        let cache = MessageCache::default();
+        cache.save_to(&path).unwrap();
+        let loaded = MessageCache::load_from(&path).unwrap();
+        assert_eq!(loaded.entries.len(), 0);
+    }
+
+    #[test]
+    fn populated_cache_roundtrips_through_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("messages.json");
+
+        let mut cache = MessageCache::default();
+        cache.insert_many(&[
+            ("AAA".to_string(), "user@example.com".to_string()),
+            ("BBB".to_string(), "user@example.com".to_string()),
+        ]);
+        cache.save_to(&path).unwrap();
+
+        let loaded = MessageCache::load_from(&path).unwrap();
+        assert_eq!(loaded.entries.len(), 2);
+        let hash_aaa = short_hash("AAA");
+        let entry = loaded.entries.get(&hash_aaa).unwrap();
+        assert_eq!(entry.graph_id, "AAA");
+        assert_eq!(entry.account, "user@example.com");
+    }
+
+    #[test]
+    fn load_from_missing_file_returns_empty_cache() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("nonexistent.json");
+        let cache = MessageCache::load_from(&path).unwrap();
+        assert_eq!(cache.entries.len(), 0);
+    }
+
+    #[test]
+    fn insert_many_evicts_oldest_when_over_max() {
+        let mut cache = MessageCache::default();
+
+        // Pre-populate with MAX_ENTRIES old entries
+        let now = Utc::now();
+        let old_time = now - chrono::Duration::seconds(3600);
+        for i in 0..MAX_ENTRIES {
+            let hash = format!("{:08x}", i);
+            cache.entries.insert(
+                hash,
+                CachedMessageRef {
+                    graph_id: format!("old-{}", i),
+                    account: "user@example.com".into(),
+                    cached_at: old_time,
+                },
+            );
+        }
+        assert_eq!(cache.entries.len(), MAX_ENTRIES);
+
+        // Insert one new entry — should evict one old entry
+        cache.insert_many(&[("new-graph-id".into(), "user@example.com".into())]);
+        assert_eq!(cache.entries.len(), MAX_ENTRIES);
+
+        // The new entry must be present
+        let new_hash = short_hash("new-graph-id");
+        assert!(cache.entries.contains_key(&new_hash));
     }
 }

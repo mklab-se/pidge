@@ -10,7 +10,7 @@ mod error;
 mod message;
 
 pub use account::Account;
-pub use cache::{short_hash, CacheLookup, CachedMessageRef};
+pub use cache::{short_hash, CacheLookup, CachedMessageRef, MessageCache};
 pub use config::{Config, Defaults};
 pub use error::CoreError;
 pub use message::{Message, MessageFrom};
