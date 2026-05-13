@@ -3,6 +3,7 @@
 pub mod config;
 pub mod device_code;
 mod jwt;
+pub mod refresh;
 mod store;
 mod tokens;
 
