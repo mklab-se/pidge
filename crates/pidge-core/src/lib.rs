@@ -2,3 +2,9 @@
 //!
 //! This crate is intentionally provider-agnostic — it knows nothing about HTTP,
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
+
+mod account;
+mod error;
+
+pub use account::Account;
+pub use error::CoreError;
