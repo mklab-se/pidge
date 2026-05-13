@@ -18,7 +18,35 @@
 
 ## Status
 
-**Foundation release.** pidge currently ships AI configuration, shell completions, and version commands only. E-mail and calendar feature commands are coming in future releases.
+**Early days.** pidge can sign in to one or more Microsoft 365 / personal Microsoft accounts and list inbox messages from each. Read/write mail, draft, send, and calendar commands are on the roadmap.
+
+## Account setup
+
+```bash
+# Sign in (interactive device code flow)
+pidge auth login
+
+# Check what you're signed in to
+pidge auth list
+
+# Sign out
+pidge auth logout
+```
+
+The first account becomes the default for sending mail and for calendar; change with `pidge auth default --send <email>` or `--calendar <email>`. Sign in to multiple accounts and pidge merges reads across all of them.
+
+## Reading the inbox
+
+```bash
+# All accounts, top 25 by received time
+pidge inbox list
+
+# One account, only unread
+pidge inbox list --account kristofer@mklab.se --unread
+
+# Pipe to scripts
+pidge inbox list --output json | jq '.[].subject'
+```
 
 ## Quick Start
 

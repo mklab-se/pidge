@@ -14,30 +14,27 @@ cargo run -- --help                      # Run the CLI
 
 ## Architecture
 
-Rust workspace with a single crate:
+Rust workspace with three crates:
 
 ```
 crates/
   pidge/                # CLI binary (package and binary name: pidge)
     src/
-      main.rs           # Entry point, tracing setup, dynamic completions, background update check
-      cli.rs            # Clap CLI definitions, command dispatch
-      banner.rs         # ASCII art logo + version subtitle
-      update.rs         # Version update checker (queries crates.io, caches 24h)
-      commands/
-        mod.rs          # Command module exports
-        ai.rs           # `pidge ai` — delegates to ailloy::config_tui
-        completion.rs   # `pidge completion <shell>` — static completion + dynamic tip
-        skill.rs        # `pidge ai skill [--emit|--reference]`
-    doc/
-      ai-reference.md   # Embedded via include_str! in skill.rs
+      main.rs           # Entry point
+      cli.rs            # Clap CLI definitions
+      banner.rs         # ASCII logo
+      update.rs         # Crates.io update checker
+      commands/         # `pidge ai`, `pidge auth`, `pidge inbox`, `pidge completion`, etc.
+  pidge-core/           # Provider-agnostic types: Account, Config, Message
+  pidge-client/         # Microsoft Graph client, OAuth flows, keychain token storage
+    src/
+      auth/             # Device code flow, refresh, JWT, keychain
+      graph/            # Graph API endpoints (currently /me, inbox)
 ```
 
-The workspace is single-member by design at this stage. Splitting into `pidge`, `pidge-core`, `pidge-client` is planned when HTTP/provider code lands.
-
-- **Workspace root** `Cargo.toml` defines shared dependencies and metadata
-- Crate inherits `version`, `edition`, `authors`, `license`, `repository`, `rust-version` from workspace
-- Single version bump in root `Cargo.toml` updates everything
+- Workspace root `Cargo.toml` defines shared dependencies and version
+- `pidge-core` has no HTTP or auth code — it's safe to depend on from any consumer
+- `pidge-client` knows nothing about clap or terminal output
 
 ## Key Patterns
 
