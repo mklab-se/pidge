@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = ["crates/pidge"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
+license = "MIT"
+repository = "https://github.com/mklab-se/pidge"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
+clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
+
+# Async
+tokio = { version = "1.40", features = ["full"] }
+
+# HTTP (for update checker)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+
+# Errors
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Terminal
+colored = "2.1"
+
+# Versioning & time
+semver = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+
+# Directories
+dirs = "6.0"
+
+# AI integration
+ailloy = { version = "0.7", default-features = false, features = ["config-tui"] }
