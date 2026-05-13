@@ -5,6 +5,8 @@
 
 pub mod auth;
 mod error;
+pub mod graph;
 
 pub use auth::AuthClient;
 pub use error::ClientError;
+pub use graph::GraphClient;
