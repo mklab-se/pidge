@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Datelike, Local, Utc};
 use colored::Colorize;
-use comfy_table::{ContentArrangement, Table};
+use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use futures::future::join_all;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
@@ -108,37 +108,45 @@ fn compute_per_account_fetch(limit: usize, num_accounts: usize) -> usize {
 
 fn render_text(messages: &[Message], hide_account_column: bool) -> Result<()> {
     let mut table = Table::new();
-    let mut header = vec!["ACCOUNT", "FROM", "SUBJECT", "RECEIVED"];
+    // Unread-marker cell is in its own narrow column so ANSI styling on the
+    // bullet doesn't throw off column-width math.
+    let mut header: Vec<Cell> = vec![
+        Cell::new(""),
+        Cell::new("ACCOUNT"),
+        Cell::new("FROM"),
+        Cell::new("SUBJECT"),
+        Cell::new("RECEIVED"),
+    ];
     if hide_account_column {
-        header.remove(0);
+        header.remove(1);
     }
     table
         .set_header(header)
         .set_content_arrangement(ContentArrangement::Dynamic);
 
     for m in messages {
-        let unread_marker = if !m.is_read {
-            format!("{} ", "●".magenta().dimmed())
+        let marker = if !m.is_read {
+            Cell::new("●")
+                .fg(Color::Magenta)
+                .add_attribute(Attribute::Dim)
         } else {
-            "  ".to_string()
+            Cell::new("")
         };
-        let from = format!(
-            "{unread_marker}{}",
-            if m.from.name.is_empty() {
-                &m.from.address
-            } else {
-                &m.from.name
-            }
-        );
+        let from_name: &str = if m.from.name.is_empty() {
+            &m.from.address
+        } else {
+            &m.from.name
+        };
 
         let mut row = vec![
-            m.account.clone(),
-            from,
-            m.subject.clone(),
-            relative_received(m.received_at),
+            marker,
+            Cell::new(&m.account),
+            Cell::new(from_name),
+            Cell::new(&m.subject),
+            Cell::new(relative_received(m.received_at)),
         ];
         if hide_account_column {
-            row.remove(0);
+            row.remove(1);
         }
         table.add_row(row);
     }
