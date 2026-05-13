@@ -6,4 +6,5 @@
 pub mod auth;
 mod error;
 
+pub use auth::AuthClient;
 pub use error::ClientError;
