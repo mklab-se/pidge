@@ -27,9 +27,15 @@ tracing-subscriber.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_yaml.workspace = true
 semver.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+pidge-core.workspace = true
+pidge-client.workspace = true
+comfy-table.workspace = true
+inquire.workspace = true
+futures.workspace = true
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/pidge-v{ version }-{ target }.{ archive-format }"
