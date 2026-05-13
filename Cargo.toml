@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pidge"]
+members = ["crates/pidge", "crates/pidge-core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -45,3 +45,33 @@ dirs = "6.0"
 
 # AI integration
 ailloy = { version = "0.7", default-features = false, features = ["config-tui"] }
+
+# Keychain
+keyring = "3"
+
+# Base64 (for JWT decoding)
+base64 = "0.22"
+
+# YAML for config files
+serde_yaml = "0.9"
+
+# Test-only HTTP mock
+wiremock = "0.6"
+
+# Table output
+comfy-table = "7"
+
+# Interactive prompts
+inquire = "0.7"
+
+# Future combinators (for join_all in multi-account fetch)
+futures = "0.3"
+
+# URL handling
+url = "2"
+
+# Testing
+tempfile = "3.10"
+
+# Internal crates
+pidge-core = { version = "0.1.0", path = "crates/pidge-core" }

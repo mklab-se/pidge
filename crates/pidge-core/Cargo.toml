@@ -1,0 +1,22 @@
+[package]
+name = "pidge-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core types for the pidge CLI: accounts, configuration, normalized message model"
+readme = "../../README.md"
+keywords = ["pidge", "email", "calendar"]
+categories = ["command-line-utilities", "email"]
+
+[dependencies]
+serde.workspace = true
+serde_yaml.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
