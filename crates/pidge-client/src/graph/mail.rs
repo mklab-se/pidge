@@ -54,11 +54,7 @@ pub async fn list_inbox(
         url.push_str("&$filter=isRead%20eq%20false");
     }
 
-    let resp = http
-        .get(&url)
-        .bearer_auth(access_token)
-        .send()
-        .await?;
+    let resp = http.get(&url).bearer_auth(access_token).send().await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();

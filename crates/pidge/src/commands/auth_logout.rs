@@ -1,6 +1,6 @@
 //! `pidge auth logout` — remove tokens and account entry from pidge.
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use colored::Colorize;
 use inquire::{Confirm, Select};
 

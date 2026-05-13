@@ -55,7 +55,9 @@ pub async fn refresh(
 
     let tr: TokenResponse = serde_json::from_slice(&body)?;
     let expires = tr.expires_in.unwrap_or(3600);
-    let new_refresh = tr.refresh_token.unwrap_or_else(|| current.refresh_token.clone());
+    let new_refresh = tr
+        .refresh_token
+        .unwrap_or_else(|| current.refresh_token.clone());
 
     Ok(TokenSet {
         access_token: tr.access_token,
@@ -93,9 +95,16 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let new = refresh(&client, &server.uri(), "CID", &old_tokens(), "scope", "u@e.com")
-            .await
-            .unwrap();
+        let new = refresh(
+            &client,
+            &server.uri(),
+            "CID",
+            &old_tokens(),
+            "scope",
+            "u@e.com",
+        )
+        .await
+        .unwrap();
         assert_eq!(new.access_token, "NEW_AT");
         assert_eq!(new.refresh_token, "NEW_RT");
     }
@@ -113,9 +122,16 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let new = refresh(&client, &server.uri(), "CID", &old_tokens(), "scope", "u@e.com")
-            .await
-            .unwrap();
+        let new = refresh(
+            &client,
+            &server.uri(),
+            "CID",
+            &old_tokens(),
+            "scope",
+            "u@e.com",
+        )
+        .await
+        .unwrap();
         assert_eq!(new.access_token, "NEW_AT");
         assert_eq!(new.refresh_token, "OLD_RT");
     }
@@ -133,9 +149,16 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let err = refresh(&client, &server.uri(), "CID", &old_tokens(), "scope", "u@e.com")
-            .await
-            .unwrap_err();
+        let err = refresh(
+            &client,
+            &server.uri(),
+            "CID",
+            &old_tokens(),
+            "scope",
+            "u@e.com",
+        )
+        .await
+        .unwrap_err();
         match err {
             ClientError::SessionExpired { email } => assert_eq!(email, "u@e.com"),
             other => panic!("expected SessionExpired, got {other:?}"),

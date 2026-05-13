@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
 
-use pidge_client::auth::{extract_tenant_id, AuthClient, KeychainStore};
+use pidge_client::auth::{AuthClient, KeychainStore, extract_tenant_id};
 use pidge_core::{Account, Config};
 
 pub async fn run() -> Result<()> {
@@ -68,12 +68,7 @@ pub async fn run() -> Result<()> {
     config.save()?;
 
     println!();
-    println!(
-        "{} {} <{}>",
-        "✔".green(),
-        "Signed in as".bold(),
-        email
-    );
+    println!("{} {} <{}>", "✔".green(), "Signed in as".bold(), email);
     if was_first {
         println!();
         println!("This is your first account, so pidge has set it as:");

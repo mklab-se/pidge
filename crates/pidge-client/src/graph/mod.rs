@@ -4,7 +4,7 @@ mod mail;
 mod me;
 
 pub use mail::list_inbox;
-pub use me::{get_me, Me};
+pub use me::{Me, get_me};
 
 use crate::auth::AuthClient;
 use crate::auth::config;
@@ -55,6 +55,14 @@ impl GraphClient {
         unread_only: bool,
     ) -> Result<Vec<Message>, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
-        list_inbox(&self.http, &self.base_url, &token, account, limit, unread_only).await
+        list_inbox(
+            &self.http,
+            &self.base_url,
+            &token,
+            account,
+            limit,
+            unread_only,
+        )
+        .await
     }
 }

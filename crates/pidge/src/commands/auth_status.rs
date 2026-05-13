@@ -9,11 +9,7 @@ pub fn run() -> Result<()> {
     let config = Config::load()?;
 
     let n = config.accounts.len();
-    println!(
-        "{} account{} signed in.",
-        n,
-        if n == 1 { "" } else { "s" }
-    );
+    println!("{} account{} signed in.", n, if n == 1 { "" } else { "s" });
 
     if n == 0 {
         println!();

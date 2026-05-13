@@ -4,7 +4,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
-    #[error("pidge has not been provisioned yet. The maintainer needs to run scripts/register-pidge-app.sh and update APP_CLIENT_ID.")]
+    #[error(
+        "pidge has not been provisioned yet. The maintainer needs to run scripts/register-pidge-app.sh and update APP_CLIENT_ID."
+    )]
     NotProvisioned,
 
     #[error("OS keychain unavailable: {0}")]

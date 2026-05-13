@@ -182,7 +182,9 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let resp = start(&client, &server.uri(), "CID", "openid").await.unwrap();
+        let resp = start(&client, &server.uri(), "CID", "openid")
+            .await
+            .unwrap();
         assert_eq!(resp.user_code, "ABCD-1234");
         assert_eq!(resp.interval, 5);
     }
@@ -202,10 +204,15 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let result = poll(&client, &server.uri(), "CID", "DC", 1, 60, no_sleep).await.unwrap();
+        let result = poll(&client, &server.uri(), "CID", "DC", 1, 60, no_sleep)
+            .await
+            .unwrap();
         assert_eq!(result.tokens.access_token, "AT123");
         assert_eq!(result.tokens.refresh_token, "RT123");
-        assert_eq!(result.id_token.as_deref(), Some("eyJh.eyJ0aWQiOiJ0aWQifQ.sig"));
+        assert_eq!(
+            result.id_token.as_deref(),
+            Some("eyJh.eyJ0aWQiOiJ0aWQifQ.sig")
+        );
     }
 
     #[tokio::test]
@@ -232,7 +239,9 @@ mod tests {
             .await;
 
         let client = reqwest::Client::new();
-        let result = poll(&client, &server.uri(), "CID", "DC", 0, 60, no_sleep).await.unwrap();
+        let result = poll(&client, &server.uri(), "CID", "DC", 0, 60, no_sleep)
+            .await
+            .unwrap();
         assert_eq!(result.tokens.access_token, "AT");
     }
 

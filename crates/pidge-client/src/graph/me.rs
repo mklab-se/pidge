@@ -21,11 +21,7 @@ pub async fn get_me(
     access_token: &str,
 ) -> Result<Me, ClientError> {
     let url = format!("{base_url}/me");
-    let resp = http
-        .get(&url)
-        .bearer_auth(access_token)
-        .send()
-        .await?;
+    let resp = http.get(&url).bearer_auth(access_token).send().await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();

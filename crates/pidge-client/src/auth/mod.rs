@@ -52,7 +52,13 @@ impl AuthClient {
     /// Run the device code flow. Returns the device code response immediately;
     /// caller is expected to display the user code and call `poll_for_tokens`.
     pub async fn start_device_code(&self) -> Result<device_code::DeviceCodeResponse, ClientError> {
-        device_code::start(&self.http, &self.authority_base, &self.client_id, &self.scope).await
+        device_code::start(
+            &self.http,
+            &self.authority_base,
+            &self.client_id,
+            &self.scope,
+        )
+        .await
     }
 
     /// Poll for tokens after `start_device_code`. Blocks until success or terminal error.

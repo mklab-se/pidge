@@ -58,6 +58,9 @@ mod tests {
 
     #[test]
     fn returns_none_for_non_base64_middle_segment() {
-        assert_eq!(extract_tenant_id("a.this-isn't-base64-because-of-?-char.b"), None);
+        assert_eq!(
+            extract_tenant_id("a.this-isn't-base64-because-of-?-char.b"),
+            None
+        );
     }
 }

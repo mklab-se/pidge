@@ -27,7 +27,9 @@ pub struct Defaults {
 impl Config {
     /// Default path: `${XDG_CONFIG_HOME:-~/.config}/pidge/config.yaml`.
     pub fn default_path() -> Result<PathBuf, CoreError> {
-        let dir = dirs::config_dir().ok_or(CoreError::NoConfigDir)?.join("pidge");
+        let dir = dirs::config_dir()
+            .ok_or(CoreError::NoConfigDir)?
+            .join("pidge");
         std::fs::create_dir_all(&dir)?;
         Ok(dir.join("config.yaml"))
     }
