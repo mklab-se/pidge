@@ -59,7 +59,9 @@ serde_yaml = "0.9"
 wiremock = "0.6"
 
 # Table output
-comfy-table = "7"
+comfy-table = { version = "7", features = ["custom_styling"] }
+linkify = "0.10"
+sha2 = "0.10"
 
 # Interactive prompts
 inquire = "0.7"
