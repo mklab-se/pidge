@@ -119,6 +119,29 @@ impl MessageCache {
             self.entries.remove(&k);
         }
     }
+
+    /// Find a message by a fragment of its short hash. The fragment may be a
+    /// prefix, suffix, or any contiguous substring of the 8-char hash.
+    /// Empty fragment is treated as NotFound.
+    pub fn find_by_fragment(&self, fragment: &str) -> CacheLookup {
+        if fragment.is_empty() {
+            return CacheLookup::NotFound;
+        }
+        let mut matches: Vec<(String, CachedMessageRef)> = self
+            .entries
+            .iter()
+            .filter(|(k, _)| k.contains(fragment))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        match matches.len() {
+            0 => CacheLookup::NotFound,
+            1 => {
+                let (k, v) = matches.remove(0);
+                CacheLookup::One(k, v)
+            }
+            _ => CacheLookup::Ambiguous(matches.into_iter().take(10).collect()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -210,5 +233,88 @@ mod tests {
         // The new entry must be present
         let new_hash = short_hash("new-graph-id");
         assert!(cache.entries.contains_key(&new_hash));
+    }
+
+    fn cache_with(entries: &[(&str, &str)]) -> MessageCache {
+        let mut cache = MessageCache::default();
+        let pairs: Vec<(String, String)> = entries
+            .iter()
+            .map(|(g, a)| (g.to_string(), a.to_string()))
+            .collect();
+        cache.insert_many(&pairs);
+        cache
+    }
+
+    #[test]
+    fn find_by_fragment_returns_not_found_when_no_match() {
+        let cache = cache_with(&[("hello", "u@e.com")]);
+        assert!(matches!(cache.find_by_fragment("zzzzzz"), CacheLookup::NotFound));
+    }
+
+    #[test]
+    fn find_by_fragment_returns_not_found_for_empty_fragment() {
+        let cache = cache_with(&[("hello", "u@e.com")]);
+        assert!(matches!(cache.find_by_fragment(""), CacheLookup::NotFound));
+    }
+
+    #[test]
+    fn find_by_fragment_returns_one_for_exact_match() {
+        let cache = cache_with(&[("hello", "u@e.com")]);
+        let hash = short_hash("hello");
+        match cache.find_by_fragment(&hash) {
+            CacheLookup::One(h, _) => assert_eq!(h, hash),
+            other => panic!("expected One, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn find_by_fragment_matches_prefix() {
+        let cache = cache_with(&[("hello", "u@e.com")]);
+        let hash = short_hash("hello");
+        let prefix = &hash[..3];
+        assert!(matches!(cache.find_by_fragment(prefix), CacheLookup::One(_, _)));
+    }
+
+    #[test]
+    fn find_by_fragment_matches_suffix() {
+        let cache = cache_with(&[("hello", "u@e.com")]);
+        let hash = short_hash("hello");
+        let suffix = &hash[hash.len() - 3..];
+        assert!(matches!(cache.find_by_fragment(suffix), CacheLookup::One(_, _)));
+    }
+
+    #[test]
+    fn find_by_fragment_matches_middle_substring() {
+        let cache = cache_with(&[("hello", "u@e.com")]);
+        let hash = short_hash("hello");
+        let middle = &hash[2..5];
+        assert!(matches!(cache.find_by_fragment(middle), CacheLookup::One(_, _)));
+    }
+
+    #[test]
+    fn find_by_fragment_returns_ambiguous_when_two_hashes_share_fragment() {
+        let mut cache = MessageCache::default();
+        let mut entries = Vec::new();
+        for i in 0..200 {
+            entries.push((format!("graph-{i}"), "u@e.com".to_string()));
+        }
+        cache.insert_many(&entries);
+
+        let hashes: Vec<String> = cache.entries.keys().cloned().collect();
+        let mut found_ambiguous = false;
+        'outer: for h in &hashes {
+            for start in 0..h.len() - 1 {
+                let frag = &h[start..start + 2];
+                let count = hashes.iter().filter(|other| other.contains(frag)).count();
+                if count >= 2 {
+                    if let CacheLookup::Ambiguous(matches) = cache.find_by_fragment(frag) {
+                        assert!(matches.len() >= 2);
+                        found_ambiguous = true;
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        assert!(found_ambiguous, "expected at least one ambiguous fragment in 200-entry cache");
     }
 }
