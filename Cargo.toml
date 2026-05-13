@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/pidge", "crates/pidge-core"]
+members = ["crates/pidge", "crates/pidge-core", "crates/pidge-client"]
 
 [workspace.package]
 version = "0.1.0"
@@ -75,3 +75,4 @@ tempfile = "3.10"
 
 # Internal crates
 pidge-core = { version = "0.1.0", path = "crates/pidge-core" }
+pidge-client = { version = "0.1.0", path = "crates/pidge-client" }

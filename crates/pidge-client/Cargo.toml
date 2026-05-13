@@ -1,0 +1,32 @@
+[package]
+name = "pidge-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Microsoft 365 / Graph client and OAuth flows for the pidge CLI"
+readme = "../../README.md"
+keywords = ["pidge", "microsoft-graph", "oauth", "m365"]
+categories = ["command-line-utilities", "email", "authentication"]
+
+[dependencies]
+pidge-core.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+keyring = { workspace = true, features = ["apple-native", "windows-native", "linux-native"] }
+base64.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
