@@ -42,7 +42,7 @@ crates/
 - Async runtime: `tokio`
 - Logging: `tracing` + `tracing-subscriber` with `-v`/`-vv` verbosity levels
 - Colored output via `colored` crate (respects `--no-color`)
-- Error handling: `anyhow` (CLI), `thiserror` (libraries — none yet)
+- Error handling: `anyhow` (CLI), `thiserror` (library crates: `pidge-core`, `pidge-client`)
 - AI integration: delegates entirely to `ailloy::config_tui` with tool name `"pidge"` and capability slice `&["chat"]`. Config lives at `~/.config/ailloy/config.yaml`, shared with `rigg`, `mdeck`, `cosq`.
 - Update checker: background task, cached at `~/.cache/pidge/`, skip with `PIDGE_NO_UPDATE_CHECK=1`
 

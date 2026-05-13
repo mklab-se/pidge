@@ -42,6 +42,7 @@ pub(crate) struct ErrorResponse {
 }
 
 /// Result of a successful poll: tokens + the id_token (for tenant_id extraction).
+#[derive(Debug)]
 pub struct PollSuccess {
     pub tokens: TokenSet,
     pub id_token: Option<String>,
@@ -275,5 +276,58 @@ mod tests {
         let client = reqwest::Client::new();
         let result = poll(&client, &server.uri(), "CID", "DC", 0, 60, no_sleep).await;
         assert!(matches!(result, Err(ClientError::DeviceCodeTimeout)));
+    }
+
+    #[tokio::test]
+    async fn poll_returns_other_on_unknown_error_code() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/v2.0/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "consent_required",
+                "error_description": "AADSTS65001: consent needed"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = poll(&client, &server.uri(), "CID", "DC", 0, 60, no_sleep).await;
+        match result {
+            Err(ClientError::DeviceCodeOther { kind, description }) => {
+                assert_eq!(kind, "consent_required");
+                assert_eq!(description.as_deref(), Some("AADSTS65001: consent needed"));
+            }
+            other => panic!("expected DeviceCodeOther, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn poll_slow_down_increases_interval_then_succeeds() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/oauth2/v2.0/token"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": "slow_down"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/oauth2/v2.0/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "AT",
+                "refresh_token": "RT",
+                "expires_in": 3600
+            })))
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = poll(&client, &server.uri(), "CID", "DC", 0, 60, no_sleep)
+            .await
+            .unwrap();
+        assert_eq!(result.tokens.access_token, "AT");
     }
 }

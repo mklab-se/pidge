@@ -42,8 +42,8 @@ pub async fn run() -> Result<()> {
         .and_then(extract_tenant_id)
         .unwrap_or_default();
 
-    // Identity from Graph /me
-    let graph = pidge_client::GraphClient::new(AuthClient::from_env()?)?;
+    // Identity from Graph /me (reuses the AuthClient from the device code flow)
+    let graph = pidge_client::GraphClient::new(auth)?;
     let me = graph
         .me(&success.tokens.access_token)
         .await
@@ -89,16 +89,29 @@ pub async fn run() -> Result<()> {
 
 fn open_browser(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
-    let cmd = "open";
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+    }
     #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+    }
     #[cfg(target_os = "windows")]
-    let cmd = "start";
-
-    std::process::Command::new(cmd)
-        .arg(url)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
+    {
+        // `start` is a cmd.exe built-in, not a standalone executable.
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?;
+    }
     Ok(())
 }
