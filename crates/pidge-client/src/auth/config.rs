@@ -5,7 +5,7 @@
 /// Empty string means "not yet provisioned". Set by `scripts/register-pidge-app.sh`
 /// after registering the app in Entra. Until then, set the `PIDGE_CLIENT_ID` env var
 /// for development.
-pub const APP_CLIENT_ID: &str = "";
+pub const APP_CLIENT_ID: &str = "e49f90dc-c265-4392-b62f-b26704f9088f";
 
 /// Microsoft Graph delegated scopes pidge requests at sign-in.
 /// Locked in at app registration time — changing them later requires updating
