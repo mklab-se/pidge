@@ -5,6 +5,8 @@
 
 mod account;
 mod error;
+mod message;
 
 pub use account::Account;
 pub use error::CoreError;
+pub use message::{Message, MessageFrom};
