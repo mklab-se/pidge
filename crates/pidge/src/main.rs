@@ -1,5 +1,7 @@
 //! pidge — A fast CLI for e-mail and calendar
 
+mod banner;
+
 fn main() {
-    println!("pidge v{}", env!("CARGO_PKG_VERSION"));
+    banner::print_banner_with_version();
 }
