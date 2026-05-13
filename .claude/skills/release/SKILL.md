@@ -34,7 +34,8 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 
 ### 4. Bump version numbers
 
-- Update `version` in the root `Cargo.toml` `[workspace.package]` section. The single workspace member inherits via `version.workspace = true`, so no other Cargo files need editing.
+- Update `version` in the root `Cargo.toml` `[workspace.package]` section.
+- Update internal-crate `version = "X.Y.Z"` pins in the root `Cargo.toml` `[workspace.dependencies]` section — both `pidge-core` and `pidge-client`. They use the bumped version (no `=` prefix).
 
 ### 5. Update documentation
 
