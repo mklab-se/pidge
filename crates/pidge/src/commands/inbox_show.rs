@@ -147,9 +147,16 @@ fn render_header_and_body(full: &FullMessage) -> Result<()> {
     println!("{}", separator());
     println!();
 
+    // `render_body` returns a string that already has OSC 8 hyperlinks for HTML
+    // bodies. For plain-text bodies it returns raw text; we run `linkify_text` to
+    // detect bare URLs there. We never double-linkify HTML output (that would wrap
+    // the URL inside the existing OSC 8 open sequence and produce nested escapes).
     let body_text = render_body(full);
-    let body_linkified = linkify_text(&body_text);
-    println!("{}", body_linkified);
+    let body_out = match full.body_content_type {
+        BodyContentType::Html => body_text,
+        BodyContentType::Text => linkify_text(&body_text),
+    };
+    println!("{}", body_out);
     Ok(())
 }
 
@@ -238,9 +245,93 @@ fn render_body(full: &FullMessage) -> String {
         BodyContentType::Text => full.body_content.clone(),
         BodyContentType::Html => {
             let width = terminal_width().min(100);
-            html2text::from_read(full.body_content.as_bytes(), width)
+            render_html_body(&full.body_content, width)
         }
     }
+}
+
+/// Render an HTML body into a terminal-friendly string.
+///
+/// - Uses html2text's `raw_mode` which traverses HTML `<table>` elements as a
+///   sequence of paragraphs (every cell becomes its own row, no column layout,
+///   no ASCII borders). Marketing emails are almost entirely layout tables; this
+///   keeps the reading flow.
+/// - Wraps every `<a href="…">text</a>` span in an OSC 8 escape sequence so
+///   modern terminals make link text clickable. No reference-style footnotes.
+/// - Suppresses `<img>` alt-text entirely (no `[[Logo]]` noise from email
+///   tracking pixels and logo images).
+fn render_html_body(html: &str, width: usize) -> String {
+    use html2text::render::text_renderer::{RichAnnotation, TaggedLineElement};
+
+    let lines = match html2text::config::rich()
+        .raw_mode(true)
+        .lines_from_read(html.as_bytes(), width)
+    {
+        Ok(l) => l,
+        Err(_) => return html.to_string(),
+    };
+
+    let mut out = String::new();
+    for line in lines {
+        for elem in line.iter() {
+            let TaggedLineElement::Str(ts) = elem else {
+                continue;
+            };
+            let mut url: Option<&str> = None;
+            let mut is_image = false;
+            for ann in &ts.tag {
+                match ann {
+                    RichAnnotation::Image(_) => is_image = true,
+                    RichAnnotation::Link(u) => url = Some(u.as_str()),
+                    _ => {}
+                }
+            }
+            if is_image {
+                continue;
+            }
+            if let Some(u) = url {
+                out.push_str("\x1b]8;;");
+                out.push_str(u);
+                out.push_str("\x1b\\");
+                out.push_str(&ts.s);
+                out.push_str("\x1b]8;;\x1b\\");
+            } else {
+                out.push_str(&ts.s);
+            }
+        }
+        out.push('\n');
+    }
+    // Collapse runs of 3+ blank lines down to 2 — raw_mode + flattened tables
+    // can leave large gaps that look worse than the original layout would.
+    collapse_blank_runs(&out)
+}
+
+fn collapse_blank_runs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_streak = 0;
+    for line in text.lines() {
+        // Strip tracking-pixel padding characters that marketing emails use to
+        // distort preview-pane summaries: zero-width non-joiner (U+200C), zero-
+        // width space (U+200B), hair space (U+200A), and combining grapheme
+        // joiner (U+034F). Then strip trailing ASCII spaces.
+        let cleaned: String = line
+            .chars()
+            .filter(|&c| !matches!(c, '\u{200C}' | '\u{200B}' | '\u{200A}' | '\u{034F}'))
+            .collect();
+        let cleaned = cleaned.trim_end_matches(' ');
+
+        if cleaned.is_empty() {
+            blank_streak += 1;
+            if blank_streak <= 2 {
+                out.push('\n');
+            }
+        } else {
+            blank_streak = 0;
+            out.push_str(cleaned);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 fn terminal_width() -> usize {
