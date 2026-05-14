@@ -13,4 +13,4 @@ pub use account::Account;
 pub use cache::{CacheLookup, CachedMessageRef, MessageCache, short_hash};
 pub use config::{Config, Defaults};
 pub use error::CoreError;
-pub use message::{Message, MessageFrom};
+pub use message::{Attachment, BodyContentType, FullMessage, Message, MessageFrom};
