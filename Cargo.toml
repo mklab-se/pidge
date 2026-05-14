@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/pidge", "crates/pidge-core", "crates/pidge-client"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -82,5 +82,5 @@ url = "2"
 tempfile = "3.10"
 
 # Internal crates
-pidge-core = { version = "0.1.0", path = "crates/pidge-core" }
-pidge-client = { version = "0.1.0", path = "crates/pidge-client" }
+pidge-core = { version = "0.2.0", path = "crates/pidge-core" }
+pidge-client = { version = "0.2.0", path = "crates/pidge-client" }
