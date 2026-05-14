@@ -38,6 +38,8 @@ futures.workspace = true
 linkify.workspace = true
 html2text.workspace = true
 humansize.workspace = true
+viuer.workspace = true
+image.workspace = true
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/pidge-v{ version }-{ target }.{ archive-format }"

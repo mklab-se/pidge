@@ -14,7 +14,6 @@ use pidge_core::{
 use crate::output::linkify_text;
 
 pub async fn run(fragment: String, mark_read: bool, show_images: bool, json: bool) -> Result<()> {
-    let _ = show_images; // wired up in Batch 6
     let config = Config::load()?;
     if config.accounts.is_empty() {
         return Err(anyhow!(
@@ -70,11 +69,18 @@ pub async fn run(fragment: String, mark_read: bool, show_images: bool, json: boo
         Vec::new()
     };
 
+    // Decide whether to render inline images (trusted sender OR --show-images flag).
+    let render_inline = config.is_sender_trusted(&full.from.address) || show_images;
+
     // Render.
     if json {
         render_json(&short_hash, &full, &attachments)?;
     } else {
-        render_text(&full, &attachments)?;
+        render_header_and_body(&full)?;
+        if render_inline {
+            render_inline_images_block(&graph, &message_ref.account, &full, &attachments).await;
+        }
+        render_attachments_block(&attachments)?;
     }
 
     // Optional: mark as read.
@@ -113,7 +119,7 @@ fn print_ambiguous(matches: &[(String, pidge_core::CachedMessageRef)]) {
     println!("{table}");
 }
 
-fn render_text(full: &FullMessage, attachments: &[Attachment]) -> Result<()> {
+fn render_header_and_body(full: &FullMessage) -> Result<()> {
     // Header block
     println!("{}      {}", "From:".bold(), format_recipient(&full.from));
     if !full.to.is_empty() {
@@ -141,32 +147,90 @@ fn render_text(full: &FullMessage, attachments: &[Attachment]) -> Result<()> {
     println!("{}", separator());
     println!();
 
-    // Body
     let body_text = render_body(full);
     let body_linkified = linkify_text(&body_text);
     println!("{}", body_linkified);
+    Ok(())
+}
 
-    // Attachment list (non-inline only)
+fn render_attachments_block(attachments: &[Attachment]) -> Result<()> {
     let visible_attachments: Vec<&Attachment> =
         attachments.iter().filter(|a| !a.is_inline).collect();
-    if !visible_attachments.is_empty() {
-        println!();
-        println!("{}", separator());
-        println!();
-        println!("{}", "Attachments:".bold());
-        let mut table = Table::new();
-        table.load_preset(comfy_table::presets::NOTHING);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
-        for att in visible_attachments {
-            table.add_row(vec![
-                format!("  {}", att.name),
-                humansize::format_size(att.size_bytes, humansize::DECIMAL),
-            ]);
-        }
-        println!("{table}");
+    if visible_attachments.is_empty() {
+        return Ok(());
     }
-
+    println!();
+    println!("{}", separator());
+    println!();
+    println!("{}", "Attachments:".bold());
+    let mut table = Table::new();
+    table.load_preset(comfy_table::presets::NOTHING);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    for att in visible_attachments {
+        table.add_row(vec![
+            format!("  {}", att.name),
+            humansize::format_size(att.size_bytes, humansize::DECIMAL),
+        ]);
+    }
+    println!("{table}");
     Ok(())
+}
+
+async fn render_inline_images_block(
+    graph: &GraphClient,
+    account: &str,
+    full: &FullMessage,
+    attachments: &[Attachment],
+) {
+    let inline_images: Vec<&Attachment> = attachments
+        .iter()
+        .filter(|a| a.is_inline && is_image_content_type(&a.content_type))
+        .collect();
+    if inline_images.is_empty() {
+        return;
+    }
+    println!();
+    println!("{}", separator());
+    println!();
+    println!("{}", "Inline images:".bold());
+
+    for att in inline_images {
+        match graph.get_attachment_bytes(account, &full.id, &att.id).await {
+            Ok(bytes) => {
+                if !try_render_image(&bytes) {
+                    println!(
+                        "  [image: {} ({})] (terminal does not support inline images)",
+                        att.name,
+                        humansize::format_size(att.size_bytes, humansize::DECIMAL)
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("  [image: {} — fetch failed: {e}]", att.name);
+            }
+        }
+    }
+}
+
+fn try_render_image(bytes: &[u8]) -> bool {
+    let img = match image::load_from_memory(bytes) {
+        Ok(i) => i,
+        Err(_) => return false,
+    };
+    let conf = viuer::Config {
+        absolute_offset: false,
+        width: Some(60),
+        ..Default::default()
+    };
+    viuer::print(&img, &conf).is_ok()
+}
+
+fn is_image_content_type(ct: &str) -> bool {
+    let ct = ct.to_lowercase();
+    matches!(
+        ct.as_str(),
+        "image/png" | "image/jpeg" | "image/jpg" | "image/webp" | "image/gif"
+    )
 }
 
 fn render_body(full: &FullMessage) -> String {
@@ -282,4 +346,27 @@ fn render_json(short_hash: &str, full: &FullMessage, attachments: &[Attachment])
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_image_content_type_recognizes_common_image_types() {
+        assert!(is_image_content_type("image/png"));
+        assert!(is_image_content_type("image/jpeg"));
+        assert!(is_image_content_type("image/jpg"));
+        assert!(is_image_content_type("image/webp"));
+        assert!(is_image_content_type("image/gif"));
+        assert!(is_image_content_type("IMAGE/PNG"));
+    }
+
+    #[test]
+    fn is_image_content_type_rejects_non_image_types() {
+        assert!(!is_image_content_type("application/pdf"));
+        assert!(!is_image_content_type("image/svg+xml"));
+        assert!(!is_image_content_type("text/html"));
+        assert!(!is_image_content_type(""));
+    }
 }
