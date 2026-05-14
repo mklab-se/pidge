@@ -111,7 +111,54 @@ pub async fn list_inbox(
     skip: usize,
     unread_only: bool,
 ) -> Result<InboxPage, ClientError> {
-    let url = format!("{base_url}/me/mailFolders/inbox/messages");
+    list_folder(
+        http,
+        base_url,
+        access_token,
+        account,
+        "inbox",
+        limit,
+        skip,
+        unread_only,
+    )
+    .await
+}
+
+/// List a page of drafts from the Drafts folder. Drafts don't have a real
+/// "received" time, so Graph sorts by `lastModifiedDateTime desc` here.
+pub async fn list_drafts(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    limit: usize,
+    skip: usize,
+) -> Result<InboxPage, ClientError> {
+    list_folder(
+        http,
+        base_url,
+        access_token,
+        account,
+        "drafts",
+        limit,
+        skip,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn list_folder(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    folder: &str,
+    limit: usize,
+    skip: usize,
+    unread_only: bool,
+) -> Result<InboxPage, ClientError> {
+    let url = format!("{base_url}/me/mailFolders/{folder}/messages");
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
             "$select",
@@ -522,6 +569,177 @@ async fn post_no_body(
         });
     }
     Ok(())
+}
+
+/// POST /me/messages — create a draft message in the Drafts folder.
+/// Returns the new draft's Graph message ID.
+pub async fn create_draft(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message: &Outgoing,
+) -> Result<String, ClientError> {
+    let url = format!("{base_url}/me/messages");
+    let body = message.to_graph_json();
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .json(&body)
+        .send()
+        .await?;
+    parse_id_from_response(resp).await
+}
+
+/// POST /me/messages/{id}/createReply — create a reply draft. Returns the
+/// new draft's Graph message ID.
+pub async fn create_reply_draft(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    comment: &str,
+) -> Result<String, ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/createReply");
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "comment": comment }))
+        .send()
+        .await?;
+    parse_id_from_response(resp).await
+}
+
+/// POST /me/messages/{id}/createReplyAll — create a reply-all draft.
+pub async fn create_reply_all_draft(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    comment: &str,
+) -> Result<String, ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/createReplyAll");
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "comment": comment }))
+        .send()
+        .await?;
+    parse_id_from_response(resp).await
+}
+
+/// POST /me/messages/{id}/createForward — create a forward draft with the
+/// given recipients already populated.
+pub async fn create_forward_draft(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    to: &[String],
+    comment: &str,
+) -> Result<String, ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/createForward");
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({
+            "comment": comment,
+            "toRecipients": to.iter().map(|addr| serde_json::json!({
+                "emailAddress": { "address": addr }
+            })).collect::<Vec<_>>(),
+        }))
+        .send()
+        .await?;
+    parse_id_from_response(resp).await
+}
+
+/// POST /me/messages/{id}/send — send an existing draft.
+pub async fn send_draft(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/send");
+    // Graph's /send takes no body but expects a POST.
+    let resp = http.post(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
+/// PATCH /me/messages/{id} — overwrite a draft's editable fields. Only the
+/// fields in `Outgoing` are patched, since that's what our wizard owns.
+pub async fn update_draft(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    message: &Outgoing,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}");
+    let body = message.to_graph_json();
+    let resp = http
+        .patch(&url)
+        .bearer_auth(access_token)
+        .json(&body)
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
+/// DELETE /me/messages/{id} — moves the message to Deleted Items. Same call
+/// works for drafts and for inbox messages; the destination folder differs
+/// only by what the user is currently in.
+pub async fn delete_message(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}");
+    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
+async fn parse_id_from_response(resp: reqwest::Response) -> Result<String, ClientError> {
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let v: serde_json::Value = resp.json().await?;
+    v["id"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| ClientError::Graph {
+            status: 200,
+            message: "draft response missing 'id'".to_string(),
+        })
 }
 
 /// What the user is sending — pre-Graph-serialization shape.

@@ -4,9 +4,11 @@ mod mail;
 mod me;
 
 pub use mail::{
-    InboxPage, Outgoing, forward_message, get_attachment_bytes, get_message, list_attachments,
-    list_inbox, mark_read, mark_unread, move_message, reply_all_message, reply_message,
-    search_messages, send_mail, set_flag,
+    InboxPage, Outgoing, create_draft, create_forward_draft, create_reply_all_draft,
+    create_reply_draft, delete_message, forward_message, get_attachment_bytes, get_message,
+    list_attachments, list_drafts, list_inbox, mark_read, mark_unread, move_message,
+    reply_all_message, reply_message, search_messages, send_draft, send_mail, set_flag,
+    update_draft,
 };
 pub use me::{Me, get_me};
 
@@ -149,6 +151,86 @@ impl GraphClient {
     ) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::forward_message(&self.http, &self.base_url, &token, message_id, to, comment).await
+    }
+
+    /// GET /me/mailFolders/drafts/messages.
+    pub async fn list_drafts(
+        &self,
+        account: &str,
+        limit: usize,
+        skip: usize,
+    ) -> Result<InboxPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::list_drafts(&self.http, &self.base_url, &token, account, limit, skip).await
+    }
+
+    /// POST /me/messages — create a draft, returning its new message ID.
+    pub async fn create_draft(
+        &self,
+        account: &str,
+        message: &Outgoing,
+    ) -> Result<String, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::create_draft(&self.http, &self.base_url, &token, message).await
+    }
+
+    /// POST /me/messages/{id}/createReply.
+    pub async fn create_reply_draft(
+        &self,
+        account: &str,
+        message_id: &str,
+        comment: &str,
+    ) -> Result<String, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::create_reply_draft(&self.http, &self.base_url, &token, message_id, comment).await
+    }
+
+    /// POST /me/messages/{id}/createReplyAll.
+    pub async fn create_reply_all_draft(
+        &self,
+        account: &str,
+        message_id: &str,
+        comment: &str,
+    ) -> Result<String, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::create_reply_all_draft(&self.http, &self.base_url, &token, message_id, comment).await
+    }
+
+    /// POST /me/messages/{id}/createForward.
+    pub async fn create_forward_draft(
+        &self,
+        account: &str,
+        message_id: &str,
+        to: &[String],
+        comment: &str,
+    ) -> Result<String, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::create_forward_draft(&self.http, &self.base_url, &token, message_id, to, comment)
+            .await
+    }
+
+    /// POST /me/messages/{id}/send — send an existing draft.
+    pub async fn send_draft(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::send_draft(&self.http, &self.base_url, &token, message_id).await
+    }
+
+    /// PATCH /me/messages/{id} — overwrite a draft's editable fields.
+    pub async fn update_draft(
+        &self,
+        account: &str,
+        message_id: &str,
+        message: &Outgoing,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::update_draft(&self.http, &self.base_url, &token, message_id, message).await
+    }
+
+    /// DELETE /me/messages/{id} — moves to Deleted Items. Works for both
+    /// drafts and inbox messages.
+    pub async fn delete_message(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::delete_message(&self.http, &self.base_url, &token, message_id).await
     }
 
     /// GET /me/messages/{id} for a given account email.

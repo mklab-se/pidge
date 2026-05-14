@@ -58,6 +58,12 @@ pub enum Commands {
         command: TrustCommands,
     },
 
+    /// List, edit, send, or delete draft e-mails
+    Drafts {
+        #[command(subcommand)]
+        command: DraftsCommands,
+    },
+
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
@@ -324,6 +330,12 @@ pub struct ComposeArgs {
     /// Skip the final "Send? [y/N]" confirmation
     #[arg(short = 'y', long)]
     pub yes: bool,
+
+    /// Save as a draft instead of sending. The new draft's short hash is
+    /// printed; use `pidge drafts edit`, `pidge drafts send`, or
+    /// `pidge drafts delete` to act on it later.
+    #[arg(long)]
+    pub draft: bool,
 }
 
 /// Reply variants don't need `--to` (Graph fills that in from the original
@@ -346,6 +358,12 @@ pub struct ReplyArgs {
     /// Skip the final "Send? [y/N]" confirmation
     #[arg(short = 'y', long)]
     pub yes: bool,
+
+    /// Save as a draft instead of sending. The new draft's short hash is
+    /// printed; use `pidge drafts edit`, `pidge drafts send`, or
+    /// `pidge drafts delete` to act on it later.
+    #[arg(long)]
+    pub draft: bool,
 }
 
 /// Forward needs explicit recipients (the user is sending the message to
@@ -371,6 +389,12 @@ pub struct ForwardArgs {
     /// Skip the final "Send? [y/N]" confirmation
     #[arg(short = 'y', long)]
     pub yes: bool,
+
+    /// Save as a draft instead of sending. The new draft's short hash is
+    /// printed; use `pidge drafts edit`, `pidge drafts send`, or
+    /// `pidge drafts delete` to act on it later.
+    #[arg(long)]
+    pub draft: bool,
 }
 
 /// Subcommand names that `Inbox` accepts directly. Used by the argv pre-processor
@@ -395,6 +419,60 @@ pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &[
     "forward",
     "help",
 ];
+
+#[derive(clap::Subcommand)]
+pub enum DraftsCommands {
+    /// List drafts across all signed-in accounts (or a filtered subset)
+    List {
+        /// Filter to a specific account (repeatable for a subset)
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Maximum number of drafts to show per page
+        #[arg(short = 'n', long, default_value = "25")]
+        limit: usize,
+
+        /// Page number (1-based)
+        #[arg(short = 'p', long, default_value = "1")]
+        page: usize,
+
+        /// One row per draft (no preview lines)
+        #[arg(short = 'c', long)]
+        compact: bool,
+    },
+
+    /// Display a draft by fragment of its short hash
+    Show {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Open the wizard pre-filled with a draft's current values, then save
+    Edit {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Send a draft as-is (interactive confirmation; -y to skip)
+    Send {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+
+        /// Skip the "Send draft? [y/N]" confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Delete a draft (moves it to Deleted Items)
+    Delete {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+
+        /// Skip the "Delete draft? [y/N]" confirmation
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+}
 
 #[derive(clap::Subcommand)]
 pub enum TrustCommands {
@@ -432,6 +510,9 @@ impl Cli {
             }
             Some(Commands::Trust { command }) => {
                 crate::commands::trust::run(command, self.json).await
+            }
+            Some(Commands::Drafts { command }) => {
+                crate::commands::drafts::run(command, self.json).await
             }
             Some(Commands::Completion { shell }) => {
                 crate::commands::completion::generate_completions(shell);

@@ -8,6 +8,7 @@ pub mod account_migrate;
 pub mod account_remove;
 pub mod ai;
 pub mod completion;
+pub mod drafts;
 pub mod inbox;
 pub mod inbox_actions;
 pub mod inbox_compose;

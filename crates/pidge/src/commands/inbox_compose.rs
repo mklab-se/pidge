@@ -24,7 +24,7 @@ use colored::Colorize;
 use inquire::{Confirm, Editor, Text};
 
 use pidge_client::{AuthClient, GraphClient, Outgoing};
-use pidge_core::Config;
+use pidge_core::{Config, MessageCache, short_hash};
 
 use crate::cli::{ComposeArgs, ForwardArgs, ReplyArgs};
 use crate::commands::inbox_fragment::resolve;
@@ -47,7 +47,12 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
     let body = resolve_body(args.body, args.body_file, "Body")?;
 
     print_summary(&from, &to, &cc, &bcc, &subject, &body);
-    if !confirm_send(args.yes, "Send this message?")? {
+    let prompt = if args.draft {
+        "Save as draft?"
+    } else {
+        "Send this message?"
+    };
+    if !confirm_send(args.yes, prompt)? {
         return Ok(());
     }
 
@@ -59,11 +64,36 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
         cc,
         bcc,
     };
-    graph
-        .send_mail(&from, &outgoing)
-        .await
-        .context("Microsoft Graph rejected the message")?;
-    println!("{} Sent.", "✔".green());
+    if args.draft {
+        let id = graph
+            .create_draft(&from, &outgoing)
+            .await
+            .context("Microsoft Graph rejected the draft")?;
+        cache_and_report_draft(&from, &id, "Saved draft")?;
+    } else {
+        graph
+            .send_mail(&from, &outgoing)
+            .await
+            .context("Microsoft Graph rejected the message")?;
+        println!("{} Sent.", "✔".green());
+    }
+    Ok(())
+}
+
+/// Insert a freshly-created draft into the message cache (so future fragment
+/// lookups find it) and tell the user its short hash.
+fn cache_and_report_draft(account: &str, message_id: &str, action: &str) -> Result<()> {
+    let mut cache = MessageCache::load()?;
+    cache.insert_many(&[(message_id.to_string(), account.to_string())]);
+    cache.save()?;
+    let hash = short_hash(message_id);
+    println!(
+        "{} {}. Use `pidge drafts edit {}` or `pidge drafts send {}`.",
+        "✔".green(),
+        action,
+        hash,
+        hash,
+    );
     Ok(())
 }
 
@@ -95,23 +125,39 @@ pub async fn reply(fragment: String, args: ReplyArgs, reply_all: bool) -> Result
     }
     println!();
 
-    if !confirm_send(args.yes, "Send this reply?")? {
+    let prompt = if args.draft {
+        "Save as draft?"
+    } else {
+        "Send this reply?"
+    };
+    if !confirm_send(args.yes, prompt)? {
         return Ok(());
     }
 
     let graph = GraphClient::new(AuthClient::from_env()?)?;
-    if reply_all {
+    if args.draft {
+        let id = if reply_all {
+            graph
+                .create_reply_all_draft(&from, &msg.graph_id, &body)
+                .await
+        } else {
+            graph.create_reply_draft(&from, &msg.graph_id, &body).await
+        }
+        .context("Microsoft Graph rejected the draft")?;
+        cache_and_report_draft(&from, &id, "Saved reply draft")?;
+    } else if reply_all {
         graph
             .reply_all_message(&from, &msg.graph_id, &body)
             .await
             .context("Microsoft Graph rejected the reply")?;
+        println!("{} Sent.", "✔".green());
     } else {
         graph
             .reply_message(&from, &msg.graph_id, &body)
             .await
             .context("Microsoft Graph rejected the reply")?;
+        println!("{} Sent.", "✔".green());
     }
-    println!("{} Sent.", "✔".green());
     Ok(())
 }
 
@@ -140,16 +186,29 @@ pub async fn forward(fragment: String, args: ForwardArgs) -> Result<()> {
     }
     println!();
 
-    if !confirm_send(args.yes, "Send this forward?")? {
+    let prompt = if args.draft {
+        "Save as draft?"
+    } else {
+        "Send this forward?"
+    };
+    if !confirm_send(args.yes, prompt)? {
         return Ok(());
     }
 
     let graph = GraphClient::new(AuthClient::from_env()?)?;
-    graph
-        .forward_message(&from, &msg.graph_id, &to, &body)
-        .await
-        .context("Microsoft Graph rejected the forward")?;
-    println!("{} Forwarded.", "✔".green());
+    if args.draft {
+        let id = graph
+            .create_forward_draft(&from, &msg.graph_id, &to, &body)
+            .await
+            .context("Microsoft Graph rejected the draft")?;
+        cache_and_report_draft(&from, &id, "Saved forward draft")?;
+    } else {
+        graph
+            .forward_message(&from, &msg.graph_id, &to, &body)
+            .await
+            .context("Microsoft Graph rejected the forward")?;
+        println!("{} Forwarded.", "✔".green());
+    }
     Ok(())
 }
 
