@@ -36,6 +36,8 @@ comfy-table.workspace = true
 inquire.workspace = true
 futures.workspace = true
 linkify.workspace = true
+html2text.workspace = true
+humansize.workspace = true
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/pidge-v{ version }-{ target }.{ archive-format }"
