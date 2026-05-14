@@ -65,6 +65,12 @@ pub async fn run(command: InboxCommands, json: bool) -> Result<()> {
         InboxCommands::Forward { fragment, compose } => {
             crate::commands::inbox_compose::forward(fragment, compose).await
         }
+        InboxCommands::Delete {
+            fragment,
+            older_than,
+            account,
+            yes,
+        } => crate::commands::inbox_delete::run(fragment, older_than, account, yes).await,
     }
 }
 

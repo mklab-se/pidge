@@ -266,6 +266,29 @@ pub enum InboxCommands {
         fragment: String,
     },
 
+    /// Delete a message (moves to Deleted Items folder). Single or bulk.
+    Delete {
+        /// Fragment of a single message's 8-char short hash. Omit when using
+        /// a bulk-mode flag like `--older-than`.
+        fragment: Option<String>,
+
+        /// BULK: delete every message in the Inbox older than this date or
+        /// duration (e.g. `2026-01-01`, `30d`, `6m`, `1y`). Always requires
+        /// `-y` to confirm — there is no interactive prompt for bulk delete.
+        #[arg(long, conflicts_with = "fragment")]
+        older_than: Option<String>,
+
+        /// Filter bulk delete to a specific account (repeatable). Ignored
+        /// for single-fragment deletes.
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Skip the "Delete? [y/N]" confirmation (single) or grant required
+        /// consent for bulk deletes.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Compose and send a new e-mail (wizard by default; provide flags to skip prompts)
     Send(ComposeArgs),
 
@@ -432,6 +455,7 @@ pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &[
     "reply",
     "reply-all",
     "forward",
+    "delete",
     "help",
 ];
 
