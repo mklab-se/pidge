@@ -7,6 +7,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 mod banner;
 mod cli;
 mod commands;
+mod output;
 mod update;
 
 use cli::Cli;
