@@ -1,15 +1,21 @@
-//! OAuth device-code flow, token refresh, and keychain storage.
+//! OAuth device-code flow, token refresh, and credential storage.
 
 pub mod config;
 pub mod device_code;
+mod file_store;
 mod jwt;
 pub mod refresh;
 mod store;
+mod token_store;
 mod tokens;
 
+pub use file_store::FileStore;
 pub use jwt::extract_tenant_id;
 pub use store::KeychainStore;
+pub use token_store::TokenStore;
 pub use tokens::TokenSet;
+
+use pidge_core::TokenStorage;
 
 use crate::error::ClientError;
 
@@ -81,8 +87,13 @@ impl AuthClient {
     /// Get a valid (un-expired) access token for an email, refreshing if necessary.
     /// Returns `ClientError::SessionExpired` if the refresh fails — caller should
     /// prompt the user to `pidge auth login` again for that account.
+    ///
+    /// The token storage backend is resolved from the account's config entry; if
+    /// the email has no entry in `config.yaml` yet (e.g. mid-login) we fall back
+    /// to the OS keychain.
     pub async fn get_valid_token(&self, email: &str) -> Result<String, ClientError> {
-        let tokens = KeychainStore::load(email)?.ok_or_else(|| ClientError::SessionExpired {
+        let storage = storage_for(email);
+        let tokens = TokenStore::load(email, storage)?.ok_or_else(|| ClientError::SessionExpired {
             email: email.to_string(),
         })?;
 
@@ -99,7 +110,17 @@ impl AuthClient {
             email,
         )
         .await?;
-        KeychainStore::save(email, &new_tokens)?;
+        TokenStore::save(email, &new_tokens, storage)?;
         Ok(new_tokens.access_token)
     }
+}
+
+/// Resolve the token storage backend for an email by consulting `config.yaml`.
+/// Falls back to [`TokenStorage::Keychain`] (the default) if the config can't
+/// be read or the account isn't listed yet.
+fn storage_for(email: &str) -> TokenStorage {
+    pidge_core::Config::load()
+        .ok()
+        .and_then(|c| c.find(email).map(|a| a.storage))
+        .unwrap_or_default()
 }

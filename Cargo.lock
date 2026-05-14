@@ -1565,6 +1565,7 @@ dependencies = [
  "anyhow",
  "base64",
  "chrono",
+ "dirs 6.0.0",
  "keyring",
  "pidge-core",
  "reqwest",

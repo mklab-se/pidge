@@ -12,6 +12,12 @@ pub enum ClientError {
     #[error("OS keychain unavailable: {0}")]
     Keychain(#[from] keyring::Error),
 
+    #[error("could not determine the user config directory")]
+    NoConfigDir,
+
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+
     #[error("device code flow: authorization pending exceeded poll deadline")]
     DeviceCodeTimeout,
 

@@ -99,7 +99,11 @@ pub enum AiCommands {
 #[derive(clap::Subcommand)]
 pub enum AuthCommands {
     /// Sign in to a Microsoft account (interactive device code flow)
-    Login,
+    Login {
+        /// Where to store the credentials (`keychain` = OS-native, `file` = plaintext JSON)
+        #[arg(long, value_enum, default_value_t = StorageBackendArg::Keychain)]
+        store: StorageBackendArg,
+    },
     /// List signed-in accounts
     List,
     /// Show authentication status and defaults
@@ -125,6 +129,33 @@ pub enum AuthCommands {
         #[arg(long)]
         calendar: Option<String>,
     },
+    /// Move an existing account's credentials between storage backends
+    MigrateStorage {
+        /// Email of the account whose tokens to migrate
+        email: String,
+        /// Destination backend
+        #[arg(long = "to", value_enum)]
+        to: StorageBackendArg,
+    },
+}
+
+/// CLI-facing wrapper around `pidge_core::TokenStorage`. Lives in the CLI crate
+/// so `pidge-core` stays free of `clap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum StorageBackendArg {
+    /// OS-native credential store (macOS Keychain / Windows Credential Manager / libsecret)
+    Keychain,
+    /// Plaintext JSON file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix)
+    File,
+}
+
+impl From<StorageBackendArg> for pidge_core::TokenStorage {
+    fn from(v: StorageBackendArg) -> Self {
+        match v {
+            StorageBackendArg::Keychain => Self::Keychain,
+            StorageBackendArg::File => Self::File,
+        }
+    }
 }
 
 #[derive(clap::Subcommand)]

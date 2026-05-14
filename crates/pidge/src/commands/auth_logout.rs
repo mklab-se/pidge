@@ -4,8 +4,8 @@ use anyhow::{Result, anyhow};
 use colored::Colorize;
 use inquire::{Confirm, Select};
 
-use pidge_client::auth::KeychainStore;
-use pidge_core::Config;
+use pidge_client::auth::TokenStore;
+use pidge_core::{Config, TokenStorage};
 
 pub fn run(account: Option<String>, all: bool, yes: bool) -> Result<()> {
     let mut config = Config::load()?;
@@ -28,13 +28,17 @@ pub fn run(account: Option<String>, all: bool, yes: bool) -> Result<()> {
                 return Ok(());
             }
         }
-        let emails: Vec<String> = config.accounts.iter().map(|a| a.email.clone()).collect();
-        for email in &emails {
-            KeychainStore::delete(email)?;
+        let entries: Vec<(String, TokenStorage)> = config
+            .accounts
+            .iter()
+            .map(|a| (a.email.clone(), a.storage))
+            .collect();
+        for (email, storage) in &entries {
+            TokenStore::delete(email, *storage)?;
             config.remove_account(email);
         }
         config.save()?;
-        println!("{} Signed out of {} accounts.", "✔".green(), emails.len());
+        println!("{} Signed out of {} accounts.", "✔".green(), entries.len());
         return Ok(());
     }
 
@@ -52,9 +56,10 @@ pub fn run(account: Option<String>, all: bool, yes: bool) -> Result<()> {
         }
     };
 
-    if config.find(&email).is_none() {
-        return Err(anyhow!("not signed in to {email}"));
-    }
+    let storage = config
+        .find(&email)
+        .map(|a| a.storage)
+        .ok_or_else(|| anyhow!("not signed in to {email}"))?;
 
     if !yes {
         let confirmed = Confirm::new(&format!("Sign out of {email}?"))
@@ -66,7 +71,7 @@ pub fn run(account: Option<String>, all: bool, yes: bool) -> Result<()> {
         }
     }
 
-    KeychainStore::delete(&email)?;
+    TokenStore::delete(&email, storage)?;
     config.remove_account(&email);
     config.save()?;
     println!("{} Signed out of {email}.", "✔".green());

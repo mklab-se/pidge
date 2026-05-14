@@ -9,7 +9,7 @@ mod config;
 mod error;
 mod message;
 
-pub use account::Account;
+pub use account::{Account, TokenStorage};
 pub use cache::{CacheLookup, CachedMessageRef, MessageCache, short_hash};
 pub use config::{Config, Defaults};
 pub use error::CoreError;

@@ -31,3 +31,9 @@ Thumbs.db
 
 *.log
 coverage/
+
+# Defense-in-depth: any stray token files must never be committed. Real tokens
+# live outside the repo in ~/.config/pidge/tokens/ (file_store.rs), but this
+# pattern catches accidents (test fixtures, repro dumps, etc.).
+**/tokens/*.json
+**/pidge-tokens-*.json

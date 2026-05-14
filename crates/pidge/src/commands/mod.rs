@@ -6,6 +6,7 @@ pub mod auth_default;
 pub mod auth_list;
 pub mod auth_login;
 pub mod auth_logout;
+pub mod auth_migrate;
 pub mod auth_status;
 pub mod completion;
 pub mod inbox;

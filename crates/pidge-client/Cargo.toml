@@ -23,6 +23,7 @@ chrono.workspace = true
 tracing.workspace = true
 keyring = { workspace = true, features = ["apple-native", "windows-native", "linux-native"] }
 base64.workspace = true
+dirs.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

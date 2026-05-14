@@ -4,14 +4,21 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use colored::Colorize;
 
-use pidge_client::auth::{AuthClient, KeychainStore, extract_tenant_id};
-use pidge_core::{Account, Config};
+use pidge_client::auth::{AuthClient, TokenStore, extract_tenant_id};
+use pidge_core::{Account, Config, TokenStorage};
 
-pub async fn run() -> Result<()> {
+pub async fn run(storage: TokenStorage) -> Result<()> {
     let auth = AuthClient::from_env().context("AuthClient initialisation failed")?;
 
     println!();
     println!("Adding a new account to pidge.");
+    if matches!(storage, TokenStorage::File) {
+        println!(
+            "{} Tokens will be saved as a {} on disk (mode 0600).",
+            "Note:".yellow().bold(),
+            "plaintext file".bold()
+        );
+    }
     println!();
 
     let dc = auth
@@ -53,8 +60,8 @@ pub async fn run() -> Result<()> {
         .clone()
         .unwrap_or_else(|| me.user_principal_name.clone());
 
-    // Persist tokens
-    KeychainStore::save(&email, &success.tokens)?;
+    // Persist tokens to the requested backend
+    TokenStore::save(&email, &success.tokens, storage)?;
 
     // Persist account in config
     let mut config = Config::load()?;
@@ -64,6 +71,7 @@ pub async fn run() -> Result<()> {
         tenant_id,
         home_account_id: me.id,
         added_at: Utc::now(),
+        storage,
     });
     config.save()?;
 
