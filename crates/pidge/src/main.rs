@@ -7,6 +7,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 mod banner;
 mod cli;
 mod commands;
+#[allow(dead_code, unused_imports)]
 mod output;
 mod update;
 
