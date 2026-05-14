@@ -20,6 +20,12 @@ pub struct CachedMessageRef {
 pub enum CacheLookup {
     NotFound,
     One(String, CachedMessageRef),
+    /// Two or more entries match the fragment.
+    ///
+    /// The inner vec is capped at 10 entries by `MessageCache::find_by_fragment`
+    /// to keep error messages readable. If more than 10 entries actually match,
+    /// only the first 10 are surfaced — callers should ask the user for a
+    /// longer fragment rather than try to enumerate all candidates.
     Ambiguous(Vec<(String, CachedMessageRef)>),
 }
 

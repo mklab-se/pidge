@@ -3,11 +3,19 @@
 use linkify::{LinkFinder, LinkKind};
 
 use crate::output::hyperlink::hyperlink;
+use crate::output::no_color;
 
 /// Find URLs in `text` and wrap each with an OSC 8 link pointing at the URL itself.
 /// Text without URLs is returned unchanged. Only HTTP/HTTPS-style URLs are wrapped;
 /// email addresses (mailto:) are NOT wrapped.
+///
+/// When `--no-color` is in effect (see `crate::output::set_no_color`), the function
+/// returns the input unchanged — OSC 8 hyperlinks are treated as decorative output
+/// alongside ANSI colors and are suppressed together.
 pub fn linkify_text(text: &str) -> String {
+    if no_color() {
+        return text.to_string();
+    }
     let finder = LinkFinder::new();
     let mut out = String::with_capacity(text.len());
     let mut cursor = 0;

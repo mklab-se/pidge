@@ -38,6 +38,7 @@ async fn main() -> Result<()> {
 
     if cli.no_color {
         colored::control::set_override(false);
+        output::set_no_color(true);
     }
 
     // Spawn background update check (skip in quiet mode or if disabled via env)
