@@ -27,3 +27,8 @@ All notable changes to this project will be documented in this file.
 - `pidge inbox list` rich layout: subject + 2-line preview, bold+magenta for unread, cyan for read; `--compact`/`-c` for the one-row-per-message style
 - URLs in subject and preview text are OSC 8 hyperlinks (clickable in modern terminals)
 - Cleaner table style — horizontal line under header only, no vertical borders
+- `pidge inbox show <fragment>` — substring-lookup a message by its 8-char short hash and display headers, body (HTML rendered via `html2text`), and attachment list
+- `pidge inbox show --mark-read` / `-r` to mark the message as read on the server after rendering
+- `pidge inbox show --show-images` to force inline image rendering for one invocation regardless of trust list
+- `pidge trust list/add/remove` — manage the trusted-senders list; inline images auto-render for trusted senders in image-capable terminals (Ghostty, Kitty, iTerm2) via the `viuer` crate
+- Trusted senders stored at `trusted_senders:` in `~/.config/pidge/config.yaml` (case-insensitive matching)
