@@ -64,6 +64,29 @@ struct GraphBody {
     content: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct GraphAttachmentList {
+    value: Vec<GraphAttachment>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphAttachment {
+    id: String,
+    name: Option<String>,
+    #[serde(rename = "contentType")]
+    content_type: Option<String>,
+    size: Option<u64>,
+    #[serde(rename = "isInline")]
+    is_inline: Option<bool>,
+    #[serde(rename = "contentId")]
+    content_id: Option<String>,
+    #[serde(rename = "@odata.type", default)]
+    odata_type: Option<String>,
+    /// Only populated when fetching a single attachment (not in list endpoint).
+    #[serde(rename = "contentBytes", default)]
+    content_bytes: Option<String>,
+}
+
 /// List the top N messages in the Inbox folder, sorted by `receivedDateTime desc`.
 pub async fn list_inbox(
     http: &reqwest::Client,
@@ -182,6 +205,106 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments"
     })
 }
 
+/// GET /me/messages/{id}/attachments — list attachments without fetching bytes.
+/// Filters to file attachments only.
+pub async fn list_attachments(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<Vec<pidge_core::Attachment>, ClientError> {
+    let url = format!(
+        "{base_url}/me/messages/{message_id}/attachments\
+         ?$select=id,name,contentType,size,isInline,contentId"
+    );
+    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let list: GraphAttachmentList = resp.json().await?;
+    Ok(list
+        .value
+        .into_iter()
+        .filter(|a| {
+            a.odata_type
+                .as_deref()
+                .map(|t| t == "#microsoft.graph.fileAttachment")
+                .unwrap_or(true)
+        })
+        .map(|a| pidge_core::Attachment {
+            id: a.id,
+            name: a.name.unwrap_or_default(),
+            content_type: a.content_type.unwrap_or_default(),
+            size_bytes: a.size.unwrap_or(0),
+            is_inline: a.is_inline.unwrap_or(false),
+            content_id: a.content_id,
+        })
+        .collect())
+}
+
+/// GET /me/messages/{id}/attachments/{attachment_id} — fetch a single attachment
+/// with its base64 contentBytes. Returns the decoded bytes.
+pub async fn get_attachment_bytes(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    attachment_id: &str,
+) -> Result<Vec<u8>, ClientError> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
+    let url = format!("{base_url}/me/messages/{message_id}/attachments/{attachment_id}");
+    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let g: GraphAttachment = resp.json().await?;
+    let b64 = g.content_bytes.ok_or_else(|| ClientError::Graph {
+        status: 200,
+        message: "attachment response missing contentBytes".to_string(),
+    })?;
+    STANDARD.decode(&b64).map_err(|e| ClientError::Graph {
+        status: 200,
+        message: format!("attachment base64 decode: {e}"),
+    })
+}
+
+/// PATCH /me/messages/{id} — mark the message as read.
+pub async fn mark_read(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}");
+    let resp = http
+        .patch(&url)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "isRead": true }))
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +401,74 @@ mod tests {
         assert!(matches!(m.body_content_type, pidge_core::BodyContentType::Html));
         assert_eq!(m.body_content, "<p>Hi</p>");
         assert!(m.has_attachments);
+    }
+
+    #[tokio::test]
+    async fn list_attachments_filters_file_attachments() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+/attachments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [
+                    {
+                        "@odata.type": "#microsoft.graph.fileAttachment",
+                        "id": "att-1",
+                        "name": "report.pdf",
+                        "contentType": "application/pdf",
+                        "size": 12345,
+                        "isInline": false
+                    },
+                    {
+                        "@odata.type": "#microsoft.graph.itemAttachment",
+                        "id": "att-2",
+                        "name": "an-email.eml",
+                        "contentType": "message/rfc822",
+                        "size": 7777,
+                        "isInline": false
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let atts = list_attachments(&http, &server.uri(), "AT", "MSG").await.unwrap();
+        assert_eq!(atts.len(), 1);
+        assert_eq!(atts[0].name, "report.pdf");
+        assert_eq!(atts[0].size_bytes, 12345);
+    }
+
+    #[tokio::test]
+    async fn get_attachment_bytes_decodes_base64() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+/attachments/[A-Za-z0-9-]+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "att-1",
+                "name": "report.pdf",
+                "contentType": "application/pdf",
+                "size": 5,
+                "isInline": false,
+                "contentBytes": "aGVsbG8="
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let bytes = get_attachment_bytes(&http, &server.uri(), "AT", "MSG", "att-1").await.unwrap();
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[tokio::test]
+    async fn mark_read_patches_isread_true() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        mark_read(&http, &server.uri(), "AT", "MSG").await.unwrap();
     }
 }
