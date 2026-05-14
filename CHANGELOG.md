@@ -20,5 +20,10 @@ All notable changes to this project will be documented in this file.
 - OAuth 2.0 device code sign-in for Microsoft 365 and personal Microsoft accounts (`pidge auth login`)
 - Multi-account support: `pidge auth list`, `pidge auth status`, `pidge auth logout`, `pidge auth default --send/--calendar`
 - Tokens stored in OS keychain (macOS Keychain, Windows Credential Manager, Linux libsecret)
-- `pidge inbox list` — list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, `--output text|json`
+- `pidge inbox list` — list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, with both rich (default) and `-c`/`--compact` text rendering plus global `--json` output
 - One-time setup script `scripts/register-pidge-app.sh` for registering the pidge app in Entra
+- Global `--json` flag honored by `pidge inbox list`, `pidge auth list`, `pidge auth status`
+- `pidge inbox list` shows a stable 8-char short hash ID per message; cached at `~/.cache/pidge/messages.json` for substring lookup by future `pidge inbox show`
+- `pidge inbox list` rich layout: subject + 2-line preview, bold+magenta for unread, cyan for read; `--compact`/`-c` for the one-row-per-message style
+- URLs in subject and preview text are OSC 8 hyperlinks (clickable in modern terminals)
+- Cleaner table style — horizontal line under header only, no vertical borders
