@@ -3,7 +3,7 @@
 mod mail;
 mod me;
 
-pub use mail::list_inbox;
+pub use mail::{get_attachment_bytes, get_message, list_attachments, list_inbox, mark_read};
 pub use me::{Me, get_me};
 
 use crate::auth::AuthClient;
@@ -64,5 +64,42 @@ impl GraphClient {
             unread_only,
         )
         .await
+    }
+
+    /// GET /me/messages/{id} for a given account email.
+    pub async fn get_message(
+        &self,
+        account: &str,
+        message_id: &str,
+    ) -> Result<pidge_core::FullMessage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::get_message(&self.http, &self.base_url, &token, account, message_id).await
+    }
+
+    /// GET /me/messages/{id}/attachments.
+    pub async fn list_attachments(
+        &self,
+        account: &str,
+        message_id: &str,
+    ) -> Result<Vec<pidge_core::Attachment>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::list_attachments(&self.http, &self.base_url, &token, message_id).await
+    }
+
+    /// GET /me/messages/{id}/attachments/{att_id} returning decoded bytes.
+    pub async fn get_attachment_bytes(
+        &self,
+        account: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> Result<Vec<u8>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::get_attachment_bytes(&self.http, &self.base_url, &token, message_id, attachment_id).await
+    }
+
+    /// PATCH /me/messages/{id} with isRead: true.
+    pub async fn mark_read(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::mark_read(&self.http, &self.base_url, &token, message_id).await
     }
 }
