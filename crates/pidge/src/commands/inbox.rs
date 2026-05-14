@@ -3,22 +3,30 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Datelike, Local, Utc};
 use colored::Colorize;
-use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
+use comfy_table::{ContentArrangement, Table};
 use futures::future::join_all;
+use serde::Serialize;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
-use pidge_core::{Config, Message};
+use pidge_core::{Config, Message, MessageCache, short_hash};
 
-use crate::cli::{InboxCommands, OutputFormat};
+use crate::cli::InboxCommands;
+use crate::output::linkify_text;
 
-pub async fn run(command: InboxCommands) -> Result<()> {
+/// Pair of message and its computed short hash, for rendering.
+struct MessageRow {
+    message: Message,
+    short_hash: String,
+}
+
+pub async fn run(command: InboxCommands, json: bool) -> Result<()> {
     match command {
         InboxCommands::List {
             account,
             limit,
             unread,
-            output,
-        } => list(account, limit, unread, output).await,
+            compact,
+        } => list(account, limit, unread, compact, json).await,
     }
 }
 
@@ -26,7 +34,8 @@ async fn list(
     account_filter: Vec<String>,
     limit: usize,
     unread_only: bool,
-    output: OutputFormat,
+    compact: bool,
+    json: bool,
 ) -> Result<()> {
     let config = Config::load()?;
     if config.accounts.is_empty() {
@@ -35,11 +44,9 @@ async fn list(
         ));
     }
 
-    // Resolve which accounts to query
     let target_emails: Vec<String> = if account_filter.is_empty() {
         config.accounts.iter().map(|a| a.email.clone()).collect()
     } else {
-        // Validate filter — every requested email must be signed in
         for f in &account_filter {
             if config.find(f).is_none() {
                 return Err(anyhow!("not signed in to {f}"));
@@ -86,16 +93,43 @@ async fn list(
         return Err(anyhow!("All accounts failed."));
     }
 
-    // Sort by received_at desc, slice to limit
     all_messages.sort_by_key(|b| std::cmp::Reverse(b.received_at));
     all_messages.truncate(limit);
 
+    let rows: Vec<MessageRow> = all_messages
+        .into_iter()
+        .map(|m| {
+            let h = short_hash(&m.id);
+            MessageRow {
+                message: m,
+                short_hash: h,
+            }
+        })
+        .collect();
+
+    update_cache(&rows)?;
+
     let single_account = target_emails.len() == 1;
 
-    match output {
-        OutputFormat::Text => render_text(&all_messages, single_account),
-        OutputFormat::Json => render_json(&all_messages),
+    if json {
+        return render_json(&rows);
     }
+    if compact {
+        render_text_compact(&rows, single_account)
+    } else {
+        render_text_rich(&rows, single_account)
+    }
+}
+
+fn update_cache(rows: &[MessageRow]) -> Result<()> {
+    let mut cache = MessageCache::load()?;
+    let pairs: Vec<(String, String)> = rows
+        .iter()
+        .map(|r| (r.message.id.clone(), r.message.account.clone()))
+        .collect();
+    cache.insert_many(&pairs);
+    cache.save()?;
+    Ok(())
 }
 
 fn compute_per_account_fetch(limit: usize, num_accounts: usize) -> usize {
@@ -106,57 +140,121 @@ fn compute_per_account_fetch(limit: usize, num_accounts: usize) -> usize {
     calc.max(10)
 }
 
-fn render_text(messages: &[Message], hide_account_column: bool) -> Result<()> {
+fn from_display(from: &pidge_core::MessageFrom) -> &str {
+    if from.name.is_empty() {
+        &from.address
+    } else {
+        &from.name
+    }
+}
+
+fn style_subject(subject: &str, is_read: bool) -> String {
+    let linked = linkify_text(subject);
+    if is_read {
+        linked.cyan().to_string()
+    } else {
+        linked.bold().magenta().to_string()
+    }
+}
+
+fn render_text_rich(rows: &[MessageRow], hide_account: bool) -> Result<()> {
     let mut table = Table::new();
-    // Unread-marker cell is in its own narrow column so ANSI styling on the
-    // bullet doesn't throw off column-width math.
-    let mut header: Vec<Cell> = vec![
-        Cell::new(""),
-        Cell::new("ACCOUNT"),
-        Cell::new("FROM"),
-        Cell::new("SUBJECT"),
-        Cell::new("RECEIVED"),
-    ];
-    if hide_account_column {
+    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+
+    let mut header = vec!["ID", "ACCOUNT", "FROM", "SUBJECT", "RECEIVED"];
+    if hide_account {
         header.remove(1);
     }
-    table
-        .set_header(header)
-        .set_content_arrangement(ContentArrangement::Dynamic);
+    table.set_header(header);
 
-    for m in messages {
-        let marker = if !m.is_read {
-            Cell::new("●")
-                .fg(Color::Magenta)
-                .add_attribute(Attribute::Dim)
-        } else {
-            Cell::new("")
-        };
-        let from_name: &str = if m.from.name.is_empty() {
-            &m.from.address
-        } else {
-            &m.from.name
+    for row in rows {
+        let subject_cell = {
+            let styled_subject = style_subject(&row.message.subject, row.message.is_read);
+            let preview_linkified = linkify_text(&row.message.preview);
+            let preview_styled = preview_linkified.dimmed().to_string();
+            if row.message.preview.is_empty() {
+                styled_subject
+            } else {
+                format!("{styled_subject}\n{preview_styled}")
+            }
         };
 
-        let mut row = vec![
-            marker,
-            Cell::new(&m.account),
-            Cell::new(from_name),
-            Cell::new(&m.subject),
-            Cell::new(relative_received(m.received_at)),
+        let mut cells = vec![
+            row.short_hash.dimmed().to_string(),
+            row.message.account.clone(),
+            from_display(&row.message.from).to_string(),
+            subject_cell,
+            relative_received(row.message.received_at),
         ];
-        if hide_account_column {
-            row.remove(1);
+        if hide_account {
+            cells.remove(1);
         }
-        table.add_row(row);
+        table.add_row(cells);
     }
 
     println!("{table}");
     Ok(())
 }
 
-fn render_json(messages: &[Message]) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(messages)?);
+fn render_text_compact(rows: &[MessageRow], hide_account: bool) -> Result<()> {
+    let mut table = Table::new();
+    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+
+    let mut header = vec!["ID", "ACCOUNT", "FROM", "SUBJECT", "RECEIVED"];
+    if hide_account {
+        header.remove(1);
+    }
+    table.set_header(header);
+
+    for row in rows {
+        let subject = style_subject(&row.message.subject, row.message.is_read);
+
+        let mut cells = vec![
+            row.short_hash.dimmed().to_string(),
+            row.message.account.clone(),
+            from_display(&row.message.from).to_string(),
+            subject,
+            relative_received(row.message.received_at),
+        ];
+        if hide_account {
+            cells.remove(1);
+        }
+        table.add_row(cells);
+    }
+
+    println!("{table}");
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct MessageOut<'a> {
+    id: &'a str,
+    graph_id: &'a str,
+    account: &'a str,
+    from: &'a pidge_core::MessageFrom,
+    subject: &'a str,
+    received_at: chrono::DateTime<chrono::Utc>,
+    is_read: bool,
+    preview: &'a str,
+}
+
+fn render_json(rows: &[MessageRow]) -> Result<()> {
+    let out: Vec<MessageOut<'_>> = rows
+        .iter()
+        .map(|r| MessageOut {
+            id: &r.short_hash,
+            graph_id: &r.message.id,
+            account: &r.message.account,
+            from: &r.message.from,
+            subject: &r.message.subject,
+            received_at: r.message.received_at,
+            is_read: r.message.is_read,
+            preview: &r.message.preview,
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 

@@ -51,7 +51,9 @@ pub struct MessageCache {
 impl MessageCache {
     /// Default path: `${XDG_CACHE_HOME:-~/.cache}/pidge/messages.json`.
     pub fn default_path() -> Result<PathBuf, CoreError> {
-        let dir = dirs::cache_dir().ok_or(CoreError::NoConfigDir)?.join("pidge");
+        let dir = dirs::cache_dir()
+            .ok_or(CoreError::NoConfigDir)?
+            .join("pidge");
         std::fs::create_dir_all(&dir)?;
         Ok(dir.join("messages.json"))
     }
@@ -67,9 +69,8 @@ impl MessageCache {
             return Ok(Self::default());
         }
         let text = std::fs::read_to_string(path)?;
-        let cache: MessageCache = serde_json::from_str(&text).map_err(|e| {
-            CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        })?;
+        let cache: MessageCache = serde_json::from_str(&text)
+            .map_err(|e| CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
         Ok(cache)
     }
 
@@ -79,9 +80,8 @@ impl MessageCache {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<(), CoreError> {
-        let text = serde_json::to_string_pretty(self).map_err(|e| {
-            CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-        })?;
+        let text = serde_json::to_string_pretty(self)
+            .map_err(|e| CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
         std::fs::write(path, text)?;
         Ok(())
     }
@@ -248,7 +248,10 @@ mod tests {
     #[test]
     fn find_by_fragment_returns_not_found_when_no_match() {
         let cache = cache_with(&[("hello", "u@e.com")]);
-        assert!(matches!(cache.find_by_fragment("zzzzzz"), CacheLookup::NotFound));
+        assert!(matches!(
+            cache.find_by_fragment("zzzzzz"),
+            CacheLookup::NotFound
+        ));
     }
 
     #[test]
@@ -272,7 +275,10 @@ mod tests {
         let cache = cache_with(&[("hello", "u@e.com")]);
         let hash = short_hash("hello");
         let prefix = &hash[..3];
-        assert!(matches!(cache.find_by_fragment(prefix), CacheLookup::One(_, _)));
+        assert!(matches!(
+            cache.find_by_fragment(prefix),
+            CacheLookup::One(_, _)
+        ));
     }
 
     #[test]
@@ -280,7 +286,10 @@ mod tests {
         let cache = cache_with(&[("hello", "u@e.com")]);
         let hash = short_hash("hello");
         let suffix = &hash[hash.len() - 3..];
-        assert!(matches!(cache.find_by_fragment(suffix), CacheLookup::One(_, _)));
+        assert!(matches!(
+            cache.find_by_fragment(suffix),
+            CacheLookup::One(_, _)
+        ));
     }
 
     #[test]
@@ -288,7 +297,10 @@ mod tests {
         let cache = cache_with(&[("hello", "u@e.com")]);
         let hash = short_hash("hello");
         let middle = &hash[2..5];
-        assert!(matches!(cache.find_by_fragment(middle), CacheLookup::One(_, _)));
+        assert!(matches!(
+            cache.find_by_fragment(middle),
+            CacheLookup::One(_, _)
+        ));
     }
 
     #[test]
@@ -315,6 +327,9 @@ mod tests {
                 }
             }
         }
-        assert!(found_ambiguous, "expected at least one ambiguous fragment in 200-entry cache");
+        assert!(
+            found_ambiguous,
+            "expected at least one ambiguous fragment in 200-entry cache"
+        );
     }
 }

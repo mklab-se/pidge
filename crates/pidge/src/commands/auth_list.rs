@@ -4,11 +4,16 @@ use anyhow::Result;
 use chrono::Utc;
 use colored::Colorize;
 use comfy_table::{ContentArrangement, Table};
+use serde::Serialize;
 
 use pidge_core::Config;
 
-pub fn run() -> Result<()> {
+pub fn run(json: bool) -> Result<()> {
     let config = Config::load()?;
+
+    if json {
+        return emit_json(&config);
+    }
 
     if config.accounts.is_empty() {
         println!(
@@ -47,6 +52,33 @@ pub fn run() -> Result<()> {
         config.accounts.len(),
         if config.accounts.len() == 1 { "" } else { "s" }
     );
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct AccountOut {
+    email: String,
+    tenant_id: String,
+    home_account_id: String,
+    added_at: chrono::DateTime<Utc>,
+    is_default_send: bool,
+    is_default_calendar: bool,
+}
+
+fn emit_json(config: &Config) -> Result<()> {
+    let out: Vec<AccountOut> = config
+        .accounts
+        .iter()
+        .map(|a| AccountOut {
+            email: a.email.clone(),
+            tenant_id: a.tenant_id.clone(),
+            home_account_id: a.home_account_id.clone(),
+            added_at: a.added_at,
+            is_default_send: config.defaults.send.as_deref() == Some(a.email.as_str()),
+            is_default_calendar: config.defaults.calendar.as_deref() == Some(a.email.as_str()),
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
 }
 

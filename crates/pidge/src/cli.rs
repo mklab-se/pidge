@@ -24,6 +24,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_color: bool,
 
+    /// Output as machine-readable JSON instead of formatted text
+    #[arg(long, global = true)]
+    pub json: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -133,16 +137,10 @@ pub enum InboxCommands {
         #[arg(long)]
         unread: bool,
 
-        /// Output format
-        #[arg(long, value_enum, default_value = "text")]
-        output: OutputFormat,
+        /// One row per message (no preview lines)
+        #[arg(short = 'c', long)]
+        compact: bool,
     },
-}
-
-#[derive(Clone, Copy, clap::ValueEnum)]
-pub enum OutputFormat {
-    Text,
-    Json,
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -157,8 +155,12 @@ impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.command {
             Some(Commands::Ai { command }) => crate::commands::ai::run(command).await,
-            Some(Commands::Auth { command }) => crate::commands::auth::run(command).await,
-            Some(Commands::Inbox { command }) => crate::commands::inbox::run(command).await,
+            Some(Commands::Auth { command }) => {
+                crate::commands::auth::run(command, self.json).await
+            }
+            Some(Commands::Inbox { command }) => {
+                crate::commands::inbox::run(command, self.json).await
+            }
             Some(Commands::Completion { shell }) => {
                 crate::commands::completion::generate_completions(shell);
                 Ok(())

@@ -3,5 +3,4 @@
 pub mod hyperlink;
 pub mod linkify;
 
-pub use hyperlink::hyperlink;
 pub use linkify::linkify_text;
