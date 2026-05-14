@@ -9,4 +9,6 @@ pub mod auth_logout;
 pub mod auth_status;
 pub mod completion;
 pub mod inbox;
+pub mod inbox_show;
 pub mod skill;
+pub mod trust;

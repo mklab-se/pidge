@@ -52,6 +52,12 @@ pub enum Commands {
         command: InboxCommands,
     },
 
+    /// Manage the trusted-senders list (auto-renders inline images from these senders)
+    Trust {
+        #[command(subcommand)]
+        command: TrustCommands,
+    },
+
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
@@ -141,6 +147,36 @@ pub enum InboxCommands {
         #[arg(short = 'c', long)]
         compact: bool,
     },
+
+    /// Display a single message identified by a fragment of its short hash
+    Show {
+        /// Fragment of the 8-char short hash (prefix, suffix, or substring)
+        fragment: String,
+
+        /// Also mark the message as read on the server
+        #[arg(short = 'r', long)]
+        mark_read: bool,
+
+        /// Force inline image rendering for this invocation, regardless of trust list
+        #[arg(long)]
+        show_images: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum TrustCommands {
+    /// List trusted sender addresses
+    List,
+    /// Add an email address to the trust list (idempotent)
+    Add {
+        /// Email address to add
+        email: String,
+    },
+    /// Remove an email address from the trust list (idempotent)
+    Remove {
+        /// Email address to remove
+        email: String,
+    },
 }
 
 #[derive(Clone, clap::ValueEnum)]
@@ -160,6 +196,9 @@ impl Cli {
             }
             Some(Commands::Inbox { command }) => {
                 crate::commands::inbox::run(command, self.json).await
+            }
+            Some(Commands::Trust { command }) => {
+                crate::commands::trust::run(command, self.json).await
             }
             Some(Commands::Completion { shell }) => {
                 crate::commands::completion::generate_completions(shell);
