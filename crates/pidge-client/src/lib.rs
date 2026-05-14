@@ -9,4 +9,4 @@ pub mod graph;
 
 pub use auth::AuthClient;
 pub use error::ClientError;
-pub use graph::GraphClient;
+pub use graph::{GraphClient, Outgoing};

@@ -436,6 +436,124 @@ async fn patch_message(
     Ok(())
 }
 
+/// POST /me/sendMail — compose-and-send a new message in one call.
+///
+/// The Graph endpoint takes ownership of the body — we wrap the `Outgoing`
+/// in `{ "message": ..., "saveToSentItems": true }` so a copy lands in the
+/// sender's Sent Items folder. Returns 202 Accepted on success.
+pub async fn send_mail(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message: &Outgoing,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/sendMail");
+    let body = serde_json::json!({
+        "message": message.to_graph_json(),
+        "saveToSentItems": true,
+    });
+    post_no_body(http, &url, access_token, &body).await
+}
+
+/// POST /me/messages/{id}/reply — reply to a message with an optional comment
+/// prepended to Graph's auto-generated quoted text.
+pub async fn reply_message(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    comment: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/reply");
+    let body = serde_json::json!({ "comment": comment });
+    post_no_body(http, &url, access_token, &body).await
+}
+
+/// POST /me/messages/{id}/replyAll — reply to every recipient on the thread.
+pub async fn reply_all_message(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    comment: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/replyAll");
+    let body = serde_json::json!({ "comment": comment });
+    post_no_body(http, &url, access_token, &body).await
+}
+
+/// POST /me/messages/{id}/forward — forward to new recipients with optional comment.
+pub async fn forward_message(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    to: &[String],
+    comment: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/forward");
+    let body = serde_json::json!({
+        "comment": comment,
+        "toRecipients": to.iter().map(|addr| serde_json::json!({
+            "emailAddress": { "address": addr }
+        })).collect::<Vec<_>>(),
+    });
+    post_no_body(http, &url, access_token, &body).await
+}
+
+async fn post_no_body(
+    http: &reqwest::Client,
+    url: &str,
+    access_token: &str,
+    body: &serde_json::Value,
+) -> Result<(), ClientError> {
+    let resp = http
+        .post(url)
+        .bearer_auth(access_token)
+        .json(body)
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
+/// What the user is sending — pre-Graph-serialization shape.
+#[derive(Debug, Clone)]
+pub struct Outgoing {
+    pub subject: String,
+    pub body_text: String,
+    pub to: Vec<String>,
+    pub cc: Vec<String>,
+    pub bcc: Vec<String>,
+}
+
+impl Outgoing {
+    fn to_graph_json(&self) -> serde_json::Value {
+        fn addresses(list: &[String]) -> Vec<serde_json::Value> {
+            list.iter()
+                .map(|addr| serde_json::json!({ "emailAddress": { "address": addr } }))
+                .collect()
+        }
+        serde_json::json!({
+            "subject": self.subject,
+            "body": {
+                "contentType": "Text",
+                "content": self.body_text,
+            },
+            "toRecipients": addresses(&self.to),
+            "ccRecipients": addresses(&self.cc),
+            "bccRecipients": addresses(&self.bcc),
+        })
+    }
+}
+
 /// POST /me/messages/{id}/move — move the message to another folder.
 ///
 /// `destination` is either a Graph folder ID or a well-known folder name
@@ -609,6 +727,78 @@ mod tests {
         set_flag(&http, &server.uri(), "AT", "MSG", false)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_mail_wraps_outgoing_in_message_envelope() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/me/sendMail"))
+            .and(body_partial_json(serde_json::json!({
+                "saveToSentItems": true,
+                "message": {
+                    "subject": "Hello",
+                    "body": { "contentType": "Text", "content": "Hi there" },
+                    "toRecipients": [{ "emailAddress": { "address": "alice@example.com" } }]
+                }
+            })))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let msg = Outgoing {
+            subject: "Hello".into(),
+            body_text: "Hi there".into(),
+            to: vec!["alice@example.com".into()],
+            cc: vec![],
+            bcc: vec![],
+        };
+        send_mail(&http, &server.uri(), "AT", &msg).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reply_message_posts_comment() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+/reply"))
+            .and(body_partial_json(
+                serde_json::json!({ "comment": "Thanks!" }),
+            ))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        reply_message(&http, &server.uri(), "AT", "MSG", "Thanks!")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn forward_message_posts_recipients_and_comment() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+/forward"))
+            .and(body_partial_json(serde_json::json!({
+                "comment": "FYI",
+                "toRecipients": [{ "emailAddress": { "address": "bob@example.com" } }]
+            })))
+            .respond_with(ResponseTemplate::new(202))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        forward_message(
+            &http,
+            &server.uri(),
+            "AT",
+            "MSG",
+            &["bob@example.com".into()],
+            "FYI",
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

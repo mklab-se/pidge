@@ -4,8 +4,9 @@ mod mail;
 mod me;
 
 pub use mail::{
-    InboxPage, get_attachment_bytes, get_message, list_attachments, list_inbox, mark_read,
-    mark_unread, move_message, search_messages, set_flag,
+    InboxPage, Outgoing, forward_message, get_attachment_bytes, get_message, list_attachments,
+    list_inbox, mark_read, mark_unread, move_message, reply_all_message, reply_message,
+    search_messages, send_mail, set_flag,
 };
 pub use me::{Me, get_me};
 
@@ -108,6 +109,46 @@ impl GraphClient {
     ) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::move_message(&self.http, &self.base_url, &token, message_id, destination).await
+    }
+
+    /// POST /me/sendMail — compose-and-send a new message.
+    pub async fn send_mail(&self, account: &str, message: &Outgoing) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::send_mail(&self.http, &self.base_url, &token, message).await
+    }
+
+    /// POST /me/messages/{id}/reply.
+    pub async fn reply_message(
+        &self,
+        account: &str,
+        message_id: &str,
+        comment: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::reply_message(&self.http, &self.base_url, &token, message_id, comment).await
+    }
+
+    /// POST /me/messages/{id}/replyAll.
+    pub async fn reply_all_message(
+        &self,
+        account: &str,
+        message_id: &str,
+        comment: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::reply_all_message(&self.http, &self.base_url, &token, message_id, comment).await
+    }
+
+    /// POST /me/messages/{id}/forward.
+    pub async fn forward_message(
+        &self,
+        account: &str,
+        message_id: &str,
+        to: &[String],
+        comment: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::forward_message(&self.http, &self.base_url, &token, message_id, to, comment).await
     }
 
     /// GET /me/messages/{id} for a given account email.

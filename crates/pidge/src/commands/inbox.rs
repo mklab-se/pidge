@@ -55,6 +55,16 @@ pub async fn run(command: InboxCommands, json: bool) -> Result<()> {
         InboxCommands::Archive { fragment } => {
             crate::commands::inbox_actions::archive(fragment).await
         }
+        InboxCommands::Send(args) => crate::commands::inbox_compose::send(args).await,
+        InboxCommands::Reply { fragment, compose } => {
+            crate::commands::inbox_compose::reply(fragment, compose, false).await
+        }
+        InboxCommands::ReplyAll { fragment, compose } => {
+            crate::commands::inbox_compose::reply(fragment, compose, true).await
+        }
+        InboxCommands::Forward { fragment, compose } => {
+            crate::commands::inbox_compose::forward(fragment, compose).await
+        }
     }
 }
 

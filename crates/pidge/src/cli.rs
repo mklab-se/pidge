@@ -259,6 +259,118 @@ pub enum InboxCommands {
         /// Fragment of the 8-char short hash
         fragment: String,
     },
+
+    /// Compose and send a new e-mail (wizard by default; provide flags to skip prompts)
+    Send(ComposeArgs),
+
+    /// Reply to a message (the original sender only)
+    Reply {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        #[command(flatten)]
+        compose: ReplyArgs,
+    },
+
+    /// Reply-all to a message (every recipient on the thread, excluding yourself)
+    #[command(name = "reply-all")]
+    ReplyAll {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        #[command(flatten)]
+        compose: ReplyArgs,
+    },
+
+    /// Forward a message to new recipients
+    Forward {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        #[command(flatten)]
+        compose: ForwardArgs,
+    },
+}
+
+/// Flags shared between `inbox send` and (mostly) the explicit forms of
+/// reply/forward. All optional — wizard prompts fill in what's missing.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ComposeArgs {
+    /// Account to send from (defaults to `account default e-mail`)
+    #[arg(long)]
+    pub from: Option<String>,
+
+    /// Recipient e-mail addresses (comma-separated, repeatable)
+    #[arg(long, value_delimiter = ',')]
+    pub to: Vec<String>,
+
+    /// Cc recipients (comma-separated, repeatable)
+    #[arg(long, value_delimiter = ',')]
+    pub cc: Vec<String>,
+
+    /// Bcc recipients (comma-separated, repeatable)
+    #[arg(long, value_delimiter = ',')]
+    pub bcc: Vec<String>,
+
+    /// Subject line
+    #[arg(long)]
+    pub subject: Option<String>,
+
+    /// Body text (use `--body-file` for long content; both flags are mutually exclusive)
+    #[arg(long, conflicts_with = "body_file")]
+    pub body: Option<String>,
+
+    /// Read body from a file (`-` reads from stdin)
+    #[arg(long)]
+    pub body_file: Option<String>,
+
+    /// Skip the final "Send? [y/N]" confirmation
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+/// Reply variants don't need `--to` (Graph fills that in from the original
+/// message) and don't take a subject (Graph prepends "Re:" automatically),
+/// but they DO need a body comment.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ReplyArgs {
+    /// Account to reply from (defaults to the account that received the message)
+    #[arg(long)]
+    pub from: Option<String>,
+
+    /// Comment text to prepend to Graph's auto-quoted original
+    #[arg(long, conflicts_with = "body_file")]
+    pub body: Option<String>,
+
+    /// Read comment from a file (`-` reads from stdin)
+    #[arg(long)]
+    pub body_file: Option<String>,
+
+    /// Skip the final "Send? [y/N]" confirmation
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+/// Forward needs explicit recipients (the user is sending the message to
+/// someone new), plus an optional comment.
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct ForwardArgs {
+    /// Account to forward from (defaults to the account that received the message)
+    #[arg(long)]
+    pub from: Option<String>,
+
+    /// Recipient e-mail addresses (comma-separated, repeatable)
+    #[arg(long, value_delimiter = ',')]
+    pub to: Vec<String>,
+
+    /// Comment text to prepend to Graph's auto-quoted original
+    #[arg(long, conflicts_with = "body_file")]
+    pub body: Option<String>,
+
+    /// Read comment from a file (`-` reads from stdin)
+    #[arg(long)]
+    pub body_file: Option<String>,
+
+    /// Skip the final "Send? [y/N]" confirmation
+    #[arg(short = 'y', long)]
+    pub yes: bool,
 }
 
 /// Subcommand names that `Inbox` accepts directly. Used by the argv pre-processor
@@ -277,6 +389,10 @@ pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &[
     "flag",
     "unflag",
     "archive",
+    "send",
+    "reply",
+    "reply-all",
+    "forward",
     "help",
 ];
 

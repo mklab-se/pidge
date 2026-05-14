@@ -69,8 +69,8 @@ viuer = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 humansize = "2"
 
-# Interactive prompts
-inquire = "0.7"
+# Interactive prompts (`editor` feature enables `Editor` prompt that opens $EDITOR)
+inquire = { version = "0.7", features = ["editor"] }
 
 # Future combinators (for join_all in multi-account fetch)
 futures = "0.3"
