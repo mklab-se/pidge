@@ -63,6 +63,12 @@ comfy-table = { version = "7", features = ["custom_styling"] }
 linkify = "0.10"
 sha2 = "0.10"
 
+# Inbox show: HTML rendering, image display, formatting
+html2text = "0.12"
+viuer = "0.9"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+humansize = "2"
+
 # Interactive prompts
 inquire = "0.7"
 
