@@ -149,7 +149,11 @@ fn render_header_and_body(full: &FullMessage) -> Result<()> {
             format_recipient_list(&full.cc)
         );
     }
-    println!("{}   {}", "Subject:".bold(), full.subject);
+    println!(
+        "{}   {}",
+        "Subject:".bold(),
+        full.subject.bold().bright_yellow()
+    );
     println!(
         "{}  {} ({})",
         "Received:".bold(),
