@@ -48,7 +48,7 @@ crates/
 
 ## Releasing
 
-Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
+Use the `/release` slash command (see `.claude/commands/release.md`):
 
 1. `/release patch` (or `minor`/`major`)
 2. Skill bumps version, updates CHANGELOG, runs pre-flight checks, tags, pushes
