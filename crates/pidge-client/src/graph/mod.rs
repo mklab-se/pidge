@@ -94,7 +94,14 @@ impl GraphClient {
         attachment_id: &str,
     ) -> Result<Vec<u8>, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
-        mail::get_attachment_bytes(&self.http, &self.base_url, &token, message_id, attachment_id).await
+        mail::get_attachment_bytes(
+            &self.http,
+            &self.base_url,
+            &token,
+            message_id,
+            attachment_id,
+        )
+        .await
     }
 
     /// PATCH /me/messages/{id} with isRead: true.

@@ -121,7 +121,11 @@ impl Config {
     /// Add an email to the trusted-senders list (case-insensitive). Idempotent.
     pub fn add_trusted_sender(&mut self, email: &str) {
         let lower = email.to_lowercase();
-        if !self.trusted_senders.iter().any(|s| s.to_lowercase() == lower) {
+        if !self
+            .trusted_senders
+            .iter()
+            .any(|s| s.to_lowercase() == lower)
+        {
             self.trusted_senders.push(email.to_string());
         }
     }
@@ -138,7 +142,9 @@ impl Config {
     /// Case-insensitive check for whether an email is in the trusted-senders list.
     pub fn is_sender_trusted(&self, email: &str) -> bool {
         let lower = email.to_lowercase();
-        self.trusted_senders.iter().any(|s| s.to_lowercase() == lower)
+        self.trusted_senders
+            .iter()
+            .any(|s| s.to_lowercase() == lower)
     }
 }
 

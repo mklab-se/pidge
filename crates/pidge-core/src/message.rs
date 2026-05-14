@@ -139,7 +139,13 @@ mod tests {
 
     #[test]
     fn body_content_type_serializes_lowercase() {
-        assert_eq!(serde_json::to_string(&BodyContentType::Html).unwrap(), "\"html\"");
-        assert_eq!(serde_json::to_string(&BodyContentType::Text).unwrap(), "\"text\"");
+        assert_eq!(
+            serde_json::to_string(&BodyContentType::Html).unwrap(),
+            "\"html\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BodyContentType::Text).unwrap(),
+            "\"text\""
+        );
     }
 }

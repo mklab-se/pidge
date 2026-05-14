@@ -392,13 +392,18 @@ mod tests {
             .await;
 
         let http = reqwest::Client::new();
-        let m = get_message(&http, &server.uri(), "AT", "u@e.com", "AAA").await.unwrap();
+        let m = get_message(&http, &server.uri(), "AT", "u@e.com", "AAA")
+            .await
+            .unwrap();
         assert_eq!(m.id, "AAA");
         assert_eq!(m.subject, "Hello");
         assert_eq!(m.from.name, "Maria");
         assert_eq!(m.to.len(), 1);
         assert_eq!(m.to[0].address, "kristofer@mklab.se");
-        assert!(matches!(m.body_content_type, pidge_core::BodyContentType::Html));
+        assert!(matches!(
+            m.body_content_type,
+            pidge_core::BodyContentType::Html
+        ));
         assert_eq!(m.body_content, "<p>Hi</p>");
         assert!(m.has_attachments);
     }
@@ -432,7 +437,9 @@ mod tests {
             .await;
 
         let http = reqwest::Client::new();
-        let atts = list_attachments(&http, &server.uri(), "AT", "MSG").await.unwrap();
+        let atts = list_attachments(&http, &server.uri(), "AT", "MSG")
+            .await
+            .unwrap();
         assert_eq!(atts.len(), 1);
         assert_eq!(atts[0].name, "report.pdf");
         assert_eq!(atts[0].size_bytes, 12345);
@@ -442,7 +449,9 @@ mod tests {
     async fn get_attachment_bytes_decodes_base64() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path_regex("/me/messages/[A-Za-z0-9]+/attachments/[A-Za-z0-9-]+"))
+            .and(path_regex(
+                "/me/messages/[A-Za-z0-9]+/attachments/[A-Za-z0-9-]+",
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": "att-1",
                 "name": "report.pdf",
@@ -455,7 +464,9 @@ mod tests {
             .await;
 
         let http = reqwest::Client::new();
-        let bytes = get_attachment_bytes(&http, &server.uri(), "AT", "MSG", "att-1").await.unwrap();
+        let bytes = get_attachment_bytes(&http, &server.uri(), "AT", "MSG", "att-1")
+            .await
+            .unwrap();
         assert_eq!(bytes, b"hello");
     }
 
