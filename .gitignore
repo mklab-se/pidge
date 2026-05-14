@@ -37,3 +37,8 @@ coverage/
 # pattern catches accidents (test fixtures, repro dumps, etc.).
 **/tokens/*.json
 **/pidge-tokens-*.json
+
+# Raw HTML captures of real e-mails (used as the source for anonymized
+# rendering fixtures). The anonymized versions in tests/fixtures/*.html are
+# checked in; the originals in tests/fixtures/raw/ are NEVER committed.
+crates/pidge/tests/fixtures/raw/

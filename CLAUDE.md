@@ -64,6 +64,40 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
 - `cargo clippy` with `-D warnings` (zero warnings policy)
 - `cargo fmt` enforced in CI
 
+## Token storage
+
+- Tokens default to the OS keychain (`Keychain` variant). New sign-ins can opt into a plaintext file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix) with `pidge auth login --store=file`. Useful when keychain prompts are friction during development.
+- `pidge auth migrate-storage <email> --to <keychain|file>` moves an existing account's tokens between backends without forcing a re-login.
+- The chosen backend is recorded on the account in `config.yaml` (`storage:` field); `AuthClient::get_valid_token` reads it on every call so callers don't need to know which backend was used.
+- **Never commit token files.** `.gitignore` has belt-and-suspenders entries for `**/tokens/*.json` and `crates/pidge/tests/fixtures/raw/`.
+
+## Workflow: when a real e-mail renders badly
+
+The HTML renderer (`render_html_body` in `commands/inbox_show.rs`) is exercised by snapshot tests against anonymized fixtures of real-world e-mails. **Don't fix rendering bugs against a live mailbox — convert the bad e-mail into a fixture first.** That way the regression is caught forever and we never need a live token to repro.
+
+The loop:
+
+1. **Capture the raw HTML.** From the bad message's row in `pidge inbox list`, copy its short hash and run:
+   ```bash
+   cargo run -- inbox show <fragment> --raw-html > crates/pidge/tests/fixtures/raw/<name>.html
+   ```
+   `tests/fixtures/raw/` is gitignored — these files contain real user data and must never be committed.
+
+2. **Anonymize it.** Produce `crates/pidge/tests/fixtures/<name>.html` from the raw file:
+   - Preserve every HTML tag and attribute (`<table>`, `<tr>`, `<td>`, `<a>`, `<img>`, all `style=`, `class=`, etc.) — the renderer's behavior depends on structure.
+   - Replace every piece of human-readable prose with Lorem Ipsum of comparable length. Preserve trailing punctuation. For non-English originals, sprinkle in a few accented characters (`ö`, `å`, `é`, …) so the test still exercises non-ASCII paths.
+   - Replace personal identifiers (recipient name, e-mail, bio) with `Jane Doe` / `jane.doe@example.com` etc.
+   - Replace **every** URL with an `example.com` equivalent. Keep the URL shape (query string structure, length, multiple parameters) but turn each opaque token into a Lorem-style placeholder. Tracking pixels stay (the renderer's job is to suppress them).
+   - Verify with `grep -c '<table' raw/<name>.html` and the anonymized version that tag counts match exactly.
+
+3. **Add a snapshot test.** In `commands/inbox_show.rs::tests`, add an `include_str!` constant for the new fixture and a `render_html_<name>_matches_snapshot` test that calls `render_html_body` + `osc8_to_visible` + `assert_snapshot` with a new `tests/fixtures/<name>.expected.txt` path.
+
+4. **Generate the snapshot, review, commit.** Run `UPDATE_SNAPSHOTS=1 cargo test -p pidge render_html_` to write the initial snapshot, **read it carefully** to confirm the rendering is acceptable, then commit. If it isn't acceptable, iterate on `render_html_body` until the snapshot looks right and re-run with `UPDATE_SNAPSHOTS=1` to accept.
+
+5. **Re-run without the env var** to confirm the test is stable: `cargo test -p pidge render_html_`.
+
+Snapshots use the visible form `[link=URL]visible text[/link]` for OSC 8 escapes so diffs stay human-readable. The structural-invariant tests (`render_html_emits_no_raw_html_tags`, `render_html_collapses_blank_runs`, `render_html_strips_tracking_pixel_chars`, `render_html_wraps_anchors_with_osc8`, `render_html_suppresses_image_alt_text`) run against every fixture automatically — no extra wiring needed.
+
 ## Design Docs
 
 Specs and implementation plans live under `docs/superpowers/`:

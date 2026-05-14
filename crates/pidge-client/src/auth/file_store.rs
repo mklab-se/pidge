@@ -101,6 +101,49 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
+    use std::sync::Mutex;
+
+    // Tests in this module mutate process-wide env vars (HOME / XDG_CONFIG_HOME)
+    // so that FileStore::dir() points at a temp directory. They must serialize
+    // themselves — cargo's default parallel-test execution would otherwise race
+    // on the env vars and either leak temp paths between tests or pick up the
+    // wrong directory mid-save.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_temp_config_dir<F: FnOnce(&std::path::Path)>(f: F) {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let prev_home = std::env::var_os("HOME");
+        // SAFETY: serialized by ENV_LOCK above; we restore both vars before
+        // dropping the guard.
+        unsafe {
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+            std::env::set_var("HOME", tmp.path());
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
+        unsafe {
+            match prev_xdg {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        if let Err(payload) = result {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    fn fake_tokens() -> TokenSet {
+        TokenSet {
+            access_token: "AT".into(),
+            refresh_token: "RT".into(),
+            expires_at: Utc::now() + Duration::seconds(3600),
+        }
+    }
 
     #[test]
     fn safe_filename_keeps_typical_emails_intact() {
@@ -118,39 +161,15 @@ mod tests {
 
     #[test]
     fn save_load_delete_roundtrips_via_tmpdir() {
-        // Drive the test through a temporary HOME to avoid touching the real config dir.
-        let tmp = tempfile::tempdir().unwrap();
-        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
-        let prev_home = std::env::var_os("HOME");
-        // SAFETY: tests are single-threaded for env mutation; we restore below.
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            std::env::set_var("HOME", tmp.path());
-        }
-
-        let email = "test@example.com";
-        let tokens = TokenSet {
-            access_token: "AT".into(),
-            refresh_token: "RT".into(),
-            expires_at: Utc::now() + Duration::seconds(3600),
-        };
-        FileStore::save(email, &tokens).unwrap();
-        let loaded = FileStore::load(email).unwrap().unwrap();
-        assert_eq!(loaded, tokens);
-        FileStore::delete(email).unwrap();
-        assert!(FileStore::load(email).unwrap().is_none());
-
-        // restore env
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        with_temp_config_dir(|_| {
+            let email = "test@example.com";
+            let tokens = fake_tokens();
+            FileStore::save(email, &tokens).unwrap();
+            let loaded = FileStore::load(email).unwrap().unwrap();
+            assert_eq!(loaded, tokens);
+            FileStore::delete(email).unwrap();
+            assert!(FileStore::load(email).unwrap().is_none());
+        });
     }
 
     #[cfg(unix)]
@@ -158,35 +177,14 @@ mod tests {
     fn saved_file_has_mode_0600_on_unix() {
         use std::os::unix::fs::PermissionsExt;
 
-        let tmp = tempfile::tempdir().unwrap();
-        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
-        let prev_home = std::env::var_os("HOME");
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            std::env::set_var("HOME", tmp.path());
-        }
-
-        let email = "mode@example.com";
-        let tokens = TokenSet {
-            access_token: "AT".into(),
-            refresh_token: "RT".into(),
-            expires_at: Utc::now() + Duration::seconds(3600),
-        };
-        FileStore::save(email, &tokens).unwrap();
-        let path = FileStore::path_for(email).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "tokens file must be user-only readable");
-        FileStore::delete(email).unwrap();
-
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
+        with_temp_config_dir(|_| {
+            let email = "mode@example.com";
+            let tokens = fake_tokens();
+            FileStore::save(email, &tokens).unwrap();
+            let path = FileStore::path_for(email).unwrap();
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "tokens file must be user-only readable");
+            FileStore::delete(email).unwrap();
+        });
     }
 }

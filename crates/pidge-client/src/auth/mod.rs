@@ -93,9 +93,10 @@ impl AuthClient {
     /// to the OS keychain.
     pub async fn get_valid_token(&self, email: &str) -> Result<String, ClientError> {
         let storage = storage_for(email);
-        let tokens = TokenStore::load(email, storage)?.ok_or_else(|| ClientError::SessionExpired {
-            email: email.to_string(),
-        })?;
+        let tokens =
+            TokenStore::load(email, storage)?.ok_or_else(|| ClientError::SessionExpired {
+                email: email.to_string(),
+            })?;
 
         if !tokens.needs_refresh() {
             return Ok(tokens.access_token);

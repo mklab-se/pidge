@@ -31,7 +31,10 @@ pub async fn run(command: InboxCommands, json: bool) -> Result<()> {
             fragment,
             mark_read,
             show_images,
-        } => crate::commands::inbox_show::run(fragment, mark_read, show_images, json).await,
+            raw_html,
+        } => {
+            crate::commands::inbox_show::run(fragment, mark_read, show_images, raw_html, json).await
+        }
     }
 }
 

@@ -24,11 +24,7 @@ impl TokenStore {
     }
 
     /// Save tokens for an email to the specified backend, overwriting any existing entry.
-    pub fn save(
-        email: &str,
-        tokens: &TokenSet,
-        storage: TokenStorage,
-    ) -> Result<(), ClientError> {
+    pub fn save(email: &str, tokens: &TokenSet, storage: TokenStorage) -> Result<(), ClientError> {
         match storage {
             TokenStorage::Keychain => KeychainStore::save(email, tokens),
             TokenStorage::File => FileStore::save(email, tokens),

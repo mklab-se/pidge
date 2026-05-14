@@ -13,7 +13,13 @@ use pidge_core::{
 
 use crate::output::linkify_text;
 
-pub async fn run(fragment: String, mark_read: bool, show_images: bool, json: bool) -> Result<()> {
+pub async fn run(
+    fragment: String,
+    mark_read: bool,
+    show_images: bool,
+    raw_html: bool,
+    json: bool,
+) -> Result<()> {
     let config = Config::load()?;
     if config.accounts.is_empty() {
         return Err(anyhow!(
@@ -68,6 +74,13 @@ pub async fn run(fragment: String, mark_read: bool, show_images: bool, json: boo
     } else {
         Vec::new()
     };
+
+    // Debug: dump the raw body and stop. Used to capture fixtures for the
+    // HTML-rendering test suite (see crates/pidge/tests/render_html.rs).
+    if raw_html {
+        print!("{}", full.body_content);
+        return Ok(());
+    }
 
     // Decide whether to render inline images (trusted sender OR --show-images flag).
     let render_inline = config.is_sender_trusted(&full.from.address) || show_images;
@@ -459,5 +472,243 @@ mod tests {
         assert!(!is_image_content_type("image/svg+xml"));
         assert!(!is_image_content_type("text/html"));
         assert!(!is_image_content_type(""));
+    }
+
+    // --- HTML body rendering snapshot tests ----------------------------------
+    //
+    // The fixtures in `tests/fixtures/*.html` are anonymized captures of real
+    // marketing-style emails (LinkedIn jobs digest, SpeedLedger newsletter)
+    // that previously rendered badly. They live in the repo so we can iterate
+    // on the renderer without hitting Microsoft Graph and without my keychain
+    // weighing in. Every time a real-world email renders poorly, the workflow
+    // is:
+    //
+    //   1. `pidge inbox show <fragment> --raw-html > tests/fixtures/raw/<name>.html`
+    //   2. Anonymize the raw file into `tests/fixtures/<name>.html` (Lorem
+    //      Ipsum text, example.com URLs, structure preserved).
+    //   3. Add a test case here that asserts the desired rendering.
+    //   4. Iterate on `render_html_body` until the test passes.
+    //
+    // Snapshots are stored as `tests/fixtures/<name>.expected.txt`. OSC 8
+    // hyperlink escapes are encoded as the human-readable form
+    // `[link=URL]visible text[/link]` so snapshot diffs stay legible.
+    //
+    // To accept a new rendered output as the snapshot, run:
+    //     UPDATE_SNAPSHOTS=1 cargo test -p pidge render_html_
+    //
+    // — make sure to review the resulting diff before committing.
+
+    const LINKEDIN_HTML: &str = include_str!("../../tests/fixtures/linkedin_jobs_digest.html");
+    const SPEEDLEDGER_HTML: &str = include_str!("../../tests/fixtures/speedledger_newsletter.html");
+
+    const LINKEDIN_SNAPSHOT: &str = "tests/fixtures/linkedin_jobs_digest.expected.txt";
+    const SPEEDLEDGER_SNAPSHOT: &str = "tests/fixtures/speedledger_newsletter.expected.txt";
+
+    /// Translate OSC 8 escape sequences emitted by `render_html_body` into the
+    /// snapshot-friendly form `[link=URL]text[/link]`. Anything else (plain
+    /// text, accented characters, blank lines) passes through unchanged.
+    ///
+    /// OSC 8 sequences are all-ASCII (`ESC ] 8 ; ; URL ESC \`), so we can
+    /// scan the input as a byte string and copy non-OSC stretches as raw
+    /// UTF-8 substrings — preserving multi-byte chars like `ö` byte-for-byte.
+    fn osc8_to_visible(input: &str) -> String {
+        const OPEN: &str = "\x1b]8;;";
+        const ST: &str = "\x1b\\";
+
+        let mut out = String::with_capacity(input.len());
+        let mut rest = input;
+
+        while let Some(pos) = rest.find(OPEN) {
+            out.push_str(&rest[..pos]);
+            let after_open = &rest[pos + OPEN.len()..];
+            // The OSC 8 URL extends until the next ST. An empty URL marks an
+            // OSC 8 close sequence (`ESC ] 8 ; ; ESC \`).
+            let st_pos = match after_open.find(ST) {
+                Some(p) => p,
+                None => {
+                    // Malformed — flush the rest verbatim and stop.
+                    out.push_str(after_open);
+                    return out;
+                }
+            };
+            let url = &after_open[..st_pos];
+            if url.is_empty() {
+                out.push_str("[/link]");
+            } else {
+                out.push_str("[link=");
+                out.push_str(url);
+                out.push(']');
+            }
+            rest = &after_open[st_pos + ST.len()..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Compare `actual` against the snapshot file at `relative_path`
+    /// (relative to the crate root). If `UPDATE_SNAPSHOTS=1` is set, the
+    /// snapshot is overwritten with `actual`. Otherwise mismatch panics with
+    /// a short diff.
+    fn assert_snapshot(actual: &str, relative_path: &str) {
+        let crate_dir = env!("CARGO_MANIFEST_DIR");
+        let path = std::path::Path::new(crate_dir).join(relative_path);
+
+        if std::env::var("UPDATE_SNAPSHOTS").as_deref() == Ok("1") {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, actual).unwrap();
+            return;
+        }
+
+        let expected = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => panic!(
+                "snapshot {} missing ({e}). Create it with UPDATE_SNAPSHOTS=1 cargo test.",
+                path.display()
+            ),
+        };
+
+        if actual == expected {
+            return;
+        }
+
+        // Build a compact line-by-line diff (cap output to keep panic readable).
+        let mut diff = String::new();
+        diff.push_str("snapshot mismatch — first differing lines:\n");
+        let actual_lines: Vec<&str> = actual.lines().collect();
+        let expected_lines: Vec<&str> = expected.lines().collect();
+        let mut shown = 0;
+        for (i, (a, e)) in actual_lines.iter().zip(expected_lines.iter()).enumerate() {
+            if a != e {
+                diff.push_str(&format!("  line {i} (expected): {e}\n"));
+                diff.push_str(&format!("  line {i} (actual)  : {a}\n"));
+                shown += 1;
+                if shown >= 5 {
+                    break;
+                }
+            }
+        }
+        if actual_lines.len() != expected_lines.len() {
+            diff.push_str(&format!(
+                "  length differs: expected={} actual={}\n",
+                expected_lines.len(),
+                actual_lines.len(),
+            ));
+        }
+        diff.push_str(
+            "Run `UPDATE_SNAPSHOTS=1 cargo test -p pidge render_html_` to accept the new output.\n",
+        );
+        panic!("{diff}");
+    }
+
+    #[test]
+    fn render_html_linkedin_matches_snapshot() {
+        let rendered = render_html_body(LINKEDIN_HTML, 100);
+        let visible = osc8_to_visible(&rendered);
+        assert_snapshot(&visible, LINKEDIN_SNAPSHOT);
+    }
+
+    #[test]
+    fn render_html_speedledger_matches_snapshot() {
+        let rendered = render_html_body(SPEEDLEDGER_HTML, 100);
+        let visible = osc8_to_visible(&rendered);
+        assert_snapshot(&visible, SPEEDLEDGER_SNAPSHOT);
+    }
+
+    // --- Structural invariants -----------------------------------------------
+    //
+    // These assert properties of the rendered output that should hold for every
+    // input, independent of the exact snapshot. They serve as quick alarms when
+    // a refactor breaks the renderer in a way the snapshot diff might obscure.
+
+    #[test]
+    fn render_html_emits_no_raw_html_tags() {
+        for html in [LINKEDIN_HTML, SPEEDLEDGER_HTML] {
+            let rendered = render_html_body(html, 100);
+            let visible = osc8_to_visible(&rendered);
+            assert!(
+                !visible.contains("<table"),
+                "raw <table tag leaked through render_html_body"
+            );
+            assert!(
+                !visible.contains("<a href"),
+                "raw <a href tag leaked through render_html_body"
+            );
+            assert!(
+                !visible.contains("<img"),
+                "raw <img tag leaked through render_html_body"
+            );
+        }
+    }
+
+    #[test]
+    fn render_html_collapses_blank_runs() {
+        for html in [LINKEDIN_HTML, SPEEDLEDGER_HTML] {
+            let rendered = render_html_body(html, 100);
+            assert!(
+                !rendered.contains("\n\n\n\n"),
+                "render_html_body left a run of 4+ consecutive newlines"
+            );
+        }
+    }
+
+    #[test]
+    fn render_html_strips_tracking_pixel_chars() {
+        for html in [LINKEDIN_HTML, SPEEDLEDGER_HTML] {
+            let rendered = render_html_body(html, 100);
+            for marker in ['\u{200C}', '\u{200B}', '\u{200A}', '\u{034F}'] {
+                assert!(
+                    !rendered.contains(marker),
+                    "tracking-pixel char U+{:04X} survived render_html_body",
+                    marker as u32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_html_wraps_anchors_with_osc8() {
+        // The linkedin fixture has many `<a>` elements; at least one should
+        // turn into an OSC 8 link in the rendered output.
+        let rendered = render_html_body(LINKEDIN_HTML, 100);
+        assert!(
+            rendered.contains("\x1b]8;;"),
+            "expected at least one OSC 8 link in linkedin output, found none"
+        );
+    }
+
+    #[test]
+    fn render_html_suppresses_image_alt_text() {
+        // Image elements in the fixtures have no alt text in raw form, but the
+        // renderer is also expected to drop alt text even if present. Verify
+        // by checking that synthesized image-alt markers (`[…]` from html2text)
+        // don't appear.
+        for html in [LINKEDIN_HTML, SPEEDLEDGER_HTML] {
+            let rendered = render_html_body(html, 100);
+            let visible = osc8_to_visible(&rendered);
+            assert!(
+                !visible.contains("[Logo]"),
+                "image alt text [Logo] leaked through render_html_body"
+            );
+            assert!(
+                !visible.contains("[Image]"),
+                "image alt text [Image] leaked through render_html_body"
+            );
+        }
+    }
+
+    // --- osc8_to_visible self-tests -----------------------------------------
+
+    #[test]
+    fn osc8_to_visible_unwraps_single_link() {
+        let raw = "before \x1b]8;;https://example.com/x\x1b\\link text\x1b]8;;\x1b\\ after";
+        assert_eq!(
+            osc8_to_visible(raw),
+            "before [link=https://example.com/x]link text[/link] after"
+        );
+    }
+
+    #[test]
+    fn osc8_to_visible_leaves_plain_text_alone() {
+        assert_eq!(osc8_to_visible("hello world"), "hello world");
     }
 }

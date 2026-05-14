@@ -191,6 +191,11 @@ pub enum InboxCommands {
         /// Force inline image rendering for this invocation, regardless of trust list
         #[arg(long)]
         show_images: bool,
+
+        /// Print only the raw HTML body (or plain text, if the message has no HTML).
+        /// Useful for capturing a fixture to anonymize and add as a render-test case.
+        #[arg(long, hide = true)]
+        raw_html: bool,
     },
 }
 
