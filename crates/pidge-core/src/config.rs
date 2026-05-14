@@ -15,6 +15,7 @@ use crate::error::CoreError;
 pub struct Config {
     pub accounts: Vec<Account>,
     pub defaults: Defaults,
+    pub trusted_senders: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +117,29 @@ impl Config {
     pub fn find(&self, email: &str) -> Option<&Account> {
         self.accounts.iter().find(|a| a.email == email)
     }
+
+    /// Add an email to the trusted-senders list (case-insensitive). Idempotent.
+    pub fn add_trusted_sender(&mut self, email: &str) {
+        let lower = email.to_lowercase();
+        if !self.trusted_senders.iter().any(|s| s.to_lowercase() == lower) {
+            self.trusted_senders.push(email.to_string());
+        }
+    }
+
+    /// Remove an email from the trusted-senders list (case-insensitive).
+    /// Returns true if it was present, false if it wasn't (idempotent either way).
+    pub fn remove_trusted_sender(&mut self, email: &str) -> bool {
+        let lower = email.to_lowercase();
+        let before = self.trusted_senders.len();
+        self.trusted_senders.retain(|s| s.to_lowercase() != lower);
+        before != self.trusted_senders.len()
+    }
+
+    /// Case-insensitive check for whether an email is in the trusted-senders list.
+    pub fn is_sender_trusted(&self, email: &str) -> bool {
+        let lower = email.to_lowercase();
+        self.trusted_senders.iter().any(|s| s.to_lowercase() == lower)
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +215,59 @@ mod tests {
 
         let c2 = Config::load_from(&path).unwrap();
         assert_eq!(c, c2);
+    }
+
+    #[test]
+    fn add_trusted_sender_is_idempotent() {
+        let mut c = Config::default();
+        c.add_trusted_sender("a@b.com");
+        c.add_trusted_sender("a@b.com");
+        assert_eq!(c.trusted_senders.len(), 1);
+    }
+
+    #[test]
+    fn add_trusted_sender_is_case_insensitive() {
+        let mut c = Config::default();
+        c.add_trusted_sender("Maria@MKLab.se");
+        c.add_trusted_sender("maria@mklab.se");
+        assert_eq!(c.trusted_senders.len(), 1);
+    }
+
+    #[test]
+    fn remove_trusted_sender_returns_true_when_present() {
+        let mut c = Config::default();
+        c.add_trusted_sender("a@b.com");
+        assert!(c.remove_trusted_sender("a@b.com"));
+        assert!(c.trusted_senders.is_empty());
+    }
+
+    #[test]
+    fn remove_trusted_sender_returns_false_when_absent() {
+        let mut c = Config::default();
+        assert!(!c.remove_trusted_sender("ghost@nowhere.com"));
+    }
+
+    #[test]
+    fn remove_trusted_sender_is_case_insensitive() {
+        let mut c = Config::default();
+        c.add_trusted_sender("Maria@MKLab.se");
+        assert!(c.remove_trusted_sender("MARIA@mklab.SE"));
+        assert!(c.trusted_senders.is_empty());
+    }
+
+    #[test]
+    fn is_sender_trusted_case_insensitive() {
+        let mut c = Config::default();
+        c.add_trusted_sender("Maria@MKLab.se");
+        assert!(c.is_sender_trusted("maria@mklab.se"));
+        assert!(c.is_sender_trusted("MARIA@MKLAB.SE"));
+        assert!(!c.is_sender_trusted("anna@mklab.se"));
+    }
+
+    #[test]
+    fn config_with_missing_trusted_senders_loads_as_empty() {
+        let yaml = "accounts: []\ndefaults: {}\n";
+        let c: Config = serde_yaml::from_str(yaml).unwrap();
+        assert!(c.trusted_senders.is_empty());
     }
 }
