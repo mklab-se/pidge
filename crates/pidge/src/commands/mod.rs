@@ -1,13 +1,12 @@
 //! CLI command implementations
 
+pub mod account;
+pub mod account_add;
+pub mod account_default;
+pub mod account_list;
+pub mod account_migrate;
+pub mod account_remove;
 pub mod ai;
-pub mod auth;
-pub mod auth_default;
-pub mod auth_list;
-pub mod auth_login;
-pub mod auth_logout;
-pub mod auth_migrate;
-pub mod auth_status;
 pub mod completion;
 pub mod inbox;
 pub mod inbox_show;

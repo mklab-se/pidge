@@ -30,7 +30,7 @@ pub enum ClientError {
         description: Option<String>,
     },
 
-    #[error("session expired for {email}. Run `pidge auth login` to re-add this account.")]
+    #[error("session expired for {email}. Run `pidge account add` to re-add this account.")]
     SessionExpired { email: String },
 
     #[error("http: {0}")]

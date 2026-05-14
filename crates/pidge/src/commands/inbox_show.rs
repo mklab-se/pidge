@@ -23,7 +23,7 @@ pub async fn run(
     let config = Config::load()?;
     if config.accounts.is_empty() {
         return Err(anyhow!(
-            "No accounts signed in. Run `pidge auth login` to add one."
+            "No accounts signed in. Run `pidge account add` to add one."
         ));
     }
 

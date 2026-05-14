@@ -24,7 +24,7 @@ crates/
       cli.rs            # Clap CLI definitions
       banner.rs         # ASCII logo
       update.rs         # Crates.io update checker
-      commands/         # `pidge ai`, `pidge auth`, `pidge inbox`, `pidge completion`, etc.
+      commands/         # `pidge ai`, `pidge account`, `pidge inbox`, `pidge completion`, etc.
   pidge-core/           # Provider-agnostic types: Account, Config, Message
   pidge-client/         # Microsoft Graph client, OAuth flows, keychain token storage
     src/
@@ -66,8 +66,8 @@ Use the `/release` slash command (see `.claude/commands/release.md`):
 
 ## Token storage
 
-- Tokens default to the OS keychain (`Keychain` variant). New sign-ins can opt into a plaintext file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix) with `pidge auth login --store=file`. Useful when keychain prompts are friction during development.
-- `pidge auth migrate-storage <email> --to <keychain|file>` moves an existing account's tokens between backends without forcing a re-login.
+- Tokens default to the OS keychain (`Keychain` variant). New sign-ins can opt into a plaintext file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix) with `pidge account add --store=file`. Useful when keychain prompts are friction during development.
+- `pidge account migrate-storage <email> --to <keychain|file>` moves an existing account's tokens between backends without forcing a re-login.
 - The chosen backend is recorded on the account in `config.yaml` (`storage:` field); `AuthClient::get_valid_token` reads it on every call so callers don't need to know which backend was used.
 - **Never commit token files.** `.gitignore` has belt-and-suspenders entries for `**/tokens/*.json` and `crates/pidge/tests/fixtures/raw/`.
 
@@ -77,7 +77,7 @@ The HTML renderer (`render_html_body` in `commands/inbox_show.rs`) is exercised 
 
 The loop:
 
-1. **Capture the raw HTML.** From the bad message's row in `pidge inbox list`, copy its short hash and run:
+1. **Capture the raw HTML.** From the bad message's row in `pidge inbox`, copy its short hash and run:
    ```bash
    cargo run -- inbox show <fragment> --raw-html > crates/pidge/tests/fixtures/raw/<name>.html
    ```

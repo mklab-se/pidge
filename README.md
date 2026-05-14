@@ -23,29 +23,41 @@
 ## Account setup
 
 ```bash
-# Sign in (interactive device code flow)
-pidge auth login
+# Add an account (interactive device code flow)
+pidge account add
 
-# Check what you're signed in to
-pidge auth list
+# List signed-in accounts and which one is default for e-mail / calendar
+pidge account list
 
-# Sign out
-pidge auth logout
+# Remove an account (interactive picker if more than one is signed in)
+pidge account remove
 ```
 
-The first account becomes the default for sending mail and for calendar; change with `pidge auth default --send <email>` or `--calendar <email>`. Sign in to multiple accounts and pidge merges reads across all of them.
+The first account you add becomes the default for both e-mail and calendar; change either with:
+
+```bash
+pidge account default e-mail   <email>
+pidge account default calendar <email>
+pidge account default              # prints both currents
+```
+
+Sign in to multiple accounts and pidge merges reads across all of them by default.
 
 ## Reading the inbox
 
 ```bash
-# All accounts, top 25 by received time
-pidge inbox list
+# Shortcut: list 25 most recent across every signed-in account
+pidge inbox
 
-# One account, only unread
-pidge inbox list --account kristofer@mklab.se --unread
+# Shortcut: open a specific message by a fragment of its 8-char ID
+pidge inbox 3515
+
+# Explicit forms
+pidge inbox list --account kristofer@mklab.se --unread -n 50
+pidge inbox show 3515 --mark-read
 
 # Pipe to scripts
-pidge inbox list --output json | jq '.[].subject'
+pidge inbox --json | jq '.[].subject'
 ```
 
 ## Quick Start

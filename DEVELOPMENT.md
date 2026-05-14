@@ -52,11 +52,11 @@ If you can't or don't want to use the Azure CLI:
 
 ## 2. Developing without (or before) the public registration
 
-Until `APP_CLIENT_ID` is populated, `pidge auth login` errors with a clear message. To develop against your own test app:
+Until `APP_CLIENT_ID` is populated, `pidge account add` errors with a clear message. To develop against your own test app:
 
 ```bash
 export PIDGE_CLIENT_ID="<your-test-app-client-id>"
-cargo run -- auth login
+cargo run -- account add
 ```
 
 The env var overrides the compile-time constant. Unset it to use the baked-in value.

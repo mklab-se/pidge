@@ -48,7 +48,7 @@ async fn list(
     let config = Config::load()?;
     if config.accounts.is_empty() {
         return Err(anyhow!(
-            "No accounts signed in. Run `pidge auth login` to add one."
+            "No accounts signed in. Run `pidge account add` to add one."
         ));
     }
 
@@ -87,7 +87,7 @@ async fn list(
             }
             Err(ClientError::SessionExpired { email: e }) => {
                 eprintln!(
-                    "{} {e}: session expired, run `pidge auth login`",
+                    "{} {e}: session expired, run `pidge account add`",
                     "WARNING:".yellow().bold()
                 );
             }

@@ -1,4 +1,4 @@
-//! `pidge auth login` — sign in to a Microsoft account via OAuth device code flow.
+//! `pidge account add` — sign in to a new Microsoft account via OAuth device code flow.
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -80,13 +80,13 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
     if was_first {
         println!();
         println!("This is your first account, so pidge has set it as:");
-        println!("  • Default send-from account");
+        println!("  • Default e-mail account");
         println!("  • Default calendar account");
         println!();
         println!(
             "Change with {} or {}.",
-            "`pidge auth default --send <email>`".cyan(),
-            "`--calendar <email>`".cyan()
+            "`pidge account default e-mail <email>`".cyan(),
+            "`pidge account default calendar <email>`".cyan()
         );
     } else {
         println!("Currently signed in: {} accounts.", config.accounts.len());

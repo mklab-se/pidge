@@ -8,8 +8,8 @@ use clap::Parser;
 #[command(name = "pidge")]
 #[command(author, version, about)]
 #[command(long_about = "A fast CLI for e-mail and calendar.\n\n\
-    Foundation release — AI configuration, shell completions, and version info only. \
-    E-mail and calendar feature commands ship in future releases.")]
+    Manage one or more Microsoft 365 accounts and browse, search, send, and \
+    reply to e-mail from your terminal.")]
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Increase output verbosity (-v for debug, -vv for trace)
@@ -40,13 +40,13 @@ pub enum Commands {
         command: Option<AiCommands>,
     },
 
-    /// Manage Microsoft 365 account authentication
-    Auth {
+    /// Manage Microsoft 365 accounts — add, remove, list, set defaults
+    Account {
         #[command(subcommand)]
-        command: AuthCommands,
+        command: AccountCommands,
     },
 
-    /// View messages in your inbox
+    /// View, search and (soon) send messages in your inbox
     Inbox {
         #[command(subcommand)]
         command: InboxCommands,
@@ -97,45 +97,53 @@ pub enum AiCommands {
 }
 
 #[derive(clap::Subcommand)]
-pub enum AuthCommands {
-    /// Sign in to a Microsoft account (interactive device code flow)
-    Login {
-        /// Where to store the credentials (`keychain` = OS-native, `file` = plaintext JSON)
+pub enum AccountCommands {
+    /// Add a Microsoft account (interactive device-code sign-in)
+    Add {
+        /// Where to store credentials (`keychain` = OS-native, `file` = plaintext JSON at ~/.config/pidge/tokens/)
         #[arg(long, value_enum, default_value_t = StorageBackendArg::Keychain)]
         store: StorageBackendArg,
     },
-    /// List signed-in accounts
+    /// List signed-in accounts with default-account markers
     List,
-    /// Show authentication status and defaults
-    Status,
-    /// Sign out of one or all accounts
-    Logout {
-        /// Email of the account to sign out
-        #[arg(long)]
-        account: Option<String>,
-        /// Sign out of every signed-in account
-        #[arg(long, conflicts_with = "account")]
+    /// Remove an account (sign out and delete its tokens)
+    Remove {
+        /// E-mail of the account to remove (interactive picker if omitted and multiple accounts exist)
+        email: Option<String>,
+        /// Remove every signed-in account
+        #[arg(long, conflicts_with = "email")]
         all: bool,
         /// Skip confirmation prompts
         #[arg(short = 'y', long)]
         yes: bool,
     },
-    /// Show or set default accounts
+    /// Show or set default accounts. Without a subcommand, prints both current defaults.
     Default {
-        /// Set the default sender account
-        #[arg(long)]
-        send: Option<String>,
-        /// Set the default calendar account
-        #[arg(long)]
-        calendar: Option<String>,
+        #[command(subcommand)]
+        command: Option<DefaultCommands>,
     },
     /// Move an existing account's credentials between storage backends
     MigrateStorage {
-        /// Email of the account whose tokens to migrate
+        /// E-mail of the account whose tokens to migrate
         email: String,
         /// Destination backend
         #[arg(long = "to", value_enum)]
         to: StorageBackendArg,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum DefaultCommands {
+    /// Set the default account used for sending and reading e-mail
+    #[command(name = "e-mail")]
+    EMail {
+        /// E-mail address of a signed-in account
+        email: String,
+    },
+    /// Set the default account used for calendar events and meeting invitations
+    Calendar {
+        /// E-mail address of a signed-in account
+        email: String,
     },
 }
 
@@ -199,6 +207,15 @@ pub enum InboxCommands {
     },
 }
 
+/// Subcommand names that `Inbox` accepts directly. Used by the argv pre-processor
+/// in `main.rs` to decide whether `pidge inbox <X>` should route to `inbox show X`
+/// (X is a fragment) or pass through to clap (X is a subcommand).
+///
+/// Keep this list in sync with [`InboxCommands`]. When you add a new variant,
+/// add its kebab-case name here too — otherwise users will see "No message
+/// found for fragment '<new-subcommand>'" instead of the new behavior.
+pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &["list", "show", "help"];
+
 #[derive(clap::Subcommand)]
 pub enum TrustCommands {
     /// List trusted sender addresses
@@ -227,8 +244,8 @@ impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.command {
             Some(Commands::Ai { command }) => crate::commands::ai::run(command).await,
-            Some(Commands::Auth { command }) => {
-                crate::commands::auth::run(command, self.json).await
+            Some(Commands::Account { command }) => {
+                crate::commands::account::run(command, self.json).await
             }
             Some(Commands::Inbox { command }) => {
                 crate::commands::inbox::run(command, self.json).await

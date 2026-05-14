@@ -1,4 +1,5 @@
-//! `pidge auth list` — display signed-in accounts.
+//! `pidge account list` — display signed-in accounts with default markers
+//! and storage-backend info (replaces the old `auth status` command).
 
 use anyhow::Result;
 use chrono::Utc;
@@ -6,7 +7,7 @@ use colored::Colorize;
 use comfy_table::{ContentArrangement, Table};
 use serde::Serialize;
 
-use pidge_core::Config;
+use pidge_core::{Config, TokenStorage};
 
 pub fn run(json: bool) -> Result<()> {
     let config = Config::load()?;
@@ -18,21 +19,21 @@ pub fn run(json: bool) -> Result<()> {
     if config.accounts.is_empty() {
         println!(
             "No accounts signed in. Run {} to add one.",
-            "`pidge auth login`".cyan()
+            "`pidge account add`".cyan()
         );
         return Ok(());
     }
 
     let mut table = Table::new();
     table
-        .set_header(vec!["ACCOUNT", "TENANT", "ADDED", ""])
+        .set_header(vec!["ACCOUNT", "TENANT", "STORAGE", "ADDED", ""])
         .set_content_arrangement(ContentArrangement::Dynamic);
 
     let now = Utc::now();
     for account in &config.accounts {
         let mut markers = Vec::new();
         if config.defaults.send.as_deref() == Some(account.email.as_str()) {
-            markers.push("[send]".yellow().to_string());
+            markers.push("[e-mail]".yellow().to_string());
         }
         if config.defaults.calendar.as_deref() == Some(account.email.as_str()) {
             markers.push("[calendar]".yellow().to_string());
@@ -40,6 +41,7 @@ pub fn run(json: bool) -> Result<()> {
         table.add_row(vec![
             account.email.clone(),
             account.tenant_label(),
+            storage_label(account.storage).to_string(),
             relative_time(now, account.added_at),
             markers.join(" "),
         ]);
@@ -55,13 +57,21 @@ pub fn run(json: bool) -> Result<()> {
     Ok(())
 }
 
+fn storage_label(s: TokenStorage) -> &'static str {
+    match s {
+        TokenStorage::Keychain => "keychain",
+        TokenStorage::File => "file",
+    }
+}
+
 #[derive(Serialize)]
 struct AccountOut {
     email: String,
     tenant_id: String,
     home_account_id: String,
+    storage: TokenStorage,
     added_at: chrono::DateTime<Utc>,
-    is_default_send: bool,
+    is_default_email: bool,
     is_default_calendar: bool,
 }
 
@@ -73,8 +83,9 @@ fn emit_json(config: &Config) -> Result<()> {
             email: a.email.clone(),
             tenant_id: a.tenant_id.clone(),
             home_account_id: a.home_account_id.clone(),
+            storage: a.storage,
             added_at: a.added_at,
-            is_default_send: config.defaults.send.as_deref() == Some(a.email.as_str()),
+            is_default_email: config.defaults.send.as_deref() == Some(a.email.as_str()),
             is_default_calendar: config.defaults.calendar.as_deref() == Some(a.email.as_str()),
         })
         .collect();

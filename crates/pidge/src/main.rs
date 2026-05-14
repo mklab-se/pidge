@@ -12,12 +12,63 @@ mod update;
 
 use cli::Cli;
 
+/// Pre-process argv to make `pidge inbox` ergonomic.
+///
+/// Clap can't natively decide whether `pidge inbox 3515` means "show message
+/// with fragment 3515" or "run the (non-existent) subcommand named 3515", so
+/// we rewrite argv before clap sees it:
+///
+/// - `pidge inbox`                          → `pidge inbox list`
+/// - `pidge inbox --account a@b.com -n 50`  → `pidge inbox list --account a@b.com -n 50`
+/// - `pidge inbox 3515`                     → `pidge inbox show 3515`
+/// - `pidge inbox list ...` / `inbox show ...` / `inbox --help` → unchanged
+///
+/// The known-subcommand list lives in [`cli::INBOX_SUBCOMMAND_NAMES`]; when
+/// new subcommands land (search, flag, archive, send, …) add their kebab-case
+/// names there too, or users will see "No message found for fragment '<name>'"
+/// instead of the new behavior.
+fn preprocess_args(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    // Only intervene on `pidge inbox <something>` — every other top-level
+    // command has a required, non-shortcut subcommand and passes through.
+    if args.len() < 2 || args[1] != "inbox" {
+        return args;
+    }
+
+    // `pidge inbox` → `pidge inbox list`
+    if args.len() == 2 {
+        args.push("list".into());
+        return args;
+    }
+
+    let arg2 = args[2].to_string_lossy();
+
+    // Help / version flags pass through so clap prints `inbox` help, not `list` help.
+    if matches!(arg2.as_ref(), "-h" | "--help" | "-V" | "--version") {
+        return args;
+    }
+
+    // Any other flag means the user wants `list` with those flags.
+    if arg2.starts_with('-') {
+        args.insert(2, "list".into());
+        return args;
+    }
+
+    // A bare word that matches a known subcommand passes through.
+    if cli::INBOX_SUBCOMMAND_NAMES.contains(&arg2.as_ref()) {
+        return args;
+    }
+
+    // Otherwise treat the bare word as a message fragment.
+    args.insert(2, "show".into());
+    args
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Handle dynamic shell completions (when invoked via COMPLETE=<shell> pidge)
     clap_complete::CompleteEnv::with_factory(Cli::command).complete();
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(preprocess_args(std::env::args_os().collect()));
 
     // Initialize logging
     let filter = if cli.verbose > 0 {
@@ -55,4 +106,79 @@ async fn main() -> Result<()> {
     }
 
     result
+}
+
+#[cfg(test)]
+mod preprocess_tests {
+    use super::preprocess_args;
+    use std::ffi::OsString;
+
+    fn pp(input: &[&str]) -> Vec<String> {
+        let argv: Vec<OsString> = input.iter().map(|s| OsString::from(*s)).collect();
+        preprocess_args(argv)
+            .into_iter()
+            .map(|s| s.into_string().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn non_inbox_commands_pass_through() {
+        assert_eq!(
+            pp(&["pidge", "account", "list"]),
+            ["pidge", "account", "list"]
+        );
+        assert_eq!(pp(&["pidge"]), ["pidge"]);
+    }
+
+    #[test]
+    fn bare_inbox_inserts_list() {
+        assert_eq!(pp(&["pidge", "inbox"]), ["pidge", "inbox", "list"]);
+    }
+
+    #[test]
+    fn inbox_with_flags_inserts_list_before_flags() {
+        assert_eq!(
+            pp(&["pidge", "inbox", "--account", "a@b.com", "-n", "50"]),
+            ["pidge", "inbox", "list", "--account", "a@b.com", "-n", "50"]
+        );
+        assert_eq!(
+            pp(&["pidge", "inbox", "-c"]),
+            ["pidge", "inbox", "list", "-c"]
+        );
+    }
+
+    #[test]
+    fn inbox_help_passes_through() {
+        assert_eq!(
+            pp(&["pidge", "inbox", "--help"]),
+            ["pidge", "inbox", "--help"]
+        );
+        assert_eq!(pp(&["pidge", "inbox", "-h"]), ["pidge", "inbox", "-h"]);
+    }
+
+    #[test]
+    fn inbox_with_known_subcommand_passes_through() {
+        assert_eq!(
+            pp(&["pidge", "inbox", "list", "-n", "50"]),
+            ["pidge", "inbox", "list", "-n", "50"]
+        );
+        assert_eq!(
+            pp(&["pidge", "inbox", "show", "3515"]),
+            ["pidge", "inbox", "show", "3515"]
+        );
+    }
+
+    #[test]
+    fn inbox_with_bare_word_inserts_show() {
+        assert_eq!(
+            pp(&["pidge", "inbox", "3515"]),
+            ["pidge", "inbox", "show", "3515"]
+        );
+        // Even a fragment that looks like garbage routes to show — the show
+        // command will then surface a clear "no message found" error.
+        assert_eq!(
+            pp(&["pidge", "inbox", "lsit"]),
+            ["pidge", "inbox", "show", "lsit"]
+        );
+    }
 }

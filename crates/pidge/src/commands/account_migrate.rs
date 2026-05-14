@@ -1,4 +1,4 @@
-//! `pidge auth migrate-storage <email> --to <keychain|file>` — move credentials
+//! `pidge account migrate-storage <email> --to <keychain|file>` — move credentials
 //! between the OS keychain and the plaintext file backend without forcing a re-login.
 
 use anyhow::{Result, anyhow};
@@ -25,7 +25,7 @@ pub fn run(email: String, to: TokenStorage) -> Result<()> {
 
     let tokens = TokenStore::load(&email, current)?.ok_or_else(|| {
         anyhow!(
-            "no tokens found in the {} backend for {email} — try `pidge auth login --store={}`",
+            "no tokens found in the {} backend for {email} — try `pidge account add --store={}`",
             backend_label(current),
             backend_arg(to),
         )
