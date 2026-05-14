@@ -303,10 +303,17 @@ fn render_html_body(html: &str, width: usize) -> String {
                 continue;
             }
             if let Some(u) = url {
+                // OSC 8 makes terminals like Ghostty / iTerm2 recognize the span as
+                // a hyperlink, but the modifier-click affordance is only obvious when
+                // the cursor is exactly over the link text. Style the visible text
+                // with underline + cyan so it's identifiable at a glance without
+                // hovering. `colored` respects `--no-color` / NO_COLOR, so plain
+                // pipelines stay clean.
+                let styled = ts.s.cyan().underline().to_string();
                 out.push_str("\x1b]8;;");
                 out.push_str(u);
                 out.push_str("\x1b\\");
-                out.push_str(&ts.s);
+                out.push_str(&styled);
                 out.push_str("\x1b]8;;\x1b\\");
             } else {
                 out.push_str(&ts.s);
@@ -505,44 +512,83 @@ mod tests {
     const SPEEDLEDGER_SNAPSHOT: &str = "tests/fixtures/speedledger_newsletter.expected.txt";
 
     /// Translate OSC 8 escape sequences emitted by `render_html_body` into the
-    /// snapshot-friendly form `[link=URL]text[/link]`. Anything else (plain
-    /// text, accented characters, blank lines) passes through unchanged.
+    /// snapshot-friendly form `[link=URL]text[/link]` and strip ANSI SGR codes
+    /// (color / underline / etc.) so snapshots stay readable across `colored`
+    /// crate version bumps.
     ///
-    /// OSC 8 sequences are all-ASCII (`ESC ] 8 ; ; URL ESC \`), so we can
-    /// scan the input as a byte string and copy non-OSC stretches as raw
-    /// UTF-8 substrings — preserving multi-byte chars like `ö` byte-for-byte.
+    /// OSC 8 sequences are all-ASCII (`ESC ] 8 ; ; URL ESC \`); SGR sequences
+    /// are `ESC [ params m`. Both are byte-safe to scan around — multi-byte
+    /// UTF-8 chars like `ö` are preserved unchanged in the non-escape gaps.
     fn osc8_to_visible(input: &str) -> String {
         const OPEN: &str = "\x1b]8;;";
         const ST: &str = "\x1b\\";
+        const CSI: &str = "\x1b[";
 
         let mut out = String::with_capacity(input.len());
         let mut rest = input;
 
-        while let Some(pos) = rest.find(OPEN) {
-            out.push_str(&rest[..pos]);
-            let after_open = &rest[pos + OPEN.len()..];
-            // The OSC 8 URL extends until the next ST. An empty URL marks an
-            // OSC 8 close sequence (`ESC ] 8 ; ; ESC \`).
-            let st_pos = match after_open.find(ST) {
-                Some(p) => p,
-                None => {
-                    // Malformed — flush the rest verbatim and stop.
-                    out.push_str(after_open);
+        loop {
+            // Find the next escape sequence start (OSC 8 or CSI).
+            let next_osc = rest.find(OPEN);
+            let next_csi = rest.find(CSI);
+            let (pos, kind) = match (next_osc, next_csi) {
+                (Some(o), Some(c)) if o < c => (o, EscKind::Osc8),
+                (Some(_), Some(c)) => (c, EscKind::Csi),
+                (Some(o), None) => (o, EscKind::Osc8),
+                (None, Some(c)) => (c, EscKind::Csi),
+                (None, None) => {
+                    out.push_str(rest);
                     return out;
                 }
             };
-            let url = &after_open[..st_pos];
-            if url.is_empty() {
-                out.push_str("[/link]");
-            } else {
-                out.push_str("[link=");
-                out.push_str(url);
-                out.push(']');
+            out.push_str(&rest[..pos]);
+            match kind {
+                EscKind::Osc8 => {
+                    let after_open = &rest[pos + OPEN.len()..];
+                    let st_pos = match after_open.find(ST) {
+                        Some(p) => p,
+                        None => {
+                            out.push_str(after_open);
+                            return out;
+                        }
+                    };
+                    let url = &after_open[..st_pos];
+                    if url.is_empty() {
+                        out.push_str("[/link]");
+                    } else {
+                        out.push_str("[link=");
+                        out.push_str(url);
+                        out.push(']');
+                    }
+                    rest = &after_open[st_pos + ST.len()..];
+                }
+                EscKind::Csi => {
+                    // ESC [ digits-and-semicolons m → drop entirely. If the
+                    // pattern doesn't terminate with 'm' (some other CSI),
+                    // skip just the ESC [ and keep walking — we don't emit
+                    // any of those today, so any unknown CSI is a bug worth
+                    // showing in the snapshot.
+                    let after = &rest[pos + CSI.len()..];
+                    let end_byte = after.bytes().position(|b| b == b'm');
+                    match end_byte {
+                        Some(e) if after[..e].bytes().all(|b| b.is_ascii_digit() || b == b';') => {
+                            rest = &after[e + 1..];
+                        }
+                        _ => {
+                            // Unknown CSI — fall through, keep `\x1b[` visible
+                            // so the snapshot fails loudly.
+                            out.push_str(CSI);
+                            rest = after;
+                        }
+                    }
+                }
             }
-            rest = &after_open[st_pos + ST.len()..];
         }
-        out.push_str(rest);
-        out
+    }
+
+    enum EscKind {
+        Osc8,
+        Csi,
     }
 
     /// Compare `actual` against the snapshot file at `relative_path`
@@ -673,6 +719,56 @@ mod tests {
         assert!(
             rendered.contains("\x1b]8;;"),
             "expected at least one OSC 8 link in linkedin output, found none"
+        );
+    }
+
+    #[test]
+    fn render_html_styles_link_text_with_underline_and_color() {
+        // OSC 8 alone makes Ghostty/iTerm2 treat the text as clickable, but
+        // the affordance is only obvious when the cursor is exactly over it.
+        // We add ANSI underline + cyan so the user sees something is clickable
+        // without hovering.
+        //
+        // Force colors on for this test — the production code path checks
+        // SHOULD_COLORIZE (TTY detection / NO_COLOR / --no-color), which would
+        // suppress them under `cargo test`.
+        colored::control::set_override(true);
+        let rendered = render_html_body(LINKEDIN_HTML, 100);
+        colored::control::unset_override();
+
+        // Locate the visible span between the OSC 8 open `\x1b]8;;URL\x1b\\` and
+        // the OSC 8 close `\x1b]8;;\x1b\\`.
+        let osc8_open = "\x1b]8;;";
+        let st = "\x1b\\";
+        let osc8_close = "\x1b]8;;\x1b\\";
+        let open_idx = rendered
+            .find(osc8_open)
+            .expect("expected an OSC 8 sequence in the output");
+        let after_open = &rendered[open_idx + osc8_open.len()..];
+        let url_end = after_open.find(st).expect("malformed OSC 8 — no ST");
+        let body = &after_open[url_end + st.len()..];
+        let body_end = body
+            .find(osc8_close)
+            .expect("malformed OSC 8 — no closing sequence");
+        let visible_span = &body[..body_end];
+
+        assert!(
+            visible_span.contains("\x1b["),
+            "link text should contain ANSI SGR styling, got: {visible_span:?}"
+        );
+        // Underline parameter is '4'; cyan foreground is '36'. Order varies
+        // depending on which trait method `colored` resolved first, so check
+        // both arrangements.
+        let has_underline = visible_span.contains("4m")
+            || visible_span.contains("4;")
+            || visible_span.contains(";4;");
+        assert!(
+            has_underline,
+            "expected underline (parameter 4) in link styling, got: {visible_span:?}"
+        );
+        assert!(
+            visible_span.contains("36"),
+            "expected cyan (parameter 36) in link styling, got: {visible_span:?}"
         );
     }
 
