@@ -27,6 +27,7 @@ use pidge_client::{AuthClient, GraphClient, Outgoing};
 use pidge_core::{Config, MessageCache, short_hash};
 
 use crate::cli::{ComposeArgs, ForwardArgs, ReplyArgs};
+use crate::commands::attachments::upload_files;
 use crate::commands::inbox_fragment::resolve;
 
 // ---- inbox send -----------------------------------------------------------
@@ -46,7 +47,7 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
     let subject = resolve_subject(args.subject)?;
     let body = resolve_body(args.body, args.body_file, "Body")?;
 
-    print_summary(&from, &to, &cc, &bcc, &subject, &body);
+    print_summary(&from, &to, &cc, &bcc, &subject, &body, &args.attach);
     let prompt = if args.draft {
         "Save as draft?"
     } else {
@@ -64,17 +65,37 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
         cc,
         bcc,
     };
-    if args.draft {
-        let id = graph
-            .create_draft(&from, &outgoing)
-            .await
-            .context("Microsoft Graph rejected the draft")?;
-        cache_and_report_draft(&from, &id, "Saved draft")?;
-    } else {
+
+    // Attachments require the create-draft-then-send pathway (Graph's
+    // /sendMail can only embed attachments inline, which fails for anything
+    // over a few hundred KB once base64-encoded). When attachments are
+    // present, always go via draft regardless of --draft.
+    let need_draft = args.draft || !args.attach.is_empty();
+    if !need_draft {
         graph
             .send_mail(&from, &outgoing)
             .await
             .context("Microsoft Graph rejected the message")?;
+        println!("{} Sent.", "✔".green());
+        return Ok(());
+    }
+
+    let id = graph
+        .create_draft(&from, &outgoing)
+        .await
+        .context("Microsoft Graph rejected the draft")?;
+    if !args.attach.is_empty() {
+        println!();
+        println!("{}", "Uploading attachments:".bold());
+        upload_files(&graph, &from, &id, &args.attach).await?;
+    }
+    if args.draft {
+        cache_and_report_draft(&from, &id, "Saved draft")?;
+    } else {
+        graph
+            .send_draft(&from, &id)
+            .await
+            .context("Microsoft Graph rejected /send for the draft")?;
         println!("{} Sent.", "✔".green());
     }
     Ok(())
@@ -135,27 +156,52 @@ pub async fn reply(fragment: String, args: ReplyArgs, reply_all: bool) -> Result
     }
 
     let graph = GraphClient::new(AuthClient::from_env()?)?;
-    if args.draft {
-        let id = if reply_all {
+
+    // Attachments → must use createReply/createReplyAll then upload then send,
+    // because Graph's /reply takes a comment string only, not attachments.
+    let need_draft = args.draft || !args.attach.is_empty();
+
+    if !need_draft {
+        if reply_all {
             graph
-                .create_reply_all_draft(&from, &msg.graph_id, &body)
+                .reply_all_message(&from, &msg.graph_id, &body)
                 .await
+                .context("Microsoft Graph rejected the reply")?;
         } else {
-            graph.create_reply_draft(&from, &msg.graph_id, &body).await
+            graph
+                .reply_message(&from, &msg.graph_id, &body)
+                .await
+                .context("Microsoft Graph rejected the reply")?;
         }
-        .context("Microsoft Graph rejected the draft")?;
-        cache_and_report_draft(&from, &id, "Saved reply draft")?;
-    } else if reply_all {
-        graph
-            .reply_all_message(&from, &msg.graph_id, &body)
-            .await
-            .context("Microsoft Graph rejected the reply")?;
         println!("{} Sent.", "✔".green());
+        return Ok(());
+    }
+
+    let id = if reply_all {
+        graph
+            .create_reply_all_draft(&from, &msg.graph_id, &body)
+            .await
+    } else {
+        graph.create_reply_draft(&from, &msg.graph_id, &body).await
+    }
+    .context("Microsoft Graph rejected the draft")?;
+    if !args.attach.is_empty() {
+        println!();
+        println!("{}", "Uploading attachments:".bold());
+        upload_files(&graph, &from, &id, &args.attach).await?;
+    }
+    if args.draft {
+        let label = if reply_all {
+            "Saved reply-all draft"
+        } else {
+            "Saved reply draft"
+        };
+        cache_and_report_draft(&from, &id, label)?;
     } else {
         graph
-            .reply_message(&from, &msg.graph_id, &body)
+            .send_draft(&from, &id)
             .await
-            .context("Microsoft Graph rejected the reply")?;
+            .context("Microsoft Graph rejected /send for the draft")?;
         println!("{} Sent.", "✔".green());
     }
     Ok(())
@@ -196,17 +242,33 @@ pub async fn forward(fragment: String, args: ForwardArgs) -> Result<()> {
     }
 
     let graph = GraphClient::new(AuthClient::from_env()?)?;
-    if args.draft {
-        let id = graph
-            .create_forward_draft(&from, &msg.graph_id, &to, &body)
-            .await
-            .context("Microsoft Graph rejected the draft")?;
-        cache_and_report_draft(&from, &id, "Saved forward draft")?;
-    } else {
+    let need_draft = args.draft || !args.attach.is_empty();
+
+    if !need_draft {
         graph
             .forward_message(&from, &msg.graph_id, &to, &body)
             .await
             .context("Microsoft Graph rejected the forward")?;
+        println!("{} Forwarded.", "✔".green());
+        return Ok(());
+    }
+
+    let id = graph
+        .create_forward_draft(&from, &msg.graph_id, &to, &body)
+        .await
+        .context("Microsoft Graph rejected the draft")?;
+    if !args.attach.is_empty() {
+        println!();
+        println!("{}", "Uploading attachments:".bold());
+        upload_files(&graph, &from, &id, &args.attach).await?;
+    }
+    if args.draft {
+        cache_and_report_draft(&from, &id, "Saved forward draft")?;
+    } else {
+        graph
+            .send_draft(&from, &id)
+            .await
+            .context("Microsoft Graph rejected /send for the draft")?;
         println!("{} Forwarded.", "✔".green());
     }
     Ok(())
@@ -310,6 +372,7 @@ fn print_summary(
     bcc: &[String],
     subject: &str,
     body: &str,
+    attachments: &[std::path::PathBuf],
 ) {
     println!();
     println!("{}", "─".repeat(60).dimmed());
@@ -322,6 +385,18 @@ fn print_summary(
         println!("{} {}", "Bcc:".bold(), bcc.join(", "));
     }
     println!("{} {}", "Subject:".bold(), subject.bold().bright_yellow());
+    if !attachments.is_empty() {
+        let names: Vec<String> = attachments
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        println!(
+            "{} {} file(s): {}",
+            "Attachments:".bold(),
+            attachments.len(),
+            names.join(", ")
+        );
+    }
     println!("{}", "─".repeat(60).dimmed());
     let body_preview: String = body.lines().take(10).collect::<Vec<_>>().join("\n");
     println!("{body_preview}");

@@ -723,6 +723,60 @@ pub async fn delete_message(
     Ok(())
 }
 
+/// POST /me/messages/{id}/attachments — attach a file to a draft.
+///
+/// Uses Graph's simple (non-resumable) upload, which is limited to ~3 MB per
+/// attachment. Larger files require `createUploadSession`, which isn't wired
+/// yet — the CLI rejects oversized attachments before calling this.
+pub async fn add_attachment(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    name: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> Result<String, ClientError> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
+    let url = format!("{base_url}/me/messages/{message_id}/attachments");
+    let body = serde_json::json!({
+        "@odata.type": "#microsoft.graph.fileAttachment",
+        "name": name,
+        "contentType": content_type,
+        "contentBytes": STANDARD.encode(bytes),
+    });
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .json(&body)
+        .send()
+        .await?;
+    parse_id_from_response(resp).await
+}
+
+/// DELETE /me/messages/{id}/attachments/{att_id}.
+pub async fn delete_attachment(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    attachment_id: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/attachments/{attachment_id}");
+    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
 async fn parse_id_from_response(resp: reqwest::Response) -> Result<String, ClientError> {
     let status = resp.status();
     if !status.is_success() {

@@ -336,6 +336,11 @@ pub struct ComposeArgs {
     /// `pidge drafts delete` to act on it later.
     #[arg(long)]
     pub draft: bool,
+
+    /// Attach a file (repeatable). Each file must be < 3 MB — larger
+    /// attachments require resumable uploads, not yet implemented.
+    #[arg(long)]
+    pub attach: Vec<std::path::PathBuf>,
 }
 
 /// Reply variants don't need `--to` (Graph fills that in from the original
@@ -364,6 +369,11 @@ pub struct ReplyArgs {
     /// `pidge drafts delete` to act on it later.
     #[arg(long)]
     pub draft: bool,
+
+    /// Attach a file (repeatable). Each file must be < 3 MB — larger
+    /// attachments require resumable uploads, not yet implemented.
+    #[arg(long)]
+    pub attach: Vec<std::path::PathBuf>,
 }
 
 /// Forward needs explicit recipients (the user is sending the message to
@@ -395,6 +405,11 @@ pub struct ForwardArgs {
     /// `pidge drafts delete` to act on it later.
     #[arg(long)]
     pub draft: bool,
+
+    /// Attach a file (repeatable). Each file must be < 3 MB — larger
+    /// attachments require resumable uploads, not yet implemented.
+    #[arg(long)]
+    pub attach: Vec<std::path::PathBuf>,
 }
 
 /// Subcommand names that `Inbox` accepts directly. Used by the argv pre-processor
@@ -471,6 +486,35 @@ pub enum DraftsCommands {
         /// Skip the "Delete draft? [y/N]" confirmation
         #[arg(short = 'y', long)]
         yes: bool,
+    },
+
+    /// Manage a draft's attachments
+    Attachments {
+        #[command(subcommand)]
+        command: DraftAttachmentCommands,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum DraftAttachmentCommands {
+    /// List the attachments currently on a draft
+    List {
+        /// Fragment of the draft's 8-char short hash
+        fragment: String,
+    },
+    /// Attach a file to a draft (size limit: 3 MB)
+    Add {
+        /// Fragment of the draft's 8-char short hash
+        fragment: String,
+        /// Path to the file to attach
+        path: std::path::PathBuf,
+    },
+    /// Remove an attachment from a draft by name (case-insensitive)
+    Remove {
+        /// Fragment of the draft's 8-char short hash
+        fragment: String,
+        /// Attachment filename
+        name: String,
     },
 }
 

@@ -8,7 +8,8 @@ use inquire::{Confirm, Editor, Text};
 use pidge_client::{AuthClient, ClientError, GraphClient, Outgoing};
 use pidge_core::{Config, Message, MessageCache, short_hash};
 
-use crate::cli::DraftsCommands;
+use crate::cli::{DraftAttachmentCommands, DraftsCommands};
+use crate::commands::attachments::upload_files;
 use crate::commands::inbox_fragment::{purge_from_cache, resolve};
 
 pub async fn run(command: DraftsCommands, json: bool) -> Result<()> {
@@ -27,6 +28,15 @@ pub async fn run(command: DraftsCommands, json: bool) -> Result<()> {
         DraftsCommands::Edit { fragment } => edit(fragment).await,
         DraftsCommands::Send { fragment, yes } => send(fragment, yes).await,
         DraftsCommands::Delete { fragment, yes } => delete(fragment, yes).await,
+        DraftsCommands::Attachments { command } => match command {
+            DraftAttachmentCommands::List { fragment } => attachments_list(fragment, json).await,
+            DraftAttachmentCommands::Add { fragment, path } => {
+                attachments_add(fragment, path).await
+            }
+            DraftAttachmentCommands::Remove { fragment, name } => {
+                attachments_remove(fragment, name).await
+            }
+        },
     }
 }
 
@@ -311,4 +321,84 @@ async fn delete(fragment: String, yes: bool) -> Result<()> {
     let _ = purge_from_cache(&short);
     println!("{} Deleted.", "✔".green());
     Ok(())
+}
+
+// ---- attachments ----------------------------------------------------------
+
+async fn attachments_list(fragment: String, json: bool) -> Result<()> {
+    use comfy_table::{ContentArrangement, Table};
+    use humansize::{DECIMAL, format_size};
+
+    let (short, msg) = resolve(&fragment)?;
+    let graph = GraphClient::new(AuthClient::from_env()?)?;
+    let attachments = graph
+        .list_attachments(&msg.account, &msg.graph_id)
+        .await
+        .context("failed to list attachments")?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&attachments)?);
+        return Ok(());
+    }
+
+    if attachments.is_empty() {
+        println!("Draft {} has no attachments.", short.dimmed());
+        return Ok(());
+    }
+
+    let mut table = Table::new();
+    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.set_content_arrangement(ContentArrangement::Dynamic);
+    table.set_header(vec!["NAME", "TYPE", "SIZE"]);
+    for a in &attachments {
+        table.add_row(vec![
+            a.name.clone(),
+            a.content_type.clone(),
+            format_size(a.size_bytes, DECIMAL),
+        ]);
+    }
+    println!("{table}");
+    Ok(())
+}
+
+async fn attachments_add(fragment: String, path: std::path::PathBuf) -> Result<()> {
+    let (_, msg) = resolve(&fragment)?;
+    let graph = GraphClient::new(AuthClient::from_env()?)?;
+    upload_files(&graph, &msg.account, &msg.graph_id, &[path]).await?;
+    Ok(())
+}
+
+async fn attachments_remove(fragment: String, name: String) -> Result<()> {
+    let (_, msg) = resolve(&fragment)?;
+    let graph = GraphClient::new(AuthClient::from_env()?)?;
+    let attachments = graph
+        .list_attachments(&msg.account, &msg.graph_id)
+        .await
+        .context("failed to list attachments before remove")?;
+
+    let lower = name.to_lowercase();
+    let matches: Vec<&pidge_core::Attachment> = attachments
+        .iter()
+        .filter(|a| a.name.to_lowercase() == lower)
+        .collect();
+
+    match matches.as_slice() {
+        [] => Err(anyhow!(
+            "No attachment named '{name}' on this draft. Run `pidge drafts attachments list <fragment>` to see what's there."
+        )),
+        [a] => {
+            graph
+                .delete_attachment(&msg.account, &msg.graph_id, &a.id)
+                .await
+                .context("Microsoft Graph rejected DELETE attachment")?;
+            println!("{} Removed {}.", "✔".green(), a.name);
+            Ok(())
+        }
+        many => Err(anyhow!(
+            "Multiple attachments named '{}' on this draft ({}). Remove by Graph ID instead — \
+             not yet supported in v0.3; remove via Outlook for now.",
+            name,
+            many.len()
+        )),
+    }
 }

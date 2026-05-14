@@ -4,11 +4,11 @@ mod mail;
 mod me;
 
 pub use mail::{
-    InboxPage, Outgoing, create_draft, create_forward_draft, create_reply_all_draft,
-    create_reply_draft, delete_message, forward_message, get_attachment_bytes, get_message,
-    list_attachments, list_drafts, list_inbox, mark_read, mark_unread, move_message,
-    reply_all_message, reply_message, search_messages, send_draft, send_mail, set_flag,
-    update_draft,
+    InboxPage, Outgoing, add_attachment, create_draft, create_forward_draft,
+    create_reply_all_draft, create_reply_draft, delete_attachment, delete_message, forward_message,
+    get_attachment_bytes, get_message, list_attachments, list_drafts, list_inbox, mark_read,
+    mark_unread, move_message, reply_all_message, reply_message, search_messages, send_draft,
+    send_mail, set_flag, update_draft,
 };
 pub use me::{Me, get_me};
 
@@ -231,6 +231,46 @@ impl GraphClient {
     pub async fn delete_message(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::delete_message(&self.http, &self.base_url, &token, message_id).await
+    }
+
+    /// POST /me/messages/{id}/attachments — attach a file (simple upload).
+    pub async fn add_attachment(
+        &self,
+        account: &str,
+        message_id: &str,
+        name: &str,
+        content_type: &str,
+        bytes: &[u8],
+    ) -> Result<String, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::add_attachment(
+            &self.http,
+            &self.base_url,
+            &token,
+            message_id,
+            name,
+            content_type,
+            bytes,
+        )
+        .await
+    }
+
+    /// DELETE /me/messages/{id}/attachments/{att_id}.
+    pub async fn delete_attachment(
+        &self,
+        account: &str,
+        message_id: &str,
+        attachment_id: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::delete_attachment(
+            &self.http,
+            &self.base_url,
+            &token,
+            message_id,
+            attachment_id,
+        )
+        .await
     }
 
     /// GET /me/messages/{id} for a given account email.
