@@ -24,9 +24,10 @@ pub async fn run(command: InboxCommands, json: bool) -> Result<()> {
         InboxCommands::List {
             account,
             limit,
+            page,
             unread,
             compact,
-        } => list(account, limit, unread, compact, json).await,
+        } => list(account, limit, page, unread, compact, json).await,
         InboxCommands::Show {
             fragment,
             mark_read,
@@ -35,12 +36,32 @@ pub async fn run(command: InboxCommands, json: bool) -> Result<()> {
         } => {
             crate::commands::inbox_show::run(fragment, mark_read, show_images, raw_html, json).await
         }
+        InboxCommands::Search {
+            query,
+            account,
+            limit,
+            compact,
+        } => crate::commands::inbox_search::run(query, account, limit, compact, json).await,
+        InboxCommands::MarkRead { fragment } => {
+            crate::commands::inbox_actions::mark_read(fragment).await
+        }
+        InboxCommands::MarkUnread { fragment } => {
+            crate::commands::inbox_actions::mark_unread(fragment).await
+        }
+        InboxCommands::Flag { fragment } => crate::commands::inbox_actions::flag(fragment).await,
+        InboxCommands::Unflag { fragment } => {
+            crate::commands::inbox_actions::unflag(fragment).await
+        }
+        InboxCommands::Archive { fragment } => {
+            crate::commands::inbox_actions::archive(fragment).await
+        }
     }
 }
 
 async fn list(
     account_filter: Vec<String>,
     limit: usize,
+    page: usize,
     unread_only: bool,
     compact: bool,
     json: bool,
@@ -64,13 +85,19 @@ async fn list(
     };
 
     let per_account = compute_per_account_fetch(limit, target_emails.len());
+    // 1-based page → 0-based skip. `compute_per_account_skip` keeps the merge
+    // tidy: every account gets the same skip so received-time interleaving stays
+    // intact across pages (yes, multi-account paging is imperfect — see comment
+    // on the helper — but it's the right approximation given Graph's per-mailbox
+    // ordering).
+    let skip = compute_per_account_skip(per_account, page);
     let graph = GraphClient::new(AuthClient::from_env()?)?;
 
     let futures = target_emails.iter().map(|email| {
         let graph = &graph;
         let e = email.clone();
         async move {
-            let result = graph.list_inbox(&e, per_account, unread_only).await;
+            let result = graph.list_inbox(&e, per_account, skip, unread_only).await;
             (e, result)
         }
     });
@@ -81,9 +108,9 @@ async fn list(
     let mut had_success = false;
     for (email, result) in results {
         match result {
-            Ok(mut msgs) => {
+            Ok(page) => {
                 had_success = true;
-                all_messages.append(&mut msgs);
+                all_messages.extend(page.messages);
             }
             Err(ClientError::SessionExpired { email: e }) => {
                 eprintln!(
@@ -146,6 +173,18 @@ fn compute_per_account_fetch(limit: usize, num_accounts: usize) -> usize {
     }
     let calc = (limit as f64 * 1.2 / num_accounts as f64).ceil() as usize;
     calc.max(10)
+}
+
+/// Compute the per-account `$skip` for a given page. Each account is paged
+/// independently and the merged result is trimmed to `per_account * accounts`,
+/// so page boundaries are approximate when accounts have very different
+/// volumes — page 2 across two accounts may include some items from one
+/// account that also appeared on page 1 of the other, sorted by received
+/// time. This matches users' mental model of "I see the next batch" without
+/// requiring a cross-account cursor we can't actually maintain (Graph has no
+/// federated paging).
+fn compute_per_account_skip(per_account: usize, page: usize) -> usize {
+    page.saturating_sub(1) * per_account
 }
 
 fn from_display(from: &pidge_core::MessageFrom) -> &str {

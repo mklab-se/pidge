@@ -174,9 +174,13 @@ pub enum InboxCommands {
         #[arg(long)]
         account: Vec<String>,
 
-        /// Maximum number of messages to show
+        /// Maximum number of messages to show per page
         #[arg(short = 'n', long, default_value = "25")]
         limit: usize,
+
+        /// Page number (1-based). Skips `(page-1) * limit` messages.
+        #[arg(short = 'p', long, default_value = "1")]
+        page: usize,
 
         /// Show only unread messages
         #[arg(long)]
@@ -205,6 +209,56 @@ pub enum InboxCommands {
         #[arg(long, hide = true)]
         raw_html: bool,
     },
+
+    /// Search e-mails using Graph's KQL `$search` syntax (e.g. `from:alice subject:budget`)
+    Search {
+        /// Search query (passed to Microsoft Graph `$search`)
+        query: String,
+
+        /// Filter to a specific account (repeatable for a subset)
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Maximum number of results
+        #[arg(short = 'n', long, default_value = "25")]
+        limit: usize,
+
+        /// One row per message (no preview lines)
+        #[arg(short = 'c', long)]
+        compact: bool,
+    },
+
+    /// Mark a message as read
+    #[command(name = "mark-read")]
+    MarkRead {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Mark a message as unread
+    #[command(name = "mark-unread")]
+    MarkUnread {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Set the follow-up flag on a message
+    Flag {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Clear the follow-up flag on a message
+    Unflag {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Move a message to the Archive folder
+    Archive {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
 }
 
 /// Subcommand names that `Inbox` accepts directly. Used by the argv pre-processor
@@ -214,7 +268,17 @@ pub enum InboxCommands {
 /// Keep this list in sync with [`InboxCommands`]. When you add a new variant,
 /// add its kebab-case name here too — otherwise users will see "No message
 /// found for fragment '<new-subcommand>'" instead of the new behavior.
-pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &["list", "show", "help"];
+pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &[
+    "list",
+    "show",
+    "search",
+    "mark-read",
+    "mark-unread",
+    "flag",
+    "unflag",
+    "archive",
+    "help",
+];
 
 #[derive(clap::Subcommand)]
 pub enum TrustCommands {

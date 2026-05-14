@@ -3,7 +3,10 @@
 mod mail;
 mod me;
 
-pub use mail::{get_attachment_bytes, get_message, list_attachments, list_inbox, mark_read};
+pub use mail::{
+    InboxPage, get_attachment_bytes, get_message, list_attachments, list_inbox, mark_read,
+    mark_unread, move_message, search_messages, set_flag,
+};
 pub use me::{Me, get_me};
 
 use crate::auth::AuthClient;
@@ -52,8 +55,9 @@ impl GraphClient {
         &self,
         account: &str,
         limit: usize,
+        skip: usize,
         unread_only: bool,
-    ) -> Result<Vec<Message>, ClientError> {
+    ) -> Result<InboxPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         list_inbox(
             &self.http,
@@ -61,9 +65,49 @@ impl GraphClient {
             &token,
             account,
             limit,
+            skip,
             unread_only,
         )
         .await
+    }
+
+    /// GET /me/messages with `$search="<query>"` for a given account.
+    pub async fn search_messages(
+        &self,
+        account: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Message>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        search_messages(&self.http, &self.base_url, &token, account, query, limit).await
+    }
+
+    /// PATCH /me/messages/{id} with `{ "isRead": false }`.
+    pub async fn mark_unread(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::mark_unread(&self.http, &self.base_url, &token, message_id).await
+    }
+
+    /// PATCH /me/messages/{id} with `{ "flag": { "flagStatus": "flagged"|"notFlagged" } }`.
+    pub async fn set_flag(
+        &self,
+        account: &str,
+        message_id: &str,
+        flagged: bool,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::set_flag(&self.http, &self.base_url, &token, message_id, flagged).await
+    }
+
+    /// POST /me/messages/{id}/move — move to a folder by ID or well-known name.
+    pub async fn move_message(
+        &self,
+        account: &str,
+        message_id: &str,
+        destination: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::move_message(&self.http, &self.base_url, &token, message_id, destination).await
     }
 
     /// GET /me/messages/{id} for a given account email.

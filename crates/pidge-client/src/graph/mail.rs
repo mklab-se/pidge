@@ -33,6 +33,16 @@ struct GraphFromAddress {
 #[derive(Debug, Deserialize)]
 struct GraphList {
     value: Vec<GraphMessage>,
+    /// Graph returns this when there are more pages. We expose it so the CLI
+    /// can decide whether to keep paging.
+    #[serde(rename = "@odata.nextLink", default)]
+    next_link: Option<String>,
+}
+
+/// One page of inbox messages plus a flag indicating whether more pages exist.
+pub struct InboxPage {
+    pub messages: Vec<Message>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,26 +97,37 @@ struct GraphAttachment {
     content_bytes: Option<String>,
 }
 
-/// List the top N messages in the Inbox folder, sorted by `receivedDateTime desc`.
+/// List a page of messages from the Inbox folder, sorted by `receivedDateTime desc`.
+///
+/// `skip` is the offset into the result set (page * page_size for 0-based paging).
+/// Returns an `InboxPage` whose `has_more` is true when Graph included an
+/// `@odata.nextLink` — i.e., there are more messages beyond this page.
 pub async fn list_inbox(
     http: &reqwest::Client,
     base_url: &str,
     access_token: &str,
     account: &str,
     limit: usize,
+    skip: usize,
     unread_only: bool,
-) -> Result<Vec<Message>, ClientError> {
-    let mut url = format!(
-        "{base_url}/me/mailFolders/inbox/messages\
-         ?$select=id,subject,from,receivedDateTime,isRead,bodyPreview\
-         &$orderby=receivedDateTime%20desc\
-         &$top={limit}"
-    );
+) -> Result<InboxPage, ClientError> {
+    let url = format!("{base_url}/me/mailFolders/inbox/messages");
+    let mut req = http.get(&url).bearer_auth(access_token).query(&[
+        (
+            "$select",
+            "id,subject,from,receivedDateTime,isRead,bodyPreview",
+        ),
+        ("$orderby", "receivedDateTime desc"),
+        ("$top", &limit.to_string()),
+    ]);
+    if skip > 0 {
+        req = req.query(&[("$skip", &skip.to_string())]);
+    }
     if unread_only {
-        url.push_str("&$filter=isRead%20eq%20false");
+        req = req.query(&[("$filter", "isRead eq false")]);
     }
 
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = req.send().await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -117,30 +138,87 @@ pub async fn list_inbox(
     }
 
     let list: GraphList = resp.json().await?;
+    Ok(InboxPage {
+        has_more: list.next_link.is_some(),
+        messages: list
+            .value
+            .into_iter()
+            .map(|g| to_message(g, account))
+            .collect(),
+    })
+}
+
+/// Search messages across all folders using Graph's `$search` KQL query.
+///
+/// `$search` doesn't combine with `$filter` or `$orderby` — results come back
+/// in Graph's relevance ranking, not date order. Common query forms users can
+/// pass:
+///
+/// - `alice budget`          → matches anywhere in subject/body/sender
+/// - `from:alice@example.com`
+/// - `subject:"q4 review"`
+/// - `from:alice AND subject:budget`
+pub async fn search_messages(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Message>, ClientError> {
+    // $search expects a quoted KQL string; the user passes the raw query.
+    let quoted = format!("\"{}\"", query.replace('"', "\\\""));
+    let url = format!("{base_url}/me/messages");
+    let resp = http
+        .get(&url)
+        .bearer_auth(access_token)
+        .query(&[
+            (
+                "$select",
+                "id,subject,from,receivedDateTime,isRead,bodyPreview",
+            ),
+            ("$top", &limit.to_string()),
+            ("$search", &quoted),
+        ])
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let list: GraphList = resp.json().await?;
     Ok(list
         .value
         .into_iter()
-        .map(|g| Message {
-            account: account.to_string(),
-            id: g.id,
-            from: MessageFrom {
-                name: g
-                    .from
-                    .as_ref()
-                    .and_then(|f| f.email_address.name.clone())
-                    .unwrap_or_default(),
-                address: g
-                    .from
-                    .as_ref()
-                    .and_then(|f| f.email_address.address.clone())
-                    .unwrap_or_default(),
-            },
-            subject: g.subject.unwrap_or_default(),
-            received_at: g.received_date_time,
-            is_read: g.is_read.unwrap_or(true),
-            preview: g.body_preview.unwrap_or_default(),
-        })
+        .map(|g| to_message(g, account))
         .collect())
+}
+
+fn to_message(g: GraphMessage, account: &str) -> Message {
+    Message {
+        account: account.to_string(),
+        id: g.id,
+        from: MessageFrom {
+            name: g
+                .from
+                .as_ref()
+                .and_then(|f| f.email_address.name.clone())
+                .unwrap_or_default(),
+            address: g
+                .from
+                .as_ref()
+                .and_then(|f| f.email_address.address.clone())
+                .unwrap_or_default(),
+        },
+        subject: g.subject.unwrap_or_default(),
+        received_at: g.received_date_time,
+        is_read: g.is_read.unwrap_or(true),
+        preview: g.body_preview.unwrap_or_default(),
+    }
 }
 
 /// GET /me/messages/{id} — fetch a single message with full body.
@@ -287,11 +365,95 @@ pub async fn mark_read(
     access_token: &str,
     message_id: &str,
 ) -> Result<(), ClientError> {
+    patch_message(
+        http,
+        base_url,
+        access_token,
+        message_id,
+        &serde_json::json!({ "isRead": true }),
+    )
+    .await
+}
+
+/// PATCH /me/messages/{id} — mark the message as unread.
+pub async fn mark_unread(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<(), ClientError> {
+    patch_message(
+        http,
+        base_url,
+        access_token,
+        message_id,
+        &serde_json::json!({ "isRead": false }),
+    )
+    .await
+}
+
+/// PATCH /me/messages/{id} — set or clear the follow-up flag.
+pub async fn set_flag(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    flagged: bool,
+) -> Result<(), ClientError> {
+    let status = if flagged { "flagged" } else { "notFlagged" };
+    patch_message(
+        http,
+        base_url,
+        access_token,
+        message_id,
+        &serde_json::json!({ "flag": { "flagStatus": status } }),
+    )
+    .await
+}
+
+async fn patch_message(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    body: &serde_json::Value,
+) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
     let resp = http
         .patch(&url)
         .bearer_auth(access_token)
-        .json(&serde_json::json!({ "isRead": true }))
+        .json(body)
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
+/// POST /me/messages/{id}/move — move the message to another folder.
+///
+/// `destination` is either a Graph folder ID or a well-known folder name
+/// (`"archive"`, `"deleteditems"`, `"junkemail"`, …). Graph returns the new
+/// message (it gets a new ID in the target folder); we discard that since
+/// the caller's cache will be refreshed on the next list/search.
+pub async fn move_message(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    destination: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}/move");
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "destinationId": destination }))
         .send()
         .await?;
     let status = resp.status();
@@ -339,14 +501,15 @@ mod tests {
             .await;
 
         let http = reqwest::Client::new();
-        let msgs = list_inbox(&http, &server.uri(), "AT", "u@e.com", 5, false)
+        let page = list_inbox(&http, &server.uri(), "AT", "u@e.com", 5, 0, false)
             .await
             .unwrap();
-        assert_eq!(msgs.len(), 1);
-        assert_eq!(msgs[0].subject, "Hello");
-        assert_eq!(msgs[0].from.address, "maria@mklab.se");
-        assert!(!msgs[0].is_read);
-        assert_eq!(msgs[0].account, "u@e.com");
+        assert_eq!(page.messages.len(), 1);
+        assert_eq!(page.messages[0].subject, "Hello");
+        assert_eq!(page.messages[0].from.address, "maria@mklab.se");
+        assert!(!page.messages[0].is_read);
+        assert_eq!(page.messages[0].account, "u@e.com");
+        assert!(!page.has_more);
     }
 
     #[tokio::test]
@@ -362,10 +525,106 @@ mod tests {
             .await;
 
         let http = reqwest::Client::new();
-        let msgs = list_inbox(&http, &server.uri(), "AT", "u@e.com", 5, true)
+        let page = list_inbox(&http, &server.uri(), "AT", "u@e.com", 5, 0, true)
             .await
             .unwrap();
-        assert!(msgs.is_empty());
+        assert!(page.messages.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_inbox_passes_skip_when_nonzero() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/inbox/messages"))
+            .and(query_param("$skip", "25"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [],
+                "@odata.nextLink": "https://graph.example/next"
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let page = list_inbox(&http, &server.uri(), "AT", "u@e.com", 25, 25, false)
+            .await
+            .unwrap();
+        assert!(page.has_more);
+    }
+
+    #[tokio::test]
+    async fn search_messages_passes_search_query() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages"))
+            .and(query_param("$search", "\"alice budget\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [
+                    {
+                        "id": "S1",
+                        "subject": "Q4 budget review",
+                        "from": { "emailAddress": { "name": "Alice", "address": "alice@example.com" } },
+                        "receivedDateTime": "2026-05-13T22:00:00Z",
+                        "isRead": true,
+                        "bodyPreview": "Numbers attached"
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let msgs = search_messages(&http, &server.uri(), "AT", "u@e.com", "alice budget", 25)
+            .await
+            .unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].subject, "Q4 budget review");
+    }
+
+    #[tokio::test]
+    async fn mark_unread_patches_isread_false() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        mark_unread(&http, &server.uri(), "AT", "MSG")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_flag_patches_flag_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        set_flag(&http, &server.uri(), "AT", "MSG", true)
+            .await
+            .unwrap();
+        set_flag(&http, &server.uri(), "AT", "MSG", false)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn move_message_posts_destination() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path_regex("/me/messages/[A-Za-z0-9]+/move"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": "NEW"})),
+            )
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        move_message(&http, &server.uri(), "AT", "MSG", "archive")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
