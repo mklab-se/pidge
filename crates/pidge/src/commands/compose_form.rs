@@ -185,15 +185,18 @@ impl<'a> State<'a> {
         s
     }
 
-    /// True when every required field passes validation. Returns Err with a
-    /// user-facing message otherwise.
-    fn validate(&self) -> Result<Compose> {
-        let to = parse_addresses(&first_line(&self.to))?;
+    /// True when every required field passes validation. On failure returns
+    /// the field the user needs to fix and a user-facing message — the
+    /// caller moves focus to that field and shows the message in a
+    /// dismiss-on-any-key modal so the user stays inside the form.
+    fn validate(&self) -> Result<Compose, (Field, String)> {
+        let to = parse_addresses(&first_line(&self.to)).map_err(|e| (Field::To, e.to_string()))?;
         if to.is_empty() {
-            anyhow::bail!("To: at least one recipient is required");
+            return Err((Field::To, "At least one recipient is required.".to_string()));
         }
-        let cc = parse_addresses(&first_line(&self.cc))?;
-        let bcc = parse_addresses(&first_line(&self.bcc))?;
+        let cc = parse_addresses(&first_line(&self.cc)).map_err(|e| (Field::Cc, e.to_string()))?;
+        let bcc =
+            parse_addresses(&first_line(&self.bcc)).map_err(|e| (Field::Bcc, e.to_string()))?;
         let from = self
             .accounts
             .get(self.from_idx)
@@ -351,10 +354,10 @@ fn handle_event(state: &mut State, ev: Event) -> Result<Option<Outcome>> {
             return Ok(None);
         }
         (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
-            return Ok(Some(validate_then(state, Outcome::Send)?));
+            return Ok(try_submit(state, Outcome::Send));
         }
         (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-            return Ok(Some(validate_then(state, Outcome::Draft)?));
+            return Ok(try_submit(state, Outcome::Draft));
         }
         (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
             state.attach_input = single_line(String::new());
@@ -398,8 +401,19 @@ fn handle_single_line(ta: &mut TextArea, key: KeyEvent, focus: &mut Field) {
     let _ = ta.input(crossterm_to_input(key));
 }
 
-fn validate_then(state: &State, success: fn(Compose) -> Outcome) -> Result<Outcome> {
-    Ok(success(state.validate()?))
+/// Attempt to wrap up the form via `make_outcome` (either Send or Draft).
+/// On validation failure we stay inside the form: focus moves to the
+/// offending field and an error modal pops up that dismisses on any key.
+/// Only a clean validation returns an actual outcome to the run loop.
+fn try_submit(state: &mut State, make_outcome: fn(Compose) -> Outcome) -> Option<Outcome> {
+    match state.validate() {
+        Ok(compose) => Some(make_outcome(compose)),
+        Err((field, msg)) => {
+            state.focus = field;
+            state.mode = Mode::ShowingError(msg);
+            None
+        }
+    }
 }
 
 fn handle_confirm_cancel(state: &mut State, key: KeyEvent) -> Option<Outcome> {
@@ -754,14 +768,14 @@ fn draw_error_modal(frame: &mut Frame, area: Rect, msg: &str) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(Color::LightRed))
-        .title(" Error ".bold());
+        .title(" Please fix ".bold());
     let inner = block.inner(modal);
     frame.render_widget(block, modal);
     frame.render_widget(
         Paragraph::new(vec![
             Line::from(msg.to_string()),
             Line::from(""),
-            Line::from("(any key to dismiss)".dim()),
+            Line::from("Press any key to continue.".dim()),
         ])
         .wrap(Wrap { trim: false }),
         inner.inner(Margin::new(1, 0)),
