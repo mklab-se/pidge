@@ -350,9 +350,12 @@ pub struct ComposeArgs {
     #[arg(long)]
     pub body_file: Option<String>,
 
-    /// Skip the final "Send? [y/N]" confirmation
-    #[arg(short = 'y', long)]
-    pub yes: bool,
+    /// Open the TUI compose form pre-filled with your flags so you can
+    /// review (and edit) before sending. Without this, a fully-specified
+    /// invocation (`--to`, `--subject`, `--body`/`--body-file`) sends
+    /// immediately — convenient for scripts and one-liners.
+    #[arg(long)]
+    pub confirm: bool,
 
     /// Save as a draft instead of sending. The new draft's short hash is
     /// printed; use `pidge drafts edit`, `pidge drafts send`, or

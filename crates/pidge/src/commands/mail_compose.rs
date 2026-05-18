@@ -43,13 +43,15 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
 
     let from_default = resolve_from_account(&config, args.from.as_deref())?;
 
-    // Non-interactive scripting path: every required field on the CLI plus
-    // `-y` → skip the TUI and just send. Same semantics as the wizard had.
+    // Non-interactive scripting path: if every required field is on the
+    // command line and `--confirm` wasn't requested, send straight through
+    // without launching the TUI. This is the common path for scripts and
+    // one-liners — the user already spelled out the whole message, no
+    // need for a review step they didn't ask for.
     let fully_specified = !args.to.is_empty()
         && args.subject.is_some()
-        && (args.body.is_some() || args.body_file.is_some())
-        && args.yes;
-    if fully_specified {
+        && (args.body.is_some() || args.body_file.is_some());
+    if fully_specified && !args.confirm {
         let body = resolve_body(args.body.clone(), args.body_file.clone(), "Body", false)?;
         let to = parse_addrs(&args.to)?;
         let cc = parse_addrs(&args.cc)?;

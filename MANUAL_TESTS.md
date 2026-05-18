@@ -72,7 +72,8 @@ is now a full-screen TUI form.
 
 ### Non-interactive (scripting) path
 
-- [ ] `pidge mail new --to kristofer@mklab.se --subject "flag test" --body "one-line body" -y` → sends immediately, no TUI
+- [ ] `pidge mail new --to kristofer@mklab.se --subject "flag test" --body "one-line body"` → sends immediately, no TUI (no `-y` needed when `--to`, `--subject`, `--body` are all given)
+- [ ] Same command with `--confirm` appended → opens the TUI pre-filled with your flags so you can review/edit before pressing Ctrl-S
 - [ ] Find that arrived message:
   - [ ] `pidge mail reply <fragment> --body "thanks" -y` → reply sends
   - [ ] `pidge mail forward <fragment> --to kristofer@mklab.se --body "fyi" -y` → forward sends
@@ -102,7 +103,7 @@ Reply-as-draft round-trip:
 ## Attachments — `pidge drafts attachments ...`
 
 - [ ] Save a draft with one attachment:
-  `pidge mail new --to kristofer@mklab.se --subject "draft+attach" --body "ditto" --attach crates/pidge/tests/fixtures/speedledger_newsletter.html --draft -y`
+  `pidge mail new --to kristofer@mklab.se --subject "draft+attach" --body "ditto" --attach crates/pidge/tests/fixtures/speedledger_newsletter.html --draft`
 - [ ] `pidge drafts attachments list <fragment>` → shows the speedledger file
 - [ ] `pidge drafts attachments add <fragment> crates/pidge/tests/fixtures/linkedin_jobs_digest.html` → adds a second
 - [ ] `pidge drafts attachments list <fragment>` → shows both
@@ -112,7 +113,7 @@ Reply-as-draft round-trip:
 
 Oversized attachment safety:
 - [ ] `dd if=/dev/zero of=/tmp/big.bin bs=1m count=5`
-- [ ] `pidge mail new --to kristofer@mklab.se --subject "big" --body "test" --attach /tmp/big.bin -y` → clean error: "above the 3 MB simple-upload limit"
+- [ ] `pidge mail new --to kristofer@mklab.se --subject "big" --body "test" --attach /tmp/big.bin` → clean error: "above the 3 MB simple-upload limit"
 
 ---
 
