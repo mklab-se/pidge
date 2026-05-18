@@ -1,139 +1,174 @@
-# Manual Test Checklist — Phases 1-6
+# Manual Test Checklist
 
-A walk-through that exercises everything that automated tests don't reach: interactive
-wizards, real Graph behavior, editor opening, terminal styling, confirmation prompts.
+What's left to verify before we tag a release. Items already exercised on
+your end are summarized at the top; everything below is still pending.
 
-Run from the repo root with `cargo run --quiet --` in front of each command (or
-install the binary first with `cargo install --path crates/pidge`).
+Run with `cargo run --quiet -- <args>` from the repo root.
 
-Each line is a discrete check — tick the box when it behaves as described. Where
-a step creates state (a draft, an unread flip, an archived message), the next step
-relies on it; do them in order.
-
-For send-side tests, the **suggested recipient is your own address**
-(`kristofer@mklab.se`). It's the safest target and the easiest to verify in
-Outlook afterward.
+Recipient for any send-side tests: `kristofer@mklab.se` (sending to yourself
+is the safest target — the message comes right back so you can verify it).
 
 ---
 
-## Setup
+## ✓ Already verified
 
-- [X] `pidge --version` prints `pidge 0.2.0` (or newer if you've released since)
-- [X] `pidge --help` lists `account`, `inbox`, `drafts`, `trust`, `ai`, `completion`, `version`
-- [X] `pidge account list` shows your signed-in account(s), the storage backend column, and `[e-mail]` / `[calendar]` markers
-- [X] `pidge account default` (no args) prints `e-mail:` and `calendar:` lines with the current defaults
+- `pidge --version` / `pidge --help` — top-level surface
+- `pidge account list` / `pidge account default` (no args) — storage column, defaults shown
+- `pidge mail search "<query>"` — KQL search returns results
+- `pidge mail mark-read` / `mark-unread` — toggle reflected in list bold/magenta
+- `pidge mail flag` / `unflag` — visible in Outlook
+- `pidge mail archive` — message moves to Archive folder in Outlook
 
-## Phase 1 — account commands & inbox shortcut
+---
 
-- [ ] `pidge account --help` shows: add, list, remove, default, migrate-storage (and **no** `status` — that was folded into `list`)
-- [ ] `pidge account default --help` shows `e-mail` and `calendar` subcommands
-- [ ] `pidge mail` (no args, no subcommand) prints the recent inbox table — same as `pidge mail list`
-- [ ] `pidge mail -n 5 --compact` works (flags route through to `list`)
-- [ ] `pidge mail <some-hash-fragment>` opens the message (shortcut for `mail show`). Try a 3-4 char prefix from the list.
-- [ ] `pidge mail --help` shows the mail subcommand help (not `list` help)
+## TUI compose form — `pidge mail new`
 
-## Phase 2 — read-side power
+The big interaction surface that needs eyes on it. The wizard is gone; this
+is now a full-screen TUI form.
 
-- [ ] `pidge mail list -p 1 -n 10` and `pidge mail list -p 2 -n 10` return different messages (pagination)
-- [X] `pidge mail search "github"` returns results, sorted by Graph relevance not date
-- [X] `pidge mail search "from:noreply@github.com"` filters to GitHub mails only
-- [X] Pick an unread-looking message from `pidge mail`. Its ID column shows the hash.
-- [X] `pidge mail mark-read <fragment>` — re-run `pidge mail` and confirm the row is no longer bold/magenta
-- [X] `pidge mail mark-unread <fragment>` — re-run `pidge mail` and confirm it's bold/magenta again
-- [X] `pidge mail flag <fragment>` — open Outlook (web or app) and confirm the message has a follow-up flag
-- [X] `pidge mail unflag <fragment>` — confirm the flag disappears in Outlook
-- [X] `pidge mail archive <fragment>` — confirm the message moves to the Archive folder in Outlook
-  - **Note:** the cache entry is purged; this fragment will no longer be findable via `pidge mail show`.
+### Layout & cursor
 
-## Phase 3 — compose (interactive wizard)
+- [ ] `pidge mail new` opens the form with `New e-mail` in the title
+- [ ] **Cursor block visible only on the focused field**, not all of them
+  (this just got fixed — confirm)
+- [ ] Field labels (`From:`, `To:`, `Cc:`, …) are bold light-cyan
+- [ ] Focused label is reversed-video so you can see at a glance which field
+  has focus
+- [ ] Footer line at the bottom shows colored hotkey legend:
+  `Tab next · Shift-Tab prev · Ctrl-S send · Ctrl-D draft · Ctrl-A attach · Esc cancel`
 
-- [ ] `pidge mail new` — wizard runs:
-  - Prompts for `To` (enter your own e-mail)
-  - Prompts for `Cc` (leave empty, just press Enter)
-  - Prompts for `Bcc` (leave empty)
-  - Prompts for `Subject` (e.g. "pidge wizard test")
-  - Opens `$EDITOR` for body — type a couple of lines, save & exit
-  - Shows a summary box (From, To, Subject in bold bright-yellow, body preview)
-  - Asks "Send this message? [y/N]" — answer `n` first to confirm "Aborted." prints
-- [ ] Re-run `pidge mail new`, complete the wizard, answer `y`. See `✔ Sent.`
-- [ ] Within a minute, `pidge mail` shows the new message arriving from yourself
+### Navigation
 
-## Phase 3 — compose (power-user flags)
+- [ ] `Tab` cycles forward: From → To → Cc → Bcc → Subject → Attach → Body → From
+- [ ] `Shift-Tab` cycles backward
+- [ ] In single-line fields (To/Cc/Bcc/Subject), pressing `Enter` jumps to the next field
+- [ ] In Body, pressing `Enter` inserts a newline (does not jump fields)
+- [ ] From field: `Left`/`Right` (or `Space`) cycle through signed-in accounts
+  (only useful with 2+ accounts; single account = no cycling visible)
 
-- [ ] `pidge mail new --to kristofer@mklab.se --subject "flag test" --body "one-line body" -y` — sends immediately (no prompts, no editor)
-- [ ] Wait for arrival, then pick its short hash:
-  - [ ] `pidge mail reply <fragment> --body "thanks" -y` succeeds
-  - [ ] `pidge mail forward <fragment> --to kristofer@mklab.se --body "fyi" -y` succeeds
+### Body editing
 
-## Phase 4 — drafts lifecycle
+- [ ] Type multi-line text, use `Up`/`Down` arrows to navigate between lines
+- [ ] `Backspace` at column 0 of line 2+ joins with previous line
+- [ ] `Home` / `End` jump to start / end of line
+- [ ] Type something with accents or emoji (`ö`, `é`, `🎉`) — cursor math should stay correct
 
-- [ ] `pidge mail new --to kristofer@mklab.se --subject "draft test" --body "first version" --draft -y`
-  - Output ends with: `✔ Saved draft. Use \`pidge drafts edit <hash>\` or \`pidge drafts send <hash>\`.`
-- [ ] Copy that draft's short hash for the next few steps.
-- [ ] `pidge drafts list` — shows the new draft in the table
-- [ ] `pidge drafts show <fragment>` — displays the draft body
-- [ ] `pidge drafts edit <fragment>`:
-  - All current values pre-fill the prompts (To, Cc, Bcc, Subject, Body)
-  - Change the body to "second version", save & exit, see `✔ Saved.`
-- [ ] `pidge drafts show <fragment>` — body now reads "second version"
-- [ ] `pidge drafts send <fragment>` — asks "Send draft? [y/N]", answer `y`. See `✔ Sent.` and confirm arrival.
-- [ ] `pidge drafts list` — the sent draft is gone
+### Attachments via the form
 
-Reply draft:
-- [ ] Pick any message in `pidge mail`. Note its short hash.
-- [ ] `pidge mail reply <inbox-fragment> --draft -y` (no body — Graph keeps the auto-quoted content). Note the draft hash.
-- [ ] `pidge drafts edit <draft-fragment>` — the wizard pre-fills with the auto-quoted body
-- [ ] Add your own line at the top, save
-- [ ] `pidge drafts delete <draft-fragment>` — asks for confirmation, answer `y`
+- [ ] Tab to Attach field → press `a` (or `Ctrl-A` from any field) → modal opens
+- [ ] In modal: type a path like `crates/pidge/tests/fixtures/linkedin_jobs_digest.html`, press `Enter`
+- [ ] File appears in the Attach: row in the main form
+- [ ] Tab to Attach → press `x` to remove the last attachment
+- [ ] Try a bogus path in the modal (`/tmp/does-not-exist`) → error modal appears, any key dismisses
 
-## Phase 5 — attachments
+### Send / draft / cancel
 
-Pick a small file to attach (under 3 MB). For example, `crates/pidge/tests/fixtures/linkedin_jobs_digest.html` is ~50 KB.
+- [ ] Empty `To` → press `Ctrl-S` → error modal: "To: at least one recipient is required"
+- [ ] Garbage in To (`foo`) → press `Ctrl-S` → error modal: "'foo' doesn't look like an e-mail address"
+- [ ] Fill the form (To = your address, Subject = "tui test", body = a few lines), press `Ctrl-S` → form exits, see `✔ Sent.`
+- [ ] Within a minute, the message arrives — `pidge mail` shows it
+- [ ] Repeat the form, press `Ctrl-D` → `✔ Saved draft. Use \`pidge drafts edit <hash>\`…`. Note the hash.
+- [ ] Repeat, press `Esc` → "Discard this message?" overlay. Press `n` → returns to form. Press `Esc` again, then `y` → form exits, returns to prompt
 
-- [ ] `pidge mail new --to kristofer@mklab.se --subject "attach test" --body "see attached" --attach crates/pidge/tests/fixtures/linkedin_jobs_digest.html -y`
-  - Output shows: `Uploading attachments:` then `+ linkedin_jobs_digest.html (text/html, ...)` then `✔ Sent.`
-- [ ] In Outlook, confirm the message arrived with the HTML file attached
-- [ ] Try a too-large file (create one: `dd if=/dev/zero of=/tmp/big.bin bs=1m count=5`):
-  - `pidge mail new --to kristofer@mklab.se --subject "big" --body "test" --attach /tmp/big.bin -y` should error with a clear "above the 3 MB simple-upload limit" message
-- [ ] Save a draft with an attachment: `pidge mail new --to kristofer@mklab.se --subject "draft+attach" --body "ditto" --attach crates/pidge/tests/fixtures/speedledger_newsletter.html --draft -y`
-- [ ] `pidge drafts attachments list <fragment>` — shows the attached file
-- [ ] `pidge drafts attachments add <fragment> crates/pidge/tests/fixtures/linkedin_jobs_digest.html` — adds a second attachment
-- [ ] `pidge drafts attachments list <fragment>` — shows both
-- [ ] `pidge drafts attachments remove <fragment> linkedin_jobs_digest.html` — removes by filename
-- [ ] `pidge drafts attachments list <fragment>` — only the speedledger one remains
-- [ ] `pidge drafts delete <fragment> -y` — clean up
+### Non-interactive (scripting) path
 
-## Phase 6 — destructive ops (single + bulk)
+- [ ] `pidge mail new --to kristofer@mklab.se --subject "flag test" --body "one-line body" -y` → sends immediately, no TUI
+- [ ] Find that arrived message:
+  - [ ] `pidge mail reply <fragment> --body "thanks" -y` → reply sends
+  - [ ] `pidge mail forward <fragment> --to kristofer@mklab.se --body "fyi" -y` → forward sends
+
+---
+
+## Drafts — `pidge drafts ...`
+
+Drafts edit now uses the same TUI compose form, pre-filled.
+
+- [ ] From the `Ctrl-D` draft you saved above, run `pidge drafts list` → the draft is in the table
+- [ ] `pidge drafts show <fragment>` → renders the draft body
+- [ ] `pidge drafts edit <fragment>` → TUI opens with **all values pre-filled** (To, Subject, Body)
+- [ ] Modify the body, press `Ctrl-D` → `✔ Saved.`
+- [ ] `pidge drafts show <fragment>` → body reflects the edit
+- [ ] `pidge drafts edit <fragment>` again → press `Ctrl-S` this time → `✔ Sent.`
+- [ ] `pidge drafts list` → the sent draft is gone, message arrives in inbox
+
+Reply-as-draft round-trip:
+- [ ] Pick any mail in `pidge mail`, note its hash
+- [ ] `pidge mail reply <fragment> --draft -y` → draft hash printed
+- [ ] `pidge drafts edit <draft-fragment>` → wizard pre-fills with the reply
+- [ ] `Ctrl-D` to save changes, then `pidge drafts delete <fragment> -y` → cleanup
+
+---
+
+## Attachments — `pidge drafts attachments ...`
+
+- [ ] Save a draft with one attachment:
+  `pidge mail new --to kristofer@mklab.se --subject "draft+attach" --body "ditto" --attach crates/pidge/tests/fixtures/speedledger_newsletter.html --draft -y`
+- [ ] `pidge drafts attachments list <fragment>` → shows the speedledger file
+- [ ] `pidge drafts attachments add <fragment> crates/pidge/tests/fixtures/linkedin_jobs_digest.html` → adds a second
+- [ ] `pidge drafts attachments list <fragment>` → shows both
+- [ ] `pidge drafts attachments remove <fragment> linkedin_jobs_digest.html` → removes by filename
+- [ ] `pidge drafts attachments list <fragment>` → only speedledger remains
+- [ ] `pidge drafts delete <fragment> -y` → cleanup
+
+Oversized attachment safety:
+- [ ] `dd if=/dev/zero of=/tmp/big.bin bs=1m count=5`
+- [ ] `pidge mail new --to kristofer@mklab.se --subject "big" --body "test" --attach /tmp/big.bin -y` → clean error: "above the 3 MB simple-upload limit"
+
+---
+
+## Pagination
+
+- [ ] `pidge mail list -p 1 -n 10` and `pidge mail list -p 2 -n 10` return **different** messages (no overlap)
+- [ ] `pidge mail list -p 99 -n 10` → likely empty table, no crash
+
+---
+
+## Delete — `pidge mail delete`
 
 Single delete:
-- [ ] Send another test message to yourself, let it arrive, get its short hash from `pidge mail`
-- [ ] `pidge mail delete <fragment>` — asks "Delete message <hash> (moves to Deleted Items)? [y/N]"
-  - Answer `n` once to confirm abort works
-  - Run again, answer `y`, see `✔ Deleted.`
-- [ ] In Outlook → Deleted Items folder, confirm the message landed there (not hard-deleted)
+- [ ] Send a test message to yourself, note its hash once it arrives
+- [ ] `pidge mail delete <fragment>` → asks "Delete message <hash> (moves to Deleted Items)? [y/N]"
+- [ ] Answer `n` → "Aborted." prints
+- [ ] Re-run, answer `y` → `✔ Deleted.`
+- [ ] In Outlook → Deleted Items folder, confirm the message is there (not hard-deleted)
 
-Bulk delete safety:
-- [ ] `pidge mail delete --older-than 2050-01-01` (without `-y`) — errors: "Bulk delete requires explicit `-y` confirmation"
-- [ ] `pidge mail delete --older-than 2050-01-01 -y` — would delete everything in your inbox dated before 2050. **DO NOT RUN THIS** unless you're OK losing every message. Listed here only so you see the help works.
+Bulk delete safety gate:
+- [ ] `pidge mail delete --older-than 2050-01-01` (no `-y`) → errors: "Bulk delete requires explicit `-y` confirmation — there is no interactive prompt. Re-run with `-y` if you really mean it."
+- [ ] `pidge mail delete --older-than 2000-01-01 -y` (safe cutoff) → walks accounts, reports 0 deleted
 
-Safe bulk-delete dry-fire:
-- [ ] Pick a cutoff that excludes everything you care about (e.g. 10 years ago). `pidge mail delete --older-than 2000-01-01 -y` — should report 0 deleted for each account.
-
-## Account management (re-test after the restructure)
-
-- [ ] `pidge account default e-mail kristofer@mklab.se` (set to itself, no-op but confirms the syntax works)
-- [ ] `pidge account default calendar kristofer@mklab.se`
-- [ ] `pidge account migrate-storage kristofer@mklab.se --to keychain` — moves tokens back to keychain
-- [ ] Run a Graph call (`pidge mail -n 1`) — expect a keychain prompt the first time
-- [ ] `pidge account migrate-storage kristofer@mklab.se --to file` — moves back to file (no more keychain prompts)
-
-## Output options sanity
-
-- [ ] `pidge mail --json | jq '.[0].subject'` returns a subject string
-- [ ] `pidge account list --json` returns valid JSON with `is_default_email` and `is_default_calendar` fields
-- [ ] `pidge mail --no-color` strips ANSI styling
+**Do not run** `pidge mail delete --older-than 2050-01-01 -y` — would wipe your inbox.
 
 ---
 
-When everything is checked, delete this file (`rm MANUAL_TESTS.md`) and tag the
-release: `/release minor`.
+## Visual polish (recently added)
+
+- [ ] `pidge mail list -n 10 --compact` shows `⚑` (yellow) before any flagged subjects, `✓` (green) before completed
+- [ ] `pidge mail show <flagged-fragment>` → flag marker prepended to the Subject line of the header
+- [ ] `pidge account list` shows a `TYPE` column with `M365` (org tenant) or `Outlook` (personal MSA)
+- [ ] `pidge account list` uses the same horizontal-only table style as `pidge mail` (no vertical borders)
+- [ ] `pidge --help` does **not** mention "Microsoft 365" — wording is provider-agnostic
+- [ ] Any inquire prompt (e.g. `pidge mail delete <fragment>` confirm, or the `pidge mail send` summary confirm if you trip it) shows a bold cyan label and a yellow `?` prefix
+
+---
+
+## Output / JSON
+
+- [ ] `pidge mail --json | jq '.[0].subject'` returns a subject string
+- [ ] `pidge mail --json | jq '.[0].flagStatus'` returns one of `"flagged"`, `"notFlagged"`, `"complete"`
+- [ ] `pidge account list --json` includes `provider` field (`"m365"` or `"outlook"`) plus `is_default_email` / `is_default_calendar`
+- [ ] `pidge mail --no-color | head -3` strips ANSI styling (no escape sequences in the output)
+
+---
+
+## Account management round-trip
+
+- [ ] `pidge account default e-mail kristofer@mklab.se` → no-op confirmation, syntax works
+- [ ] `pidge account default calendar kristofer@mklab.se` → no-op confirmation
+- [ ] `pidge account migrate-storage kristofer@mklab.se --to keychain` → moves tokens; next Graph call may prompt for keychain access
+- [ ] `pidge mail -n 1` runs successfully against the keychain backend
+- [ ] `pidge account migrate-storage kristofer@mklab.se --to file` → moves back, no more keychain prompts
+
+---
+
+When everything is checked, delete this file (`rm MANUAL_TESTS.md`) and tag
+the release: `/release minor`.
