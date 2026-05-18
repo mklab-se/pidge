@@ -8,8 +8,8 @@ use clap::Parser;
 #[command(name = "pidge")]
 #[command(author, version, about)]
 #[command(long_about = "A fast CLI for e-mail and calendar.\n\n\
-    Manage one or more Microsoft 365 accounts and browse, search, send, and \
-    reply to e-mail from your terminal.")]
+    Manage one or more e-mail accounts and browse, search, send, and reply \
+    to e-mail from your terminal.")]
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Increase output verbosity (-v for debug, -vv for trace)
@@ -40,13 +40,13 @@ pub enum Commands {
         command: Option<AiCommands>,
     },
 
-    /// Manage Microsoft 365 accounts — add, remove, list, set defaults
+    /// Manage e-mail accounts — add, remove, list, set defaults
     Account {
         #[command(subcommand)]
         command: AccountCommands,
     },
 
-    /// View, search and (soon) send messages in your inbox
+    /// Read, search, send, reply, forward, flag, archive, or delete messages
     Inbox {
         #[command(subcommand)]
         command: InboxCommands,
@@ -104,7 +104,7 @@ pub enum AiCommands {
 
 #[derive(clap::Subcommand)]
 pub enum AccountCommands {
-    /// Add a Microsoft account (interactive device-code sign-in)
+    /// Add an e-mail account (interactive sign-in)
     Add {
         /// Where to store credentials (`keychain` = OS-native, `file` = plaintext JSON at ~/.config/pidge/tokens/)
         #[arg(long, value_enum, default_value_t = StorageBackendArg::Keychain)]
@@ -218,7 +218,7 @@ pub enum InboxCommands {
 
     /// Search e-mails using Graph's KQL `$search` syntax (e.g. `from:alice subject:budget`)
     Search {
-        /// Search query (passed to Microsoft Graph `$search`)
+        /// Search query (KQL syntax — `from:alice`, `subject:"q4 review"`, etc.)
         query: String,
 
         /// Filter to a specific account (repeatable for a subset)

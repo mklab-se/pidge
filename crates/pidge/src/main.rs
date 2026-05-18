@@ -92,6 +92,11 @@ async fn main() -> Result<()> {
         output::set_no_color(true);
     }
 
+    // Style every interactive prompt label (To:, Subject:, ...) so users can
+    // tell at a glance that they're being asked for input. Reads the no-color
+    // flag we just set; called once before any prompt runs.
+    output::install_inquire_theme();
+
     // Spawn background update check (skip in quiet mode or if disabled via env)
     let update_handle = if !cli.quiet && std::env::var("PIDGE_NO_UPDATE_CHECK").is_err() {
         Some(tokio::spawn(update::check_for_updates()))

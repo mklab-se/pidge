@@ -9,6 +9,7 @@ pub mod account_remove;
 pub mod ai;
 pub mod attachments;
 pub mod completion;
+pub mod compose_form;
 pub mod drafts;
 pub mod inbox;
 pub mod inbox_actions;

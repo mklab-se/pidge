@@ -25,8 +25,9 @@ pub fn run(json: bool) -> Result<()> {
     }
 
     let mut table = Table::new();
+    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table
-        .set_header(vec!["ACCOUNT", "TENANT", "STORAGE", "ADDED", ""])
+        .set_header(vec!["ACCOUNT", "TYPE", "TENANT", "STORAGE", "ADDED", ""])
         .set_content_arrangement(ContentArrangement::Dynamic);
 
     let now = Utc::now();
@@ -40,6 +41,7 @@ pub fn run(json: bool) -> Result<()> {
         }
         table.add_row(vec![
             account.email.clone(),
+            account.provider_label().to_string(),
             account.tenant_label(),
             storage_label(account.storage).to_string(),
             relative_time(now, account.added_at),
@@ -67,6 +69,7 @@ fn storage_label(s: TokenStorage) -> &'static str {
 #[derive(Serialize)]
 struct AccountOut {
     email: String,
+    provider: &'static str,
     tenant_id: String,
     home_account_id: String,
     storage: TokenStorage,
@@ -81,6 +84,7 @@ fn emit_json(config: &Config) -> Result<()> {
         .iter()
         .map(|a| AccountOut {
             email: a.email.clone(),
+            provider: a.provider_id(),
             tenant_id: a.tenant_id.clone(),
             home_account_id: a.home_account_id.clone(),
             storage: a.storage,

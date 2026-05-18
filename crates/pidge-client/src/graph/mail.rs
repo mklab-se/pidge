@@ -1,6 +1,6 @@
 //! GET /me/mailFolders/inbox/messages — list inbox messages.
 
-use pidge_core::{Message, MessageFrom};
+use pidge_core::{FlagStatus, Message, MessageFrom};
 use serde::Deserialize;
 
 use crate::error::ClientError;
@@ -16,6 +16,22 @@ struct GraphMessage {
     is_read: Option<bool>,
     #[serde(rename = "bodyPreview")]
     body_preview: Option<String>,
+    #[serde(default)]
+    flag: Option<GraphFlag>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphFlag {
+    #[serde(rename = "flagStatus", default)]
+    flag_status: Option<String>,
+}
+
+fn flag_status_from(g: Option<GraphFlag>) -> FlagStatus {
+    match g.and_then(|f| f.flag_status).as_deref() {
+        Some("flagged") => FlagStatus::Flagged,
+        Some("complete") => FlagStatus::Complete,
+        _ => FlagStatus::NotFlagged,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -65,6 +81,8 @@ struct GraphFullMessage {
     body: GraphBody,
     #[serde(rename = "hasAttachments")]
     has_attachments: Option<bool>,
+    #[serde(default)]
+    flag: Option<GraphFlag>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,7 +180,7 @@ async fn list_folder(
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
             "$select",
-            "id,subject,from,receivedDateTime,isRead,bodyPreview",
+            "id,subject,from,receivedDateTime,isRead,bodyPreview,flag",
         ),
         ("$orderby", "receivedDateTime desc"),
         ("$top", &limit.to_string()),
@@ -222,7 +240,7 @@ pub async fn search_messages(
         .query(&[
             (
                 "$select",
-                "id,subject,from,receivedDateTime,isRead,bodyPreview",
+                "id,subject,from,receivedDateTime,isRead,bodyPreview,flag",
             ),
             ("$top", &limit.to_string()),
             ("$search", &quoted),
@@ -265,6 +283,7 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
         received_at: g.received_date_time,
         is_read: g.is_read.unwrap_or(true),
         preview: g.body_preview.unwrap_or_default(),
+        flag_status: flag_status_from(g.flag),
     }
 }
 
@@ -279,7 +298,7 @@ pub async fn get_message(
     let url = format!(
         "{base_url}/me/messages/{message_id}\
          ?$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,\
-receivedDateTime,sentDateTime,isRead,body,hasAttachments"
+receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag"
     );
     let resp = http.get(&url).bearer_auth(access_token).send().await?;
     let status = resp.status();
@@ -327,6 +346,7 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments"
         body_content_type: content_type,
         body_content: g.body.content,
         has_attachments: g.has_attachments.unwrap_or(false),
+        flag_status: flag_status_from(g.flag),
     })
 }
 

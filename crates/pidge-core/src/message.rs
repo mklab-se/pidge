@@ -16,6 +16,23 @@ pub struct Message {
     pub received_at: DateTime<Utc>,
     pub is_read: bool,
     pub preview: String,
+    /// Outlook follow-up flag. Defaults to `NotFlagged` so old cache entries
+    /// and providers that don't expose flags deserialize cleanly.
+    #[serde(default)]
+    pub flag_status: FlagStatus,
+}
+
+/// Outlook's follow-up flag state on a message. Three values to match what
+/// Graph returns; the CLI currently only sets `Flagged` / `NotFlagged`, but
+/// it reads and displays all three so a flag a user completed in Outlook
+/// shows up correctly here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FlagStatus {
+    #[default]
+    NotFlagged,
+    Flagged,
+    Complete,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +60,8 @@ pub struct FullMessage {
     pub body_content_type: BodyContentType,
     pub body_content: String,
     pub has_attachments: bool,
+    #[serde(default)]
+    pub flag_status: FlagStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +103,7 @@ mod tests {
                 .to_utc(),
             is_read: false,
             preview: "Hi, attached are…".into(),
+            flag_status: FlagStatus::NotFlagged,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: Message = serde_json::from_str(&json).unwrap();
@@ -116,6 +136,7 @@ mod tests {
             body_content_type: BodyContentType::Html,
             body_content: "<p>Hello</p>".into(),
             has_attachments: true,
+            flag_status: FlagStatus::Flagged,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: FullMessage = serde_json::from_str(&json).unwrap();

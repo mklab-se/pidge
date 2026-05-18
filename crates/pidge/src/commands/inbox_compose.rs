@@ -28,6 +28,7 @@ use pidge_core::{Config, MessageCache, short_hash};
 
 use crate::cli::{ComposeArgs, ForwardArgs, ReplyArgs};
 use crate::commands::attachments::upload_files;
+use crate::commands::compose_form;
 use crate::commands::inbox_fragment::resolve;
 
 // ---- inbox send -----------------------------------------------------------
@@ -40,40 +41,78 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
         ));
     }
 
-    let from = resolve_from_account(&config, args.from.as_deref())?;
-    let to = collect_addresses("To", args.to, true)?;
-    let cc = collect_addresses("Cc (optional, leave empty to skip)", args.cc, false)?;
-    let bcc = collect_addresses("Bcc (optional, leave empty to skip)", args.bcc, false)?;
-    let subject = resolve_subject(args.subject)?;
-    let body = resolve_body(args.body, args.body_file, "Body")?;
+    let from_default = resolve_from_account(&config, args.from.as_deref())?;
 
-    print_summary(&from, &to, &cc, &bcc, &subject, &body, &args.attach);
-    let prompt = if args.draft {
-        "Save as draft?"
-    } else {
-        "Send this message?"
-    };
-    if !confirm_send(args.yes, prompt)? {
-        return Ok(());
+    // Non-interactive scripting path: every required field on the CLI plus
+    // `-y` → skip the TUI and just send. Same semantics as the wizard had.
+    let fully_specified = !args.to.is_empty()
+        && args.subject.is_some()
+        && (args.body.is_some() || args.body_file.is_some())
+        && args.yes;
+    if fully_specified {
+        let body = resolve_body(args.body.clone(), args.body_file.clone(), "Body", false)?;
+        let to = parse_addrs(&args.to)?;
+        let cc = parse_addrs(&args.cc)?;
+        let bcc = parse_addrs(&args.bcc)?;
+        return send_or_draft(
+            &from_default,
+            compose_form::Compose {
+                from: from_default.clone(),
+                to,
+                cc,
+                bcc,
+                subject: args.subject.unwrap_or_default(),
+                body,
+                attachments: args.attach,
+            },
+            args.draft,
+        )
+        .await;
     }
 
+    // Interactive: launch the TUI form pre-filled with any flags the user
+    // did pass. The form handles validation, attachments, and the final
+    // send/draft/cancel decision; we just route the outcome.
+    let initial = compose_form::Compose {
+        from: from_default.clone(),
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        subject: args.subject.unwrap_or_default(),
+        body: resolve_body_or_empty(args.body, args.body_file)?,
+        attachments: args.attach,
+    };
+    let accounts: Vec<String> = config.accounts.iter().map(|a| a.email.clone()).collect();
+    let outcome = compose_form::run(initial, accounts, compose_form::Context::NewSend)?;
+    match outcome {
+        compose_form::Outcome::Send(c) => send_or_draft(&c.from.clone(), c, false).await,
+        compose_form::Outcome::Draft(c) => send_or_draft(&c.from.clone(), c, true).await,
+        compose_form::Outcome::Cancel => {
+            println!("Aborted.");
+            Ok(())
+        }
+    }
+}
+
+/// Push a fully-specified compose through Graph — either send-and-go or
+/// create-draft (then either send or stop). Shared by the non-interactive
+/// path and the TUI's `Send` / `Draft` outcomes.
+async fn send_or_draft(from: &str, c: compose_form::Compose, save_as_draft: bool) -> Result<()> {
     let graph = GraphClient::new(AuthClient::from_env()?)?;
     let outgoing = Outgoing {
-        subject,
-        body_text: body,
-        to,
-        cc,
-        bcc,
+        subject: c.subject,
+        body_text: c.body,
+        to: c.to,
+        cc: c.cc,
+        bcc: c.bcc,
     };
 
-    // Attachments require the create-draft-then-send pathway (Graph's
-    // /sendMail can only embed attachments inline, which fails for anything
-    // over a few hundred KB once base64-encoded). When attachments are
-    // present, always go via draft regardless of --draft.
-    let need_draft = args.draft || !args.attach.is_empty();
+    // Same rule as before: attachments force the draft-then-send pathway
+    // because Graph's /sendMail can't carry uploads in one call.
+    let need_draft = save_as_draft || !c.attachments.is_empty();
     if !need_draft {
         graph
-            .send_mail(&from, &outgoing)
+            .send_mail(from, &outgoing)
             .await
             .context("Microsoft Graph rejected the message")?;
         println!("{} Sent.", "✔".green());
@@ -81,24 +120,50 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
     }
 
     let id = graph
-        .create_draft(&from, &outgoing)
+        .create_draft(from, &outgoing)
         .await
         .context("Microsoft Graph rejected the draft")?;
-    if !args.attach.is_empty() {
+    if !c.attachments.is_empty() {
         println!();
         println!("{}", "Uploading attachments:".bold());
-        upload_files(&graph, &from, &id, &args.attach).await?;
+        upload_files(&graph, from, &id, &c.attachments).await?;
     }
-    if args.draft {
-        cache_and_report_draft(&from, &id, "Saved draft")?;
+    if save_as_draft {
+        cache_and_report_draft(from, &id, "Saved draft")?;
     } else {
         graph
-            .send_draft(&from, &id)
+            .send_draft(from, &id)
             .await
             .context("Microsoft Graph rejected /send for the draft")?;
         println!("{} Sent.", "✔".green());
     }
     Ok(())
+}
+
+fn parse_addrs(raw: &[String]) -> Result<Vec<String>> {
+    let joined = raw.join(",");
+    compose_form::parse_addresses(&joined)
+}
+
+/// `--body`/`--body-file` flag resolution that returns "" if neither was set,
+/// instead of dropping to the interactive editor (the TUI form will handle
+/// the body field itself).
+fn resolve_body_or_empty(inline: Option<String>, body_file: Option<String>) -> Result<String> {
+    if let Some(b) = inline {
+        return Ok(b);
+    }
+    if let Some(path) = body_file {
+        if path == "-" {
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .context("failed to read body from stdin")?;
+            return Ok(buf);
+        }
+        return std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read body from {path}"));
+    }
+    Ok(String::new())
 }
 
 /// Insert a freshly-created draft into the message cache (so future fragment
@@ -123,7 +188,7 @@ fn cache_and_report_draft(account: &str, message_id: &str, action: &str) -> Resu
 pub async fn reply(fragment: String, args: ReplyArgs, reply_all: bool) -> Result<()> {
     let (short, msg) = resolve(&fragment)?;
     let from = args.from.clone().unwrap_or(msg.account.clone());
-    let body = resolve_body(args.body, args.body_file, "Your comment (optional)")?;
+    let body = resolve_body(args.body, args.body_file, "Comment", true)?;
 
     println!();
     println!(
@@ -213,7 +278,7 @@ pub async fn forward(fragment: String, args: ForwardArgs) -> Result<()> {
     let (short, msg) = resolve(&fragment)?;
     let from = args.from.clone().unwrap_or(msg.account.clone());
     let to = collect_addresses("Forward to", args.to, true)?;
-    let body = resolve_body(args.body, args.body_file, "Your comment (optional)")?;
+    let body = resolve_body(args.body, args.body_file, "Comment", true)?;
 
     println!();
     println!(
@@ -300,8 +365,13 @@ fn resolve_from_account(config: &Config, requested: Option<&str>) -> Result<Stri
 /// answer is accepted.
 fn collect_addresses(label: &str, provided: Vec<String>, required: bool) -> Result<Vec<String>> {
     let raw = if provided.is_empty() {
-        Text::new(label)
-            .with_help_message("Comma-separated e-mail addresses")
+        let help = if required {
+            "Comma-separated e-mail addresses"
+        } else {
+            "Comma-separated e-mail addresses. Optional — leave empty to skip"
+        };
+        Text::new(&format!("{label}:"))
+            .with_help_message(help)
             .prompt()
             .map_err(|e| anyhow!("input cancelled: {e}"))?
     } else {
@@ -331,20 +401,17 @@ fn collect_addresses(label: &str, provided: Vec<String>, required: bool) -> Resu
     Ok(addrs)
 }
 
-fn resolve_subject(provided: Option<String>) -> Result<String> {
-    match provided {
-        Some(s) => Ok(s),
-        None => Text::new("Subject")
-            .prompt()
-            .map_err(|e| anyhow!("input cancelled: {e}")),
-    }
-}
-
 /// Resolve the body text. Precedence (highest first):
 /// 1. `--body "text"`
 /// 2. `--body-file path` (or `-` for stdin)
-/// 3. Interactive — open the user's `$EDITOR` for multi-line input.
-fn resolve_body(inline: Option<String>, body_file: Option<String>, label: &str) -> Result<String> {
+/// 3. Interactive — open the in-pidge multi-line editor; user can press
+///    Ctrl-X from inside it to hand off to `$EDITOR` (nano, vim, code …).
+fn resolve_body(
+    inline: Option<String>,
+    body_file: Option<String>,
+    label: &str,
+    _optional: bool,
+) -> Result<String> {
     if let Some(b) = inline {
         return Ok(b);
     }
@@ -359,55 +426,21 @@ fn resolve_body(inline: Option<String>, body_file: Option<String>, label: &str) 
         return std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read body from {path}"));
     }
-    // Interactive editor; inquire opens $EDITOR (falls back to nano/notepad).
-    Editor::new(label)
-        .prompt()
-        .map_err(|e| anyhow!("editor cancelled: {e}"))
+    interactive_body(label, "")
 }
 
-fn print_summary(
-    from: &str,
-    to: &[String],
-    cc: &[String],
-    bcc: &[String],
-    subject: &str,
-    body: &str,
-    attachments: &[std::path::PathBuf],
-) {
-    println!();
-    println!("{}", "─".repeat(60).dimmed());
-    println!("{} {}", "From:".bold(), from);
-    println!("{} {}", "To:".bold(), to.join(", "));
-    if !cc.is_empty() {
-        println!("{} {}", "Cc:".bold(), cc.join(", "));
+/// Open the user's `$EDITOR` (or system default) for multi-line text input.
+/// Used by the reply / forward flows for the comment field; the new-send
+/// and draft-edit flows use the full TUI compose form instead.
+pub(crate) fn interactive_body(label: &str, initial: &str) -> Result<String> {
+    let label = format!("{label}:");
+    let mut e = Editor::new(&label);
+    if !initial.is_empty() {
+        e = e.with_predefined_text(initial);
     }
-    if !bcc.is_empty() {
-        println!("{} {}", "Bcc:".bold(), bcc.join(", "));
-    }
-    println!("{} {}", "Subject:".bold(), subject.bold().bright_yellow());
-    if !attachments.is_empty() {
-        let names: Vec<String> = attachments
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect();
-        println!(
-            "{} {} file(s): {}",
-            "Attachments:".bold(),
-            attachments.len(),
-            names.join(", ")
-        );
-    }
-    println!("{}", "─".repeat(60).dimmed());
-    let body_preview: String = body.lines().take(10).collect::<Vec<_>>().join("\n");
-    println!("{body_preview}");
-    if body.lines().count() > 10 {
-        println!(
-            "{}",
-            format!("... ({} more lines)", body.lines().count() - 10).dimmed()
-        );
-    }
-    println!("{}", "─".repeat(60).dimmed());
-    println!();
+    e.with_help_message("Opens $EDITOR (set the $EDITOR env var to change the editor)")
+        .prompt()
+        .map_err(|e| anyhow!("editor cancelled: {e}"))
 }
 
 fn confirm_send(skip: bool, prompt: &str) -> Result<bool> {

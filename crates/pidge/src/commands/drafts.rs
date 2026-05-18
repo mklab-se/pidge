@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use futures::future::join_all;
-use inquire::{Confirm, Editor, Text};
+use inquire::Confirm;
 
 use pidge_client::{AuthClient, ClientError, GraphClient, Outgoing};
 use pidge_core::{Config, Message, MessageCache, short_hash};
@@ -205,71 +205,91 @@ fn relative_time(then: chrono::DateTime<chrono::Utc>) -> String {
 // ---- edit -----------------------------------------------------------------
 
 async fn edit(fragment: String) -> Result<()> {
-    let (short, msg) = resolve(&fragment)?;
+    let (_short, msg) = resolve(&fragment)?;
     let graph = GraphClient::new(AuthClient::from_env()?)?;
 
-    // Fetch the current state to pre-fill the wizard.
+    // Fetch the current draft state to pre-fill the TUI compose form.
     let current = graph
         .get_message(&msg.account, &msg.graph_id)
         .await
         .context("failed to fetch draft from Microsoft Graph")?;
 
-    println!();
-    println!(
-        "{} {} ({})",
-        "Editing draft".bold(),
-        short.dimmed(),
-        msg.account
-    );
-    println!();
-
-    let to = prompt_addresses_with_default("To", &current.to)?;
-    let cc = prompt_addresses_with_default("Cc", &current.cc)?;
-    let bcc = prompt_addresses_with_default("Bcc", &current.bcc)?;
-    let subject = Text::new("Subject")
-        .with_default(&current.subject)
-        .prompt()
-        .map_err(|e| anyhow!("input cancelled: {e}"))?;
-    let body = Editor::new("Body")
-        .with_predefined_text(&current.body_content)
-        .prompt()
-        .map_err(|e| anyhow!("editor cancelled: {e}"))?;
-
-    let outgoing = Outgoing {
-        subject,
-        body_text: body,
-        to,
-        cc,
-        bcc,
+    let initial = crate::commands::compose_form::Compose {
+        from: msg.account.clone(),
+        to: current.to.iter().map(|r| r.address.clone()).collect(),
+        cc: current.cc.iter().map(|r| r.address.clone()).collect(),
+        bcc: current.bcc.iter().map(|r| r.address.clone()).collect(),
+        subject: current.subject.clone(),
+        body: current.body_content.clone(),
+        attachments: Vec::new(),
     };
+    let accounts: Vec<String> = Config::load()?
+        .accounts
+        .iter()
+        .map(|a| a.email.clone())
+        .collect();
+    let outcome = crate::commands::compose_form::run(
+        initial,
+        accounts,
+        crate::commands::compose_form::Context::EditDraft,
+    )?;
 
-    graph
-        .update_draft(&msg.account, &msg.graph_id, &outgoing)
-        .await
-        .context("Microsoft Graph rejected the update")?;
-    println!("{} Saved.", "✔".green());
+    match outcome {
+        crate::commands::compose_form::Outcome::Send(c) => {
+            patch_draft(&graph, &msg.account, &msg.graph_id, &c).await?;
+            if !c.attachments.is_empty() {
+                crate::commands::attachments::upload_files(
+                    &graph,
+                    &msg.account,
+                    &msg.graph_id,
+                    &c.attachments,
+                )
+                .await?;
+            }
+            graph
+                .send_draft(&msg.account, &msg.graph_id)
+                .await
+                .context("Microsoft Graph rejected /send for the draft")?;
+            let _ = purge_from_cache(&pidge_core::short_hash(&msg.graph_id));
+            println!("{} Sent.", "✔".green());
+        }
+        crate::commands::compose_form::Outcome::Draft(c) => {
+            patch_draft(&graph, &msg.account, &msg.graph_id, &c).await?;
+            if !c.attachments.is_empty() {
+                crate::commands::attachments::upload_files(
+                    &graph,
+                    &msg.account,
+                    &msg.graph_id,
+                    &c.attachments,
+                )
+                .await?;
+            }
+            println!("{} Saved.", "✔".green());
+        }
+        crate::commands::compose_form::Outcome::Cancel => {
+            println!("Aborted.");
+        }
+    }
     Ok(())
 }
 
-fn prompt_addresses_with_default(
-    label: &str,
-    current: &[pidge_core::MessageFrom],
-) -> Result<Vec<String>> {
-    let default: String = current
-        .iter()
-        .map(|r| r.address.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let raw = Text::new(label)
-        .with_default(&default)
-        .with_help_message("Comma-separated e-mail addresses (leave empty for none)")
-        .prompt()
-        .map_err(|e| anyhow!("input cancelled: {e}"))?;
-    Ok(raw
-        .split([',', ';'])
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect())
+async fn patch_draft(
+    graph: &GraphClient,
+    account: &str,
+    message_id: &str,
+    c: &crate::commands::compose_form::Compose,
+) -> Result<()> {
+    let outgoing = Outgoing {
+        subject: c.subject.clone(),
+        body_text: c.body.clone(),
+        to: c.to.clone(),
+        cc: c.cc.clone(),
+        bcc: c.bcc.clone(),
+    };
+    graph
+        .update_draft(account, message_id, &outgoing)
+        .await
+        .context("Microsoft Graph rejected the update")
 }
 
 // ---- send -----------------------------------------------------------------

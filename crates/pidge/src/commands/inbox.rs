@@ -220,6 +220,18 @@ fn style_subject(subject: &str, is_read: bool) -> String {
     }
 }
 
+/// Visual prefix for a message's flag state. Empty string when not flagged
+/// so unflagged rows stay aligned with the rest. Yellow `⚑` for an active
+/// follow-up flag; green `✓` for a completed one — matches Outlook's
+/// distinction between "flagged" and "complete".
+pub fn flag_marker(status: pidge_core::FlagStatus) -> String {
+    match status {
+        pidge_core::FlagStatus::Flagged => format!("{} ", "⚑".yellow().bold()),
+        pidge_core::FlagStatus::Complete => format!("{} ", "✓".green()),
+        pidge_core::FlagStatus::NotFlagged => String::new(),
+    }
+}
+
 fn render_text_rich(rows: &[MessageRow], hide_account: bool) -> Result<()> {
     let mut table = Table::new();
     table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
@@ -234,12 +246,13 @@ fn render_text_rich(rows: &[MessageRow], hide_account: bool) -> Result<()> {
     for row in rows {
         let subject_cell = {
             let styled_subject = style_subject(&row.message.subject, row.message.is_read);
+            let flag = flag_marker(row.message.flag_status);
             let preview_linkified = linkify_text(&row.message.preview);
             let preview_styled = preview_linkified.dimmed().to_string();
             if row.message.preview.is_empty() {
-                styled_subject
+                format!("{flag}{styled_subject}")
             } else {
-                format!("{styled_subject}\n{preview_styled}")
+                format!("{flag}{styled_subject}\n{preview_styled}")
             }
         };
 
@@ -272,7 +285,11 @@ fn render_text_compact(rows: &[MessageRow], hide_account: bool) -> Result<()> {
     table.set_header(header);
 
     for row in rows {
-        let subject = style_subject(&row.message.subject, row.message.is_read);
+        let subject = format!(
+            "{}{}",
+            flag_marker(row.message.flag_status),
+            style_subject(&row.message.subject, row.message.is_read)
+        );
 
         let mut cells = vec![
             row.short_hash.dimmed().to_string(),

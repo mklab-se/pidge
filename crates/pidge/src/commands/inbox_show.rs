@@ -150,8 +150,9 @@ fn render_header_and_body(full: &FullMessage) -> Result<()> {
         );
     }
     println!(
-        "{}   {}",
+        "{}   {}{}",
         "Subject:".bold(),
+        crate::commands::inbox::flag_marker(full.flag_status),
         full.subject.bold().bright_yellow()
     );
     println!(

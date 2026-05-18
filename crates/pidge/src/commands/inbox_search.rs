@@ -134,11 +134,12 @@ fn print_results(messages: &[Message], hide_account: bool, compact: bool) -> Res
         } else {
             m.from.name.clone()
         };
+        let flag = crate::commands::inbox::flag_marker(m.flag_status);
         let subject_cell = if compact || m.preview.is_empty() {
-            style_subject(&m.subject, m.is_read)
+            format!("{flag}{}", style_subject(&m.subject, m.is_read))
         } else {
             format!(
-                "{}\n{}",
+                "{flag}{}\n{}",
                 style_subject(&m.subject, m.is_read),
                 crate::output::linkify_text(&m.preview).dimmed()
             )

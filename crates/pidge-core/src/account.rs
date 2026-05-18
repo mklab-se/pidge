@@ -53,6 +53,28 @@ impl Account {
             format!("{prefix}…")
         }
     }
+
+    /// Short human-readable label for the account's provider / kind. Today
+    /// we only support Microsoft, so this distinguishes personal MSA (Outlook
+    /// / Live / Hotmail) from organizational M365 tenants. As we add Gmail,
+    /// IMAP, etc., this becomes a stored field rather than a derived one.
+    pub fn provider_label(&self) -> &'static str {
+        if self.is_personal() {
+            "Outlook"
+        } else {
+            "M365"
+        }
+    }
+
+    /// Machine-readable provider identifier — used in `--json` output and any
+    /// future config-file lookups. Stays stable as labels change.
+    pub fn provider_id(&self) -> &'static str {
+        if self.is_personal() {
+            "outlook"
+        } else {
+            "m365"
+        }
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +146,19 @@ added_at: "2026-05-13T22:00:00Z"
             make_account("11111111-2222-3333-4444-555555555555").tenant_label(),
             "11111111…"
         );
+    }
+
+    #[test]
+    fn provider_label_for_personal_msa_is_outlook() {
+        let a = make_account(Account::PERSONAL_MSA_TENANT);
+        assert_eq!(a.provider_label(), "Outlook");
+        assert_eq!(a.provider_id(), "outlook");
+    }
+
+    #[test]
+    fn provider_label_for_org_tenant_is_m365() {
+        let a = make_account("11111111-2222-3333-4444-555555555555");
+        assert_eq!(a.provider_label(), "M365");
+        assert_eq!(a.provider_id(), "m365");
     }
 }
