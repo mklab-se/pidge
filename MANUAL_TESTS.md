@@ -84,8 +84,8 @@ is now a full-screen TUI form.
 
 Drafts edit now uses the same TUI compose form, pre-filled.
 
-- [ ] From the `Ctrl-D` draft you saved above, run `pidge drafts list` → the draft is in the table
-- [ ] `pidge drafts show <fragment>` → renders the draft body
+- [X] From the `Ctrl-D` draft you saved above, run `pidge drafts list` → the draft is in the table
+- [X] `pidge drafts show <fragment>` → renders the draft body
 - [ ] `pidge drafts edit <fragment>` → TUI opens with **all values pre-filled** (To, Subject, Body)
 - [ ] Modify the body, press `Ctrl-D` → `✔ Saved.`
 - [ ] `pidge drafts show <fragment>` → body reflects the edit
@@ -109,7 +109,7 @@ Reply-as-draft round-trip:
 - [ ] `pidge drafts attachments list <fragment>` → shows both
 - [ ] `pidge drafts attachments remove <fragment> linkedin_jobs_digest.html` → removes by filename
 - [ ] `pidge drafts attachments list <fragment>` → only speedledger remains
-- [ ] `pidge drafts delete <fragment> -y` → cleanup
+- [X] `pidge drafts delete <fragment> -y` → cleanup
 
 Oversized attachment safety:
 - [ ] `dd if=/dev/zero of=/tmp/big.bin bs=1m count=5`

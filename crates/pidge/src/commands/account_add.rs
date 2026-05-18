@@ -31,6 +31,20 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
     println!();
     println!(
         "{}",
+        "Both personal Microsoft accounts (outlook.com / live.com / \
+         hotmail.com) and work/school M365 accounts are supported."
+            .dimmed()
+    );
+    println!(
+        "{}",
+        "If your browser is already signed in to another Microsoft account, \
+         pick \"Sign in with a different account\" — or open the URL in a \
+         private/incognito window."
+            .dimmed()
+    );
+    println!();
+    println!(
+        "{}",
         "Waiting for sign-in… (press Ctrl-C to cancel)".dimmed()
     );
 
