@@ -132,6 +132,13 @@ enum Mode {
     Edit,
     AddingAttach,
     ConfirmingCancel,
+    /// Soft-warning overlay before sending — empty subject and/or body
+    /// triggers this rather than hard-failing. Y/Enter sends anyway;
+    /// N/Esc goes back to Edit with focus on `focus_on_cancel`.
+    ConfirmingSend {
+        warning: String,
+        focus_on_cancel: Field,
+    },
     ShowingError(String),
 }
 
@@ -335,6 +342,9 @@ fn handle_event(state: &mut State, ev: Event) -> Result<Option<Outcome>> {
     // Modals take precedence over edit-mode handlers.
     match state.mode.clone() {
         Mode::ConfirmingCancel => return Ok(handle_confirm_cancel(state, key)),
+        Mode::ConfirmingSend {
+            focus_on_cancel, ..
+        } => return Ok(handle_confirm_send(state, key, focus_on_cancel)),
         Mode::AddingAttach => {
             handle_adding_attach(state, key);
             return Ok(None);
@@ -354,10 +364,21 @@ fn handle_event(state: &mut State, ev: Event) -> Result<Option<Outcome>> {
             return Ok(None);
         }
         (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
-            return Ok(try_submit(state, Outcome::Send));
+            // Sending warns on empty subject/body so the user has a chance
+            // to think twice before launching an unintended blank e-mail.
+            return Ok(try_submit(
+                state,
+                Outcome::Send,
+                /*warn_on_empty*/ true,
+            ));
         }
         (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-            return Ok(try_submit(state, Outcome::Draft));
+            // Drafts are explicitly for incomplete work — no nags.
+            return Ok(try_submit(
+                state,
+                Outcome::Draft,
+                /*warn_on_empty*/ false,
+            ));
         }
         (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
             state.attach_input = single_line(String::new());
@@ -402,12 +423,29 @@ fn handle_single_line(ta: &mut TextArea, key: KeyEvent, focus: &mut Field) {
 }
 
 /// Attempt to wrap up the form via `make_outcome` (either Send or Draft).
-/// On validation failure we stay inside the form: focus moves to the
-/// offending field and an error modal pops up that dismisses on any key.
-/// Only a clean validation returns an actual outcome to the run loop.
-fn try_submit(state: &mut State, make_outcome: fn(Compose) -> Outcome) -> Option<Outcome> {
+/// On hard validation failure we stay inside the form: focus moves to the
+/// offending field and a "Please fix" modal pops up. On a soft warning
+/// (empty subject/body, only when `warn_on_empty` is set), a "Send anyway?"
+/// modal asks for explicit confirmation. Only a clean pass returns an
+/// actual outcome to the run loop.
+fn try_submit(
+    state: &mut State,
+    make_outcome: fn(Compose) -> Outcome,
+    warn_on_empty: bool,
+) -> Option<Outcome> {
     match state.validate() {
-        Ok(compose) => Some(make_outcome(compose)),
+        Ok(compose) => {
+            if warn_on_empty {
+                if let Some((warning, focus_on_cancel)) = soft_warnings(&compose) {
+                    state.mode = Mode::ConfirmingSend {
+                        warning,
+                        focus_on_cancel,
+                    };
+                    return None;
+                }
+            }
+            Some(make_outcome(compose))
+        }
         Err((field, msg)) => {
             state.focus = field;
             state.mode = Mode::ShowingError(msg);
@@ -416,10 +454,55 @@ fn try_submit(state: &mut State, make_outcome: fn(Compose) -> Outcome) -> Option
     }
 }
 
+/// Return a user-facing warning string + the field the user should land on
+/// if they cancel the send. None means the message is safe to send as-is.
+fn soft_warnings(c: &Compose) -> Option<(String, Field)> {
+    let subj = c.subject.trim().is_empty();
+    let body = c.body.trim().is_empty();
+    match (subj, body) {
+        (true, true) => Some((
+            "Subject and body are both empty.".to_string(),
+            Field::Subject,
+        )),
+        (true, false) => Some(("Subject is empty.".to_string(), Field::Subject)),
+        (false, true) => Some(("Body is empty.".to_string(), Field::Body)),
+        (false, false) => None,
+    }
+}
+
 fn handle_confirm_cancel(state: &mut State, key: KeyEvent) -> Option<Outcome> {
     match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(Outcome::Cancel),
         _ => {
+            state.mode = Mode::Edit;
+            None
+        }
+    }
+}
+
+/// Y/Enter confirms the send despite an empty subject/body; anything else
+/// dismisses the warning and drops focus on the field the user can fix.
+fn handle_confirm_send(
+    state: &mut State,
+    key: KeyEvent,
+    focus_on_cancel: Field,
+) -> Option<Outcome> {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            // Re-validate. The form is unchanged since the warning was
+            // raised, so this should succeed; if for some reason it
+            // doesn't, fall through to the regular error path.
+            match state.validate() {
+                Ok(compose) => Some(Outcome::Send(compose)),
+                Err((field, msg)) => {
+                    state.focus = field;
+                    state.mode = Mode::ShowingError(msg);
+                    None
+                }
+            }
+        }
+        _ => {
+            state.focus = focus_on_cancel;
             state.mode = Mode::Edit;
             None
         }
@@ -571,6 +654,7 @@ fn draw(frame: &mut Frame, state: &State) {
     match &state.mode {
         Mode::AddingAttach => draw_attach_modal(frame, area, state),
         Mode::ConfirmingCancel => draw_cancel_modal(frame, area),
+        Mode::ConfirmingSend { warning, .. } => draw_confirm_send_modal(frame, area, warning),
         Mode::ShowingError(msg) => draw_error_modal(frame, area, msg),
         Mode::Edit => {}
     }
@@ -754,6 +838,31 @@ fn draw_cancel_modal(frame: &mut Frame, area: Rect) {
             Span::raw(" discard · "),
             Span::styled("N/Esc", Style::default().fg(Color::LightGreen)),
             Span::raw(" keep editing"),
+        ])
+        .style(Style::default().fg(Color::Gray)),
+    ])
+    .wrap(Wrap { trim: false });
+    frame.render_widget(body, inner.inner(Margin::new(1, 0)));
+}
+
+fn draw_confirm_send_modal(frame: &mut Frame, area: Rect, warning: &str) {
+    let modal = centered_rect(60, 6, area);
+    frame.render_widget(Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::LightYellow))
+        .title(" Send anyway? ".bold());
+    let inner = block.inner(modal);
+    frame.render_widget(block, modal);
+    let body = Paragraph::new(vec![
+        Line::from(warning.to_string()),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Y/Enter", Style::default().fg(Color::LightGreen)),
+            Span::raw(" send · "),
+            Span::styled("N/Esc", Style::default().fg(Color::LightYellow)),
+            Span::raw(" go back"),
         ])
         .style(Style::default().fg(Color::Gray)),
     ])

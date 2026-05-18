@@ -28,45 +28,45 @@ is now a full-screen TUI form.
 
 ### Layout & cursor
 
-- [ ] `pidge mail new` opens the form with `New e-mail` in the title
-- [ ] **Cursor block visible only on the focused field**, not all of them
+- [X] `pidge mail new` opens the form with `New e-mail` in the title
+- [X] **Cursor block visible only on the focused field**, not all of them
   (this just got fixed — confirm)
-- [ ] Field labels (`From:`, `To:`, `Cc:`, …) are bold light-cyan
-- [ ] Focused label is reversed-video so you can see at a glance which field
+- [X] Field labels (`From:`, `To:`, `Cc:`, …) are bold light-cyan
+- [X] Focused label is reversed-video so you can see at a glance which field
   has focus
-- [ ] Footer line at the bottom shows colored hotkey legend:
+- [X] Footer line at the bottom shows colored hotkey legend:
   `Tab next · Shift-Tab prev · Ctrl-S send · Ctrl-D draft · Ctrl-A attach · Esc cancel`
 
 ### Navigation
 
-- [ ] `Tab` cycles forward: From → To → Cc → Bcc → Subject → Attach → Body → From
-- [ ] `Shift-Tab` cycles backward
-- [ ] In single-line fields (To/Cc/Bcc/Subject), pressing `Enter` jumps to the next field
-- [ ] In Body, pressing `Enter` inserts a newline (does not jump fields)
-- [ ] From field: `Left`/`Right` (or `Space`) cycle through signed-in accounts
+- [X] `Tab` cycles forward: From → To → Cc → Bcc → Subject → Attach → Body → From
+- [X] `Shift-Tab` cycles backward
+- [X] In single-line fields (To/Cc/Bcc/Subject), pressing `Enter` jumps to the next field
+- [X] In Body, pressing `Enter` inserts a newline (does not jump fields)
+- [X] From field: `Left`/`Right` (or `Space`) cycle through signed-in accounts
   (only useful with 2+ accounts; single account = no cycling visible)
 
 ### Body editing
 
-- [ ] Type multi-line text, use `Up`/`Down` arrows to navigate between lines
-- [ ] `Backspace` at column 0 of line 2+ joins with previous line
-- [ ] `Home` / `End` jump to start / end of line
-- [ ] Type something with accents or emoji (`ö`, `é`, `🎉`) — cursor math should stay correct
+- [X] Type multi-line text, use `Up`/`Down` arrows to navigate between lines
+- [X] `Backspace` at column 0 of line 2+ joins with previous line
+- [X] `Home` / `End` jump to start / end of line
+- [X] Type something with accents or emoji (`ö`, `é`, `🎉`) — cursor math should stay correct
 
 ### Attachments via the form
 
-- [ ] Tab to Attach field → press `a` (or `Ctrl-A` from any field) → modal opens
-- [ ] In modal: type a path like `crates/pidge/tests/fixtures/linkedin_jobs_digest.html`, press `Enter`
-- [ ] File appears in the Attach: row in the main form
-- [ ] Tab to Attach → press `x` to remove the last attachment
+- [X] Tab to Attach field → press `a` (or `Ctrl-A` from any field) → modal opens
+- [X] In modal: type a path like `crates/pidge/tests/fixtures/linkedin_jobs_digest.html`, press `Enter`
+- [X] File appears in the Attach: row in the main form
+- [X] Tab to Attach → press `x` to remove the last attachment
 - [ ] Try a bogus path in the modal (`/tmp/does-not-exist`) → error modal appears, any key dismisses
 
 ### Send / draft / cancel
 
-- [ ] Empty `To` → press `Ctrl-S` → error modal: "To: at least one recipient is required"
+- [X] Empty `To` → press `Ctrl-S` → error modal: "To: at least one recipient is required"
 - [ ] Garbage in To (`foo`) → press `Ctrl-S` → error modal: "'foo' doesn't look like an e-mail address"
-- [ ] Fill the form (To = your address, Subject = "tui test", body = a few lines), press `Ctrl-S` → form exits, see `✔ Sent.`
-- [ ] Within a minute, the message arrives — `pidge mail` shows it
+- [X] Fill the form (To = your address, Subject = "tui test", body = a few lines), press `Ctrl-S` → form exits, see `✔ Sent.`
+- [X] Within a minute, the message arrives — `pidge mail` shows it
 - [ ] Repeat the form, press `Ctrl-D` → `✔ Saved draft. Use \`pidge drafts edit <hash>\`…`. Note the hash.
 - [ ] Repeat, press `Esc` → "Discard this message?" overlay. Press `n` → returns to form. Press `Esc` again, then `y` → form exits, returns to prompt
 
