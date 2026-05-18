@@ -28,6 +28,15 @@ CLIENT_ID=$(az ad app create \
   --required-resource-accesses "@${SCRIPT_DIR}/pidge-app-permissions.json" \
   --query appId -o tsv)
 
+# Add the native-client redirect URI. The device-code flow itself never
+# redirects, but the personal-MSA login endpoint (login.live.com) validates
+# that public clients have *some* redirect URI registered and refuses sign-in
+# with `invalid_request: ... redirect_uri ...` otherwise. The well-known
+# `nativeclient` URI is the documented value for desktop / CLI apps.
+echo "Setting public-client redirect URI for personal-MSA sign-in…"
+az ad app update --id "${CLIENT_ID}" \
+  --public-client-redirect-uris https://login.microsoftonline.com/common/oauth2/nativeclient
+
 cat <<EOF
 
 ✔ pidge app registered.
