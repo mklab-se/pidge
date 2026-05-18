@@ -49,8 +49,11 @@ ailloy = { version = "0.7", default-features = false, features = ["config-tui"] 
 # Keychain
 keyring = "3"
 
-# Base64 (for JWT decoding)
+# Base64 (for JWT decoding and PKCE code-challenge)
 base64 = "0.22"
+
+# Cryptographic random for PKCE verifier and OAuth state
+rand = "0.8"
 
 # YAML for config files
 serde_yaml = "0.9"

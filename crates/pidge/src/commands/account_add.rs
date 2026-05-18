@@ -1,4 +1,5 @@
-//! `pidge account add` — sign in to a new Microsoft account via OAuth device code flow.
+//! `pidge account add` — sign in to a new Microsoft account via OAuth
+//! authorization-code + PKCE with a one-shot localhost HTTP server.
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -20,50 +21,37 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
         );
     }
     println!();
-
-    let dc = auth
-        .start_device_code()
-        .await
-        .context("failed to start device code flow")?;
-
-    println!("  {}       {}", "Go to:".bold(), dc.verification_uri.cyan());
-    println!("  {}  {}", "Enter code:".bold(), dc.user_code.bold().cyan());
-    println!();
     println!(
         "{}",
-        "Both personal Microsoft accounts (outlook.com / live.com / \
-         hotmail.com) and work/school M365 accounts are supported."
-            .dimmed()
-    );
-    println!(
-        "{}",
-        "If your browser is already signed in to another Microsoft account, \
-         pick \"Sign in with a different account\" — or open the URL in a \
-         private/incognito window."
+        "A browser window will open for sign-in. Both personal Microsoft \
+         accounts (outlook.com / live.com / hotmail.com) and work/school \
+         M365 accounts are supported."
             .dimmed()
     );
     println!();
-    println!(
-        "{}",
-        "Waiting for sign-in… (press Ctrl-C to cancel)".dimmed()
-    );
-
-    // Best-effort browser open
-    let _ = open_browser(&dc.verification_uri);
 
     let success = auth
-        .poll_for_tokens(&dc)
+        .run_browser_flow(|authorize_url| {
+            println!("{} {}", "Sign in at:".bold(), authorize_url.cyan());
+            println!(
+                "{}",
+                "(opening your browser…  Ctrl-C here to cancel)".dimmed()
+            );
+            let _ = open_browser(authorize_url);
+        })
         .await
-        .context("device code flow failed")?;
+        .context("browser sign-in failed")?;
 
-    // Tenant from id_token
+    // Tenant from id_token (when present — Microsoft only returns id_token
+    // if the `openid` scope was requested or as part of certain flows).
     let tenant_id = success
         .id_token
         .as_deref()
         .and_then(extract_tenant_id)
         .unwrap_or_default();
 
-    // Identity from Graph /me (reuses the AuthClient from the device code flow)
+    // Identity from Graph /me — same as before; this is what teaches us the
+    // user's actual e-mail address so we can key the cached tokens by it.
     let graph = pidge_client::GraphClient::new(auth)?;
     let me = graph
         .me(&success.tokens.access_token)

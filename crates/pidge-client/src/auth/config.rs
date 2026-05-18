@@ -9,8 +9,16 @@ pub const APP_CLIENT_ID: &str = "e49f90dc-c265-4392-b62f-b26704f9088f";
 
 /// Microsoft Graph delegated scopes pidge requests at sign-in.
 /// Locked in at app registration time — changing them later requires updating
-/// the Entra app permissions AND triggering incremental consent on existing accounts.
+/// the Entra app permissions AND triggering incremental consent on existing
+/// accounts.
+///
+/// `openid` is included so Microsoft returns an `id_token` from the token
+/// endpoint; we decode it (no signature check) to extract the user's tenant
+/// for the Account record. `profile` is harmless and is what MSAL clients
+/// always request alongside `openid`.
 pub const SCOPES: &[&str] = &[
+    "openid",
+    "profile",
     "offline_access",
     "User.Read",
     "Mail.ReadWrite",

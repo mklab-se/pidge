@@ -1,5 +1,7 @@
-//! OAuth device-code flow, token refresh, and credential storage.
+//! OAuth browser-based sign-in (auth-code + PKCE), token refresh, and
+//! credential storage.
 
+pub mod browser_flow;
 pub mod config;
 pub mod device_code;
 mod file_store;
@@ -9,6 +11,7 @@ mod store;
 mod token_store;
 mod tokens;
 
+pub use browser_flow::AuthSuccess;
 pub use file_store::FileStore;
 pub use jwt::extract_tenant_id;
 pub use store::KeychainStore;
@@ -55,31 +58,31 @@ impl AuthClient {
         }
     }
 
-    /// Run the device code flow. Returns the device code response immediately;
-    /// caller is expected to display the user code and call `poll_for_tokens`.
-    pub async fn start_device_code(&self) -> Result<device_code::DeviceCodeResponse, ClientError> {
-        device_code::start(
+    /// Run the OAuth 2.0 authorization-code + PKCE sign-in flow with a
+    /// one-shot localhost HTTP server for the redirect callback.
+    ///
+    /// `on_authorize_url_ready` receives the constructed `/authorize` URL
+    /// once the local listener is bound and the URL is built — the caller
+    /// is responsible for printing it to the user and (best-effort) opening
+    /// the browser.
+    ///
+    /// Works for both work/school (M365) and personal (live.com /
+    /// outlook.com / hotmail.com) Microsoft accounts. Device-code is kept
+    /// in tree for potential future headless use but no longer the
+    /// default sign-in path.
+    pub async fn run_browser_flow<F>(
+        &self,
+        on_authorize_url_ready: F,
+    ) -> Result<AuthSuccess, ClientError>
+    where
+        F: FnOnce(&str),
+    {
+        browser_flow::run(
             &self.http,
             &self.authority_base,
             &self.client_id,
             &self.scope,
-        )
-        .await
-    }
-
-    /// Poll for tokens after `start_device_code`. Blocks until success or terminal error.
-    pub async fn poll_for_tokens(
-        &self,
-        device_code_resp: &device_code::DeviceCodeResponse,
-    ) -> Result<device_code::PollSuccess, ClientError> {
-        device_code::poll(
-            &self.http,
-            &self.authority_base,
-            &self.client_id,
-            &device_code_resp.device_code,
-            device_code_resp.interval,
-            device_code_resp.expires_in,
-            device_code::real_sleep,
+            on_authorize_url_ready,
         )
         .await
     }
