@@ -144,6 +144,10 @@ struct State<'a> {
     subject: TextArea<'a>,
     body: TextArea<'a>,
     attachments: Vec<PathBuf>,
+    /// Index of the currently-highlighted attachment when the Attach field
+    /// is focused. Always < attachments.len(); clamped on remove and on
+    /// add-modal exit. Meaningless when attachments is empty.
+    attach_selected: usize,
     focus: Field,
     mode: Mode,
     attach_input: TextArea<'a>,
@@ -166,6 +170,7 @@ impl<'a> State<'a> {
             subject: single_line(initial.subject),
             body: multi_line(initial.body),
             attachments: initial.attachments,
+            attach_selected: 0,
             focus: Field::To,
             mode: Mode::Edit,
             attach_input: single_line(String::new()),
@@ -416,6 +421,9 @@ fn handle_adding_attach(state: &mut State, key: KeyEvent) {
             if !path.as_os_str().is_empty() {
                 if path.is_file() {
                     state.attachments.push(path);
+                    // Highlight the newly-added file when the user lands
+                    // back on the Attach row.
+                    state.attach_selected = state.attachments.len() - 1;
                 } else {
                     state.mode = Mode::ShowingError(format!("Not a file: {}", path.display()));
                     return;
@@ -440,14 +448,29 @@ fn handle_from(state: &mut State, key: KeyEvent) {
 
 fn handle_attach(state: &mut State, key: KeyEvent) {
     match key.code {
-        KeyCode::Char('a') => {
+        // Add: 'a' or Enter opens the path-input modal.
+        KeyCode::Char('a') | KeyCode::Enter => {
             state.attach_input = single_line(String::new());
             state.mode = Mode::AddingAttach;
         }
-        KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
-            state.attachments.pop();
+        // Remove the currently-highlighted attachment, then clamp selection.
+        KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace
+            if !state.attachments.is_empty() =>
+        {
+            let idx = state.attach_selected.min(state.attachments.len() - 1);
+            state.attachments.remove(idx);
+            if state.attach_selected >= state.attachments.len() {
+                state.attach_selected = state.attachments.len().saturating_sub(1);
+            }
         }
-        KeyCode::Enter => state.focus_next(),
+        // ←/→ navigate within the attachment list. Don't escape the field on
+        // boundaries (Tab does that).
+        KeyCode::Left if state.attach_selected > 0 => {
+            state.attach_selected -= 1;
+        }
+        KeyCode::Right if state.attach_selected + 1 < state.attachments.len() => {
+            state.attach_selected += 1;
+        }
         _ => {}
     }
 }
@@ -584,33 +607,47 @@ fn draw_text_row(frame: &mut Frame, area: Rect, label: &str, ta: &TextArea, focu
 
 fn draw_attach_row(frame: &mut Frame, area: Rect, state: &State) {
     let focused = state.focus == Field::Attach;
-    let value = if state.attachments.is_empty() {
-        "(none — Ctrl-A to add)"
-            .dim()
-            .italic()
-            .into_centered_line()
-            .left_aligned()
+    let mut spans: Vec<Span> = vec![label_span("Attach:", focused)];
+
+    if state.attachments.is_empty() {
+        let hint = if focused {
+            "(none — press 'a' or Enter to add)"
+        } else {
+            "(none — Ctrl-A to add)"
+        };
+        spans.push(Span::styled(
+            hint,
+            Style::default().fg(Color::DarkGray).italic(),
+        ));
     } else {
-        Line::from(
-            state
-                .attachments
-                .iter()
-                .map(|p| {
-                    p.file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("?")
-                        .to_string()
-                })
-                .collect::<Vec<_>>()
-                .join(", "),
-        )
-    };
-    let line = Line::from(
-        std::iter::once(label_span("Attach:", focused))
-            .chain(value.spans)
-            .collect::<Vec<_>>(),
-    );
-    frame.render_widget(Paragraph::new(line), area);
+        // Render each filename. When the field is focused, highlight the
+        // selected one with reverse-video so it's obvious which one a
+        // remove ('x') or arrow keypress will act on.
+        for (i, p) in state.attachments.iter().enumerate() {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?")
+                .to_string();
+            let style = if focused && i == state.attach_selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            spans.push(Span::styled(name, style));
+            if i + 1 < state.attachments.len() {
+                spans.push(Span::raw("  "));
+            }
+        }
+        if focused {
+            spans.push(Span::styled(
+                "   · ←→ select · x remove · a add",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_body(frame: &mut Frame, area: Rect, state: &State) {
