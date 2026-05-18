@@ -680,8 +680,17 @@ pub async fn send_draft(
     message_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/send");
-    // Graph's /send takes no body but expects a POST.
-    let resp = http.post(&url).bearer_auth(access_token).send().await?;
+    // Graph's /send takes no body but requires `Content-Length: 0`; reqwest
+    // omits that header for body-less requests, so the Graph edge layer
+    // responds with HTTP 411. Sending an explicit empty body forces the
+    // header to land.
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .header(reqwest::header::CONTENT_LENGTH, 0)
+        .body(reqwest::Body::from(""))
+        .send()
+        .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
