@@ -223,6 +223,40 @@ impl<'a> State<'a> {
         let new = (self.from_idx as i32 + dir).rem_euclid(len);
         self.from_idx = new as usize;
     }
+
+    /// Set every TextArea's cursor style so only the currently-focused field
+    /// shows a visible block cursor. Non-focused fields get a no-op style
+    /// (default Style with no REVERSED modifier), which makes their cursors
+    /// effectively invisible. When the AddingAttach modal is up, the modal's
+    /// input gets the visible cursor and all main fields hide.
+    fn apply_cursor_styles(&mut self) {
+        let visible = Style::default().add_modifier(Modifier::REVERSED);
+        let hidden = Style::default();
+
+        let in_modal = matches!(self.mode, Mode::AddingAttach);
+        self.attach_input
+            .set_cursor_style(if in_modal { visible } else { hidden });
+
+        let pick = |target: Field| {
+            if !in_modal && self.focus == target {
+                visible
+            } else {
+                hidden
+            }
+        };
+        // We can't use the closure across set_cursor_style calls (each call
+        // re-borrows self mutably), so resolve each style up-front.
+        let to_s = pick(Field::To);
+        let cc_s = pick(Field::Cc);
+        let bcc_s = pick(Field::Bcc);
+        let subj_s = pick(Field::Subject);
+        let body_s = pick(Field::Body);
+        self.to.set_cursor_style(to_s);
+        self.cc.set_cursor_style(cc_s);
+        self.bcc.set_cursor_style(bcc_s);
+        self.subject.set_cursor_style(subj_s);
+        self.body.set_cursor_style(body_s);
+    }
 }
 
 fn single_line(initial: String) -> TextArea<'static> {
@@ -273,6 +307,7 @@ pub fn parse_addresses(raw: &str) -> Result<Vec<String>> {
 
 fn run_loop(terminal: &mut DefaultTerminal, mut state: State) -> Result<Outcome> {
     loop {
+        state.apply_cursor_styles();
         terminal
             .draw(|frame| draw(frame, &state))
             .context("terminal draw failed")?;
