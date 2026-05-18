@@ -159,15 +159,47 @@ async fn list(
     update_cache(&rows)?;
 
     let single_account = target_emails.len() == 1;
+    let labels = account_labels(&target_emails);
 
     if json {
         return render_json(&rows);
     }
     if compact {
-        render_text_compact(&rows, single_account)
+        render_text_compact(&rows, single_account, &labels)
     } else {
-        render_text_rich(&rows, single_account)
+        render_text_rich(&rows, single_account, &labels)
     }
+}
+
+/// Map each signed-in e-mail to its display label for list views. If a
+/// domain has only one account signed in, we shorten its label to just the
+/// domain (`kristofer@mklab.se` → `mklab.se`) since the local-part is
+/// redundant given the inbox is yours. If two accounts share a domain we
+/// keep both as full addresses to preserve disambiguation.
+fn account_labels(accounts: &[String]) -> std::collections::HashMap<String, String> {
+    use std::collections::HashMap;
+    let mut domain_count: HashMap<&str, usize> = HashMap::new();
+    for email in accounts {
+        if let Some((_, domain)) = email.split_once('@') {
+            *domain_count.entry(domain).or_insert(0) += 1;
+        }
+    }
+    accounts
+        .iter()
+        .map(|email| {
+            let label = email
+                .split_once('@')
+                .and_then(|(_, d)| {
+                    if domain_count.get(d) == Some(&1) {
+                        Some(d.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| email.clone());
+            (email.clone(), label)
+        })
+        .collect()
 }
 
 fn update_cache(rows: &[MessageRow]) -> Result<()> {
@@ -230,48 +262,63 @@ pub fn flag_marker(status: pidge_core::FlagStatus) -> String {
     }
 }
 
-fn render_text_rich(rows: &[MessageRow], hide_account: bool) -> Result<()> {
-    let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
-    table.set_content_arrangement(ContentArrangement::Dynamic);
-
-    let mut header = vec!["ID", "ACCOUNT", "FROM", "SUBJECT", "RECEIVED"];
-    if hide_account {
-        header.remove(1);
-    }
-    table.set_header(header);
-
-    for row in rows {
-        let subject_cell = {
-            let styled_subject = style_subject(&row.message.subject, row.message.is_read);
-            let flag = flag_marker(row.message.flag_status);
-            let preview_linkified = linkify_text(&row.message.preview);
-            let preview_styled = preview_linkified.dimmed().to_string();
-            if row.message.preview.is_empty() {
-                format!("{flag}{styled_subject}")
-            } else {
-                format!("{flag}{styled_subject}\n{preview_styled}")
-            }
-        };
-
-        let mut cells = vec![
-            row.short_hash.dimmed().to_string(),
-            row.message.account.clone(),
-            from_display(&row.message.from).to_string(),
-            subject_cell,
-            relative_received(row.message.received_at),
-        ];
-        if hide_account {
-            cells.remove(1);
+/// Card-style multi-line rendering. Each message gets three lines and a
+/// blank separator:
+///
+///   `<id> · <account> · <from> · <received>`     ← dimmed meta header
+///   `<flag> <subject>`                            ← bold magenta when unread
+///   `<preview>`                                   ← dimmed body excerpt
+///
+/// Uses the full terminal width, no truncation. Avoids the narrow-subject
+/// column problem of the previous table-based rich layout.
+fn render_text_rich(
+    rows: &[MessageRow],
+    hide_account: bool,
+    labels: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 {
+            println!();
         }
-        table.add_row(cells);
-    }
+        let account_label = labels
+            .get(&row.message.account)
+            .cloned()
+            .unwrap_or_else(|| row.message.account.clone());
+        let mut header_parts: Vec<String> = Vec::with_capacity(4);
+        header_parts.push(row.short_hash.dimmed().to_string());
+        if !hide_account {
+            header_parts.push(account_label.dimmed().to_string());
+        }
+        header_parts.push(from_display(&row.message.from).bold().to_string());
+        header_parts.push(
+            relative_received(row.message.received_at)
+                .dimmed()
+                .to_string(),
+        );
+        println!("{}", header_parts.join(&" · ".dimmed().to_string()));
 
-    println!("{table}");
+        let flag = flag_marker(row.message.flag_status);
+        println!(
+            "{flag}{}",
+            style_subject(&row.message.subject, row.message.is_read)
+        );
+
+        if !row.message.preview.is_empty() {
+            let preview = linkify_text(&row.message.preview);
+            // Preview is usually 200 chars (Graph's bodyPreview). Wrap it
+            // to terminal width minus 2 cols of breathing room. Multi-line
+            // previews get rendered as-is — Graph already trims them.
+            println!("{}", preview.dimmed());
+        }
+    }
     Ok(())
 }
 
-fn render_text_compact(rows: &[MessageRow], hide_account: bool) -> Result<()> {
+fn render_text_compact(
+    rows: &[MessageRow],
+    hide_account: bool,
+    labels: &std::collections::HashMap<String, String>,
+) -> Result<()> {
     let mut table = Table::new();
     table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
@@ -289,9 +336,14 @@ fn render_text_compact(rows: &[MessageRow], hide_account: bool) -> Result<()> {
             style_subject(&row.message.subject, row.message.is_read)
         );
 
+        let account_label = labels
+            .get(&row.message.account)
+            .cloned()
+            .unwrap_or_else(|| row.message.account.clone());
+
         let mut cells = vec![
             row.short_hash.dimmed().to_string(),
-            row.message.account.clone(),
+            account_label,
             from_display(&row.message.from).to_string(),
             subject,
             relative_received(row.message.received_at),
