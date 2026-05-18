@@ -44,10 +44,15 @@ impl Account {
         self.tenant_id == Self::PERSONAL_MSA_TENANT
     }
 
-    /// A short human label for the tenant — "personal MSA" for MSA, GUID prefix otherwise.
+    /// A short human label for the tenant — "personal MSA" for MSA, GUID prefix
+    /// otherwise. Returns "(unknown)" when the tenant_id is empty (e.g. an
+    /// account added before pidge requested the `openid` scope; gets
+    /// auto-backfilled on the next Graph call).
     pub fn tenant_label(&self) -> String {
         if self.is_personal() {
             "personal MSA".to_string()
+        } else if self.tenant_id.is_empty() {
+            "(unknown)".to_string()
         } else {
             let prefix: String = self.tenant_id.chars().take(8).collect();
             format!("{prefix}…")

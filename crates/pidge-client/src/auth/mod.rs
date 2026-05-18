@@ -101,22 +101,57 @@ impl AuthClient {
                 email: email.to_string(),
             })?;
 
-        if !tokens.needs_refresh() {
-            return Ok(tokens.access_token);
-        }
+        let access_token = if tokens.needs_refresh() {
+            let new_tokens = refresh::refresh(
+                &self.http,
+                &self.authority_base,
+                &self.client_id,
+                &tokens,
+                &self.scope,
+                email,
+            )
+            .await?;
+            TokenStore::save(email, &new_tokens, storage)?;
+            new_tokens.access_token
+        } else {
+            tokens.access_token
+        };
 
-        let new_tokens = refresh::refresh(
-            &self.http,
-            &self.authority_base,
-            &self.client_id,
-            &tokens,
-            &self.scope,
-            email,
-        )
-        .await?;
-        TokenStore::save(email, &new_tokens, storage)?;
-        Ok(new_tokens.access_token)
+        // Opportunistic backfill: accounts added before pidge requested the
+        // `openid` scope have an empty tenant_id in config. Microsoft Graph
+        // access tokens are JWTs that carry the `tid` claim, so we can fix
+        // this once per such account on the next Graph call without any
+        // user action.
+        backfill_tenant_id(email, &access_token);
+
+        Ok(access_token)
     }
+}
+
+/// If the cached Account for `email` has an empty `tenant_id`, decode the
+/// `tid` claim from the JWT access token and persist it to config. Silent on
+/// any failure — this is a best-effort cosmetic backfill, not a correctness
+/// requirement.
+fn backfill_tenant_id(email: &str, access_token: &str) {
+    let Ok(mut config) = pidge_core::Config::load() else {
+        return;
+    };
+    let Some(existing) = config.find(email).cloned() else {
+        return;
+    };
+    if !existing.tenant_id.is_empty() {
+        return;
+    }
+    let Some(tid) = jwt::extract_tenant_id(access_token) else {
+        return;
+    };
+    if tid.is_empty() {
+        return;
+    }
+    let mut updated = existing;
+    updated.tenant_id = tid;
+    config.add_account(updated);
+    let _ = config.save();
 }
 
 /// Resolve the token storage backend for an email by consulting `config.yaml`.
