@@ -1,4 +1,4 @@
-//! `pidge inbox list` — list messages merged across signed-in accounts.
+//! `pidge mail list` — list messages merged across signed-in accounts.
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Datelike, Local, Utc};
@@ -10,7 +10,7 @@ use serde::Serialize;
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::{Config, Message, MessageCache, short_hash};
 
-use crate::cli::InboxCommands;
+use crate::cli::MailCommands;
 use crate::output::linkify_text;
 
 /// Pair of message and its computed short hash, for rendering.
@@ -19,58 +19,56 @@ struct MessageRow {
     short_hash: String,
 }
 
-pub async fn run(command: InboxCommands, json: bool) -> Result<()> {
+pub async fn run(command: MailCommands, json: bool) -> Result<()> {
     match command {
-        InboxCommands::List {
+        MailCommands::List {
             account,
             limit,
             page,
             unread,
             compact,
         } => list(account, limit, page, unread, compact, json).await,
-        InboxCommands::Show {
+        MailCommands::Show {
             fragment,
             mark_read,
             show_images,
             raw_html,
         } => {
-            crate::commands::inbox_show::run(fragment, mark_read, show_images, raw_html, json).await
+            crate::commands::mail_show::run(fragment, mark_read, show_images, raw_html, json).await
         }
-        InboxCommands::Search {
+        MailCommands::Search {
             query,
             account,
             limit,
             compact,
-        } => crate::commands::inbox_search::run(query, account, limit, compact, json).await,
-        InboxCommands::MarkRead { fragment } => {
-            crate::commands::inbox_actions::mark_read(fragment).await
+        } => crate::commands::mail_search::run(query, account, limit, compact, json).await,
+        MailCommands::MarkRead { fragment } => {
+            crate::commands::mail_actions::mark_read(fragment).await
         }
-        InboxCommands::MarkUnread { fragment } => {
-            crate::commands::inbox_actions::mark_unread(fragment).await
+        MailCommands::MarkUnread { fragment } => {
+            crate::commands::mail_actions::mark_unread(fragment).await
         }
-        InboxCommands::Flag { fragment } => crate::commands::inbox_actions::flag(fragment).await,
-        InboxCommands::Unflag { fragment } => {
-            crate::commands::inbox_actions::unflag(fragment).await
+        MailCommands::Flag { fragment } => crate::commands::mail_actions::flag(fragment).await,
+        MailCommands::Unflag { fragment } => crate::commands::mail_actions::unflag(fragment).await,
+        MailCommands::Archive { fragment } => {
+            crate::commands::mail_actions::archive(fragment).await
         }
-        InboxCommands::Archive { fragment } => {
-            crate::commands::inbox_actions::archive(fragment).await
+        MailCommands::New(args) => crate::commands::mail_compose::send(args).await,
+        MailCommands::Reply { fragment, compose } => {
+            crate::commands::mail_compose::reply(fragment, compose, false).await
         }
-        InboxCommands::Send(args) => crate::commands::inbox_compose::send(args).await,
-        InboxCommands::Reply { fragment, compose } => {
-            crate::commands::inbox_compose::reply(fragment, compose, false).await
+        MailCommands::ReplyAll { fragment, compose } => {
+            crate::commands::mail_compose::reply(fragment, compose, true).await
         }
-        InboxCommands::ReplyAll { fragment, compose } => {
-            crate::commands::inbox_compose::reply(fragment, compose, true).await
+        MailCommands::Forward { fragment, compose } => {
+            crate::commands::mail_compose::forward(fragment, compose).await
         }
-        InboxCommands::Forward { fragment, compose } => {
-            crate::commands::inbox_compose::forward(fragment, compose).await
-        }
-        InboxCommands::Delete {
+        MailCommands::Delete {
             fragment,
             older_than,
             account,
             yes,
-        } => crate::commands::inbox_delete::run(fragment, older_than, account, yes).await,
+        } => crate::commands::mail_delete::run(fragment, older_than, account, yes).await,
     }
 }
 

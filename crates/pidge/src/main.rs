@@ -12,29 +12,29 @@ mod update;
 
 use cli::Cli;
 
-/// Pre-process argv to make `pidge inbox` ergonomic.
+/// Pre-process argv to make `pidge mail` ergonomic.
 ///
-/// Clap can't natively decide whether `pidge inbox 3515` means "show message
+/// Clap can't natively decide whether `pidge mail 3515` means "show message
 /// with fragment 3515" or "run the (non-existent) subcommand named 3515", so
 /// we rewrite argv before clap sees it:
 ///
-/// - `pidge inbox`                          → `pidge inbox list`
-/// - `pidge inbox --account a@b.com -n 50`  → `pidge inbox list --account a@b.com -n 50`
-/// - `pidge inbox 3515`                     → `pidge inbox show 3515`
-/// - `pidge inbox list ...` / `inbox show ...` / `inbox --help` → unchanged
+/// - `pidge mail`                          → `pidge mail list`
+/// - `pidge mail --account a@b.com -n 50`  → `pidge mail list --account a@b.com -n 50`
+/// - `pidge mail 3515`                     → `pidge mail show 3515`
+/// - `pidge mail list ...` / `mail show ...` / `mail --help` → unchanged
 ///
-/// The known-subcommand list lives in [`cli::INBOX_SUBCOMMAND_NAMES`]; when
-/// new subcommands land (search, flag, archive, send, …) add their kebab-case
+/// The known-subcommand list lives in [`cli::MAIL_SUBCOMMAND_NAMES`]; when
+/// new subcommands land (search, flag, archive, new, …) add their kebab-case
 /// names there too, or users will see "No message found for fragment '<name>'"
 /// instead of the new behavior.
 fn preprocess_args(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
-    // Only intervene on `pidge inbox <something>` — every other top-level
+    // Only intervene on `pidge mail <something>` — every other top-level
     // command has a required, non-shortcut subcommand and passes through.
-    if args.len() < 2 || args[1] != "inbox" {
+    if args.len() < 2 || args[1] != "mail" {
         return args;
     }
 
-    // `pidge inbox` → `pidge inbox list`
+    // `pidge mail` → `pidge mail list`
     if args.len() == 2 {
         args.push("list".into());
         return args;
@@ -42,7 +42,7 @@ fn preprocess_args(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString>
 
     let arg2 = args[2].to_string_lossy();
 
-    // Help / version flags pass through so clap prints `inbox` help, not `list` help.
+    // Help / version flags pass through so clap prints `mail` help, not `list` help.
     if matches!(arg2.as_ref(), "-h" | "--help" | "-V" | "--version") {
         return args;
     }
@@ -54,7 +54,7 @@ fn preprocess_args(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString>
     }
 
     // A bare word that matches a known subcommand passes through.
-    if cli::INBOX_SUBCOMMAND_NAMES.contains(&arg2.as_ref()) {
+    if cli::MAIL_SUBCOMMAND_NAMES.contains(&arg2.as_ref()) {
         return args;
     }
 
@@ -127,7 +127,7 @@ mod preprocess_tests {
     }
 
     #[test]
-    fn non_inbox_commands_pass_through() {
+    fn non_mail_commands_pass_through() {
         assert_eq!(
             pp(&["pidge", "account", "list"]),
             ["pidge", "account", "list"]
@@ -136,54 +136,54 @@ mod preprocess_tests {
     }
 
     #[test]
-    fn bare_inbox_inserts_list() {
-        assert_eq!(pp(&["pidge", "inbox"]), ["pidge", "inbox", "list"]);
+    fn bare_mail_inserts_list() {
+        assert_eq!(pp(&["pidge", "mail"]), ["pidge", "mail", "list"]);
     }
 
     #[test]
-    fn inbox_with_flags_inserts_list_before_flags() {
+    fn mail_with_flags_inserts_list_before_flags() {
         assert_eq!(
-            pp(&["pidge", "inbox", "--account", "a@b.com", "-n", "50"]),
-            ["pidge", "inbox", "list", "--account", "a@b.com", "-n", "50"]
+            pp(&["pidge", "mail", "--account", "a@b.com", "-n", "50"]),
+            ["pidge", "mail", "list", "--account", "a@b.com", "-n", "50"]
         );
         assert_eq!(
-            pp(&["pidge", "inbox", "-c"]),
-            ["pidge", "inbox", "list", "-c"]
-        );
-    }
-
-    #[test]
-    fn inbox_help_passes_through() {
-        assert_eq!(
-            pp(&["pidge", "inbox", "--help"]),
-            ["pidge", "inbox", "--help"]
-        );
-        assert_eq!(pp(&["pidge", "inbox", "-h"]), ["pidge", "inbox", "-h"]);
-    }
-
-    #[test]
-    fn inbox_with_known_subcommand_passes_through() {
-        assert_eq!(
-            pp(&["pidge", "inbox", "list", "-n", "50"]),
-            ["pidge", "inbox", "list", "-n", "50"]
-        );
-        assert_eq!(
-            pp(&["pidge", "inbox", "show", "3515"]),
-            ["pidge", "inbox", "show", "3515"]
+            pp(&["pidge", "mail", "-c"]),
+            ["pidge", "mail", "list", "-c"]
         );
     }
 
     #[test]
-    fn inbox_with_bare_word_inserts_show() {
+    fn mail_help_passes_through() {
         assert_eq!(
-            pp(&["pidge", "inbox", "3515"]),
-            ["pidge", "inbox", "show", "3515"]
+            pp(&["pidge", "mail", "--help"]),
+            ["pidge", "mail", "--help"]
+        );
+        assert_eq!(pp(&["pidge", "mail", "-h"]), ["pidge", "mail", "-h"]);
+    }
+
+    #[test]
+    fn mail_with_known_subcommand_passes_through() {
+        assert_eq!(
+            pp(&["pidge", "mail", "list", "-n", "50"]),
+            ["pidge", "mail", "list", "-n", "50"]
+        );
+        assert_eq!(
+            pp(&["pidge", "mail", "show", "3515"]),
+            ["pidge", "mail", "show", "3515"]
+        );
+    }
+
+    #[test]
+    fn mail_with_bare_word_inserts_show() {
+        assert_eq!(
+            pp(&["pidge", "mail", "3515"]),
+            ["pidge", "mail", "show", "3515"]
         );
         // Even a fragment that looks like garbage routes to show — the show
         // command will then surface a clear "no message found" error.
         assert_eq!(
-            pp(&["pidge", "inbox", "lsit"]),
-            ["pidge", "inbox", "show", "lsit"]
+            pp(&["pidge", "mail", "lsit"]),
+            ["pidge", "mail", "show", "lsit"]
         );
     }
 }

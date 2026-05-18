@@ -2,7 +2,7 @@
 //!
 //! Pidge identifies messages by an 8-char hex short hash derived from `sha256` of
 //! the Graph ID. The full Graph ID is opaque (~100+ characters) and not human-typable;
-//! the short hash is intended for `pidge inbox show <fragment>` substring lookup.
+//! the short hash is intended for `pidge mail show <fragment>` substring lookup.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

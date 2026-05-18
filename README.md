@@ -47,17 +47,17 @@ Sign in to multiple accounts and pidge merges reads across all of them by defaul
 
 ```bash
 # Shortcut: list 25 most recent across every signed-in account
-pidge inbox
+pidge mail
 
 # Shortcut: open a specific message by a fragment of its 8-char ID
-pidge inbox 3515
+pidge mail 3515
 
 # Explicit forms
-pidge inbox list --account kristofer@mklab.se --unread -n 50
-pidge inbox show 3515 --mark-read
+pidge mail list --account kristofer@mklab.se --unread -n 50
+pidge mail show 3515 --mark-read
 
 # Pipe to scripts
-pidge inbox --json | jq '.[].subject'
+pidge mail --json | jq '.[].subject'
 ```
 
 ## Quick Start

@@ -1,4 +1,4 @@
-//! `pidge inbox show <fragment>` — display a single message with full body.
+//! `pidge mail show <fragment>` — display a single message with full body.
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Local, Utc};
@@ -32,7 +32,7 @@ pub async fn run(
     let (short_hash, message_ref) = match cache.find_by_fragment(&fragment) {
         CacheLookup::NotFound => {
             return Err(anyhow!(
-                "No message found for fragment '{fragment}'. Run `pidge inbox list` to refresh the cache."
+                "No message found for fragment '{fragment}'. Run `pidge mail list` to refresh the cache."
             ));
         }
         CacheLookup::Ambiguous(matches) => {
@@ -53,7 +53,7 @@ pub async fn run(
             // Purge stale cache entry.
             purge_from_cache(&short_hash)?;
             return Err(anyhow!(
-                "Message not found on server. It may have been deleted. Run `pidge inbox list` to refresh."
+                "Message not found on server. It may have been deleted. Run `pidge mail list` to refresh."
             ));
         }
         Err(e) => return Err(e.into()),
@@ -152,7 +152,7 @@ fn render_header_and_body(full: &FullMessage) -> Result<()> {
     println!(
         "{}   {}{}",
         "Subject:".bold(),
-        crate::commands::inbox::flag_marker(full.flag_status),
+        crate::commands::mail::flag_marker(full.flag_status),
         full.subject.bold().bright_yellow()
     );
     println!(
@@ -495,7 +495,7 @@ mod tests {
     // weighing in. Every time a real-world email renders poorly, the workflow
     // is:
     //
-    //   1. `pidge inbox show <fragment> --raw-html > tests/fixtures/raw/<name>.html`
+    //   1. `pidge mail show <fragment> --raw-html > tests/fixtures/raw/<name>.html`
     //   2. Anonymize the raw file into `tests/fixtures/<name>.html` (Lorem
     //      Ipsum text, example.com URLs, structure preserved).
     //   3. Add a test case here that asserts the desired rendering.

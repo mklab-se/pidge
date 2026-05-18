@@ -24,7 +24,7 @@ crates/
       cli.rs            # Clap CLI definitions
       banner.rs         # ASCII logo
       update.rs         # Crates.io update checker
-      commands/         # `pidge ai`, `pidge account`, `pidge inbox`, `pidge completion`, etc.
+      commands/         # `pidge ai`, `pidge account`, `pidge mail`, `pidge completion`, etc.
   pidge-core/           # Provider-agnostic types: Account, Config, Message
   pidge-client/         # Microsoft Graph client, OAuth flows, keychain token storage
     src/
@@ -73,13 +73,13 @@ Use the `/release` slash command (see `.claude/commands/release.md`):
 
 ## Workflow: when a real e-mail renders badly
 
-The HTML renderer (`render_html_body` in `commands/inbox_show.rs`) is exercised by snapshot tests against anonymized fixtures of real-world e-mails. **Don't fix rendering bugs against a live mailbox — convert the bad e-mail into a fixture first.** That way the regression is caught forever and we never need a live token to repro.
+The HTML renderer (`render_html_body` in `commands/mail_show.rs`) is exercised by snapshot tests against anonymized fixtures of real-world e-mails. **Don't fix rendering bugs against a live mailbox — convert the bad e-mail into a fixture first.** That way the regression is caught forever and we never need a live token to repro.
 
 The loop:
 
-1. **Capture the raw HTML.** From the bad message's row in `pidge inbox`, copy its short hash and run:
+1. **Capture the raw HTML.** From the bad message's row in `pidge mail`, copy its short hash and run:
    ```bash
-   cargo run -- inbox show <fragment> --raw-html > crates/pidge/tests/fixtures/raw/<name>.html
+   cargo run -- mail show <fragment> --raw-html > crates/pidge/tests/fixtures/raw/<name>.html
    ```
    `tests/fixtures/raw/` is gitignored — these files contain real user data and must never be committed.
 

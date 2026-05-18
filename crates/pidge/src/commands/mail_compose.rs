@@ -1,4 +1,4 @@
-//! `pidge inbox send` / `inbox reply` / `inbox reply-all` / `inbox forward`.
+//! `pidge mail new` / `mail reply` / `mail reply-all` / `mail forward`.
 //!
 //! Two paths through each command:
 //!
@@ -29,9 +29,9 @@ use pidge_core::{Config, MessageCache, short_hash};
 use crate::cli::{ComposeArgs, ForwardArgs, ReplyArgs};
 use crate::commands::attachments::upload_files;
 use crate::commands::compose_form;
-use crate::commands::inbox_fragment::resolve;
+use crate::commands::mail_fragment::resolve;
 
-// ---- inbox send -----------------------------------------------------------
+// ---- mail new -------------------------------------------------------------
 
 pub async fn send(args: ComposeArgs) -> Result<()> {
     let config = Config::load()?;
@@ -183,7 +183,7 @@ fn cache_and_report_draft(account: &str, message_id: &str, action: &str) -> Resu
     Ok(())
 }
 
-// ---- inbox reply / reply-all ---------------------------------------------
+// ---- mail reply / reply-all ----------------------------------------------
 
 pub async fn reply(fragment: String, args: ReplyArgs, reply_all: bool) -> Result<()> {
     let (short, msg) = resolve(&fragment)?;
@@ -272,7 +272,7 @@ pub async fn reply(fragment: String, args: ReplyArgs, reply_all: bool) -> Result
     Ok(())
 }
 
-// ---- inbox forward --------------------------------------------------------
+// ---- mail forward ---------------------------------------------------------
 
 pub async fn forward(fragment: String, args: ForwardArgs) -> Result<()> {
     let (short, msg) = resolve(&fragment)?;

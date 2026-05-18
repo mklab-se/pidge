@@ -1,4 +1,4 @@
-//! `pidge inbox delete` — single or bulk delete with safety gates.
+//! `pidge mail delete` — single or bulk delete with safety gates.
 //!
 //! Graph's DELETE /me/messages/{id} moves the message to Deleted Items (it's
 //! not a hard delete). Recovery is still possible from Outlook's Deleted
@@ -20,7 +20,7 @@ use inquire::Confirm;
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
 
-use crate::commands::inbox_fragment::{purge_from_cache, resolve};
+use crate::commands::mail_fragment::{purge_from_cache, resolve};
 
 pub async fn run(
     fragment: Option<String>,
@@ -32,7 +32,7 @@ pub async fn run(
         (Some(f), None) => delete_single(f, yes).await,
         (None, Some(spec)) => delete_bulk(spec, accounts, yes).await,
         (None, None) => Err(anyhow!(
-            "Specify a fragment or `--older-than <spec>`. Run `pidge inbox delete --help`."
+            "Specify a fragment or `--older-than <spec>`. Run `pidge mail delete --help`."
         )),
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
     }

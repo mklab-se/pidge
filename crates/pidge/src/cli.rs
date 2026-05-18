@@ -46,10 +46,10 @@ pub enum Commands {
         command: AccountCommands,
     },
 
-    /// Read, search, send, reply, forward, flag, archive, or delete messages
-    Inbox {
+    /// Read, search, send, reply, forward, flag, archive, or delete e-mail
+    Mail {
         #[command(subcommand)]
-        command: InboxCommands,
+        command: MailCommands,
     },
 
     /// Manage the trusted-senders list (auto-renders inline images from these senders)
@@ -173,7 +173,7 @@ impl From<StorageBackendArg> for pidge_core::TokenStorage {
 }
 
 #[derive(clap::Subcommand)]
-pub enum InboxCommands {
+pub enum MailCommands {
     /// List messages in the inbox, merged across all signed-in accounts
     List {
         /// Filter to a specific account (repeatable for a subset)
@@ -289,8 +289,8 @@ pub enum InboxCommands {
         yes: bool,
     },
 
-    /// Compose and send a new e-mail (wizard by default; provide flags to skip prompts)
-    Send(ComposeArgs),
+    /// Compose a new e-mail (full-screen form; pass flags + `-y` to skip the form for scripting)
+    New(ComposeArgs),
 
     /// Reply to a message (the original sender only)
     Reply {
@@ -318,8 +318,8 @@ pub enum InboxCommands {
     },
 }
 
-/// Flags shared between `inbox send` and (mostly) the explicit forms of
-/// reply/forward. All optional — wizard prompts fill in what's missing.
+/// Flags shared between `mail new` and (mostly) the explicit forms of
+/// reply/forward. All optional — the TUI form fills in what's missing.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct ComposeArgs {
     /// Account to send from (defaults to `account default e-mail`)
@@ -435,14 +435,14 @@ pub struct ForwardArgs {
     pub attach: Vec<std::path::PathBuf>,
 }
 
-/// Subcommand names that `Inbox` accepts directly. Used by the argv pre-processor
-/// in `main.rs` to decide whether `pidge inbox <X>` should route to `inbox show X`
+/// Subcommand names that `Mail` accepts directly. Used by the argv pre-processor
+/// in `main.rs` to decide whether `pidge mail <X>` should route to `mail show X`
 /// (X is a fragment) or pass through to clap (X is a subcommand).
 ///
-/// Keep this list in sync with [`InboxCommands`]. When you add a new variant,
+/// Keep this list in sync with [`MailCommands`]. When you add a new variant,
 /// add its kebab-case name here too — otherwise users will see "No message
 /// found for fragment '<new-subcommand>'" instead of the new behavior.
-pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &[
+pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
     "list",
     "show",
     "search",
@@ -451,7 +451,7 @@ pub const INBOX_SUBCOMMAND_NAMES: &[&str] = &[
     "flag",
     "unflag",
     "archive",
-    "send",
+    "new",
     "reply",
     "reply-all",
     "forward",
@@ -573,8 +573,8 @@ impl Cli {
             Some(Commands::Account { command }) => {
                 crate::commands::account::run(command, self.json).await
             }
-            Some(Commands::Inbox { command }) => {
-                crate::commands::inbox::run(command, self.json).await
+            Some(Commands::Mail { command }) => {
+                crate::commands::mail::run(command, self.json).await
             }
             Some(Commands::Trust { command }) => {
                 crate::commands::trust::run(command, self.json).await

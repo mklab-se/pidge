@@ -10,7 +10,7 @@ use pidge_core::{Config, Message, MessageCache, short_hash};
 
 use crate::cli::{DraftAttachmentCommands, DraftsCommands};
 use crate::commands::attachments::upload_files;
-use crate::commands::inbox_fragment::{purge_from_cache, resolve};
+use crate::commands::mail_fragment::{purge_from_cache, resolve};
 
 pub async fn run(command: DraftsCommands, json: bool) -> Result<()> {
     match command {
@@ -21,9 +21,9 @@ pub async fn run(command: DraftsCommands, json: bool) -> Result<()> {
             compact,
         } => list(account, limit, page, compact, json).await,
         DraftsCommands::Show { fragment } => {
-            // Drafts are stored in the same /me/messages namespace as inbox
-            // messages, so the existing `inbox show` rendering works as-is.
-            crate::commands::inbox_show::run(fragment, false, false, false, json).await
+            // Drafts are stored in the same /me/messages namespace as mail
+            // messages, so the existing `mail show` rendering works as-is.
+            crate::commands::mail_show::run(fragment, false, false, false, json).await
         }
         DraftsCommands::Edit { fragment } => edit(fragment).await,
         DraftsCommands::Send { fragment, yes } => send(fragment, yes).await,

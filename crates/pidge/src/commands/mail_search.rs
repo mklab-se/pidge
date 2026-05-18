@@ -1,4 +1,4 @@
-//! `pidge inbox search <query>` — full-text search using Graph's `$search` KQL.
+//! `pidge mail search <query>` — full-text search using Graph's `$search` KQL.
 //!
 //! Results come back in Graph's relevance order (not date), and search is
 //! across all mail folders, not just Inbox — which is generally what users
@@ -75,7 +75,7 @@ pub async fn run(
     // accounts so the table doesn't blow up on multi-account searches.
     messages.truncate(limit);
 
-    // Cache the IDs so the user can `pidge inbox show <fragment>` straight from
+    // Cache the IDs so the user can `pidge mail show <fragment>` straight from
     // the search results.
     {
         let mut cache = MessageCache::load()?;
@@ -134,7 +134,7 @@ fn print_results(messages: &[Message], hide_account: bool, compact: bool) -> Res
         } else {
             m.from.name.clone()
         };
-        let flag = crate::commands::inbox::flag_marker(m.flag_status);
+        let flag = crate::commands::mail::flag_marker(m.flag_status);
         let subject_cell = if compact || m.preview.is_empty() {
             format!("{flag}{}", style_subject(&m.subject, m.is_read))
         } else {

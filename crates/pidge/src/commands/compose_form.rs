@@ -1,5 +1,5 @@
-//! Full-screen TUI compose form — used by `inbox send`, `inbox reply`,
-//! `inbox reply-all`, `inbox forward`, and `drafts edit`.
+//! Full-screen TUI compose form — used by `mail new` and `drafts edit`
+//! (later: `mail reply`, `mail reply-all`, `mail forward`).
 //!
 //! Replaces the inquire wizard's field-by-field prompt sequence with a single
 //! ratatui form so users can navigate between fields, see the whole message

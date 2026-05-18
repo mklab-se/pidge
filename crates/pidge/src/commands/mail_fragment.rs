@@ -1,5 +1,5 @@
-//! Shared helpers for inbox subcommands that take a fragment of the 8-char
-//! short hash (`pidge inbox show 3515`, `pidge inbox flag 3515`, …).
+//! Shared helpers for mail subcommands that take a fragment of the 8-char
+//! short hash (`pidge mail show 3515`, `pidge mail flag 3515`, …).
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
@@ -14,7 +14,7 @@ pub fn resolve(fragment: &str) -> Result<(String, CachedMessageRef)> {
     let cache = MessageCache::load()?;
     match cache.find_by_fragment(fragment) {
         CacheLookup::NotFound => Err(anyhow!(
-            "No message found for fragment '{fragment}'. Run `pidge inbox` to refresh the cache."
+            "No message found for fragment '{fragment}'. Run `pidge mail` to refresh the cache."
         )),
         CacheLookup::Ambiguous(matches) => {
             print_ambiguous(&matches);

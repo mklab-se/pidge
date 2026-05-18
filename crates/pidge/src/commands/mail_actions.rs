@@ -1,4 +1,4 @@
-//! Simple inbox actions that operate on a single message by fragment:
+//! Simple mail actions that operate on a single message by fragment:
 //! `mark-read`, `mark-unread`, `flag`, `unflag`, `archive`.
 //!
 //! All five share the same shape — resolve the fragment, hit a Graph endpoint,
@@ -10,7 +10,7 @@ use colored::Colorize;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
 
-use crate::commands::inbox_fragment::{purge_from_cache, resolve};
+use crate::commands::mail_fragment::{purge_from_cache, resolve};
 
 pub async fn mark_read(fragment: String) -> Result<()> {
     let (short_hash, msg) = resolve(&fragment)?;
@@ -89,7 +89,7 @@ where
             let _ = purge_from_cache(short_hash);
             Err(anyhow!(
                 "Message not found on server (it may have been deleted or moved). \
-                 Run `pidge inbox` to refresh the cache."
+                 Run `pidge mail` to refresh the cache."
             ))
         }
         Err(e) => Err(e.into()),
