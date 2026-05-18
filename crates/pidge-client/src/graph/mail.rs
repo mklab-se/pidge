@@ -358,9 +358,15 @@ pub async fn list_attachments(
     access_token: &str,
     message_id: &str,
 ) -> Result<Vec<pidge_core::Attachment>, ClientError> {
+    // contentId is intentionally NOT in $select: it lives on the
+    // `microsoft.graph.fileAttachment` subtype, not the base attachment
+    // type, so Graph rejects the query with a 400 when it's in a flat
+    // select clause. We don't currently use content_id in the CLI; if we
+    // ever need it (e.g. to match inline `cid:` references), per-attachment
+    // GETs return it without a cast.
     let url = format!(
         "{base_url}/me/messages/{message_id}/attachments\
-         ?$select=id,name,contentType,size,isInline,contentId"
+         ?$select=id,name,contentType,size,isInline"
     );
     let resp = http.get(&url).bearer_auth(access_token).send().await?;
     let status = resp.status();
