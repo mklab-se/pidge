@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-19
+
+### Added
+
+- **Mail commands** (renamed from `inbox`): `pidge mail list`, `show`, `search`, `reply`, `reply-all`, `forward`, `mark-read`, `mark-unread`, `archive`, `flag`, `unflag`, `delete` (single + bulk-by-date with `-y` safety gate), and `new` (formerly `inbox send`)
+- **Drafts:** `pidge drafts list/show/edit/send/delete` plus `pidge drafts attachments list/add/remove`
+- **Full-screen TUI compose form** (ratatui + tui-textarea) replacing the line-by-line wizard; pre-fills from `--to/--subject/--body/--attach` flags
+- **Attachments on compose** with a 3 MB simple-upload limit and a clear error past the threshold
+- **`pidge mail` default switched to card layout** with a per-message preview and dim grey rule between cards; domain-only labels when a domain has a single signed-in account
+- **New output flags** on `pidge mail list` and `pidge mail search`: `--table` (one row per message, pipe-friendly) and `--full` (entire body inline)
+- **Richer previews:** message body fetched from Graph in its native content type; `📎` indicator surfaces messages with attachments
+- **Pagination** on `pidge mail` via `-p`/`--page`
+- **Full-text search** across all signed-in accounts via `pidge mail search`
+- **`pidge ai skill --from-source`** mode emits a SKILL.md whose invocation prefix runs pidge via `cargo run` from the current working directory
+- **AI-first repositioning** of README.md and CLAUDE.md — pidge is designed to be operated by AI coding agents on the user's behalf
+
+### Changed
+
+- **OAuth flow** replaced device-code with authorization-code + PKCE backed by a local HTTP redirect server (faster, fewer copy-paste steps, no polling)
+- **`pidge auth` renamed to `pidge account`** across the board
+- **`pidge inbox` renamed to `pidge mail`**; `inbox send` is now `mail new`
+- **`pidge mail new`** drops the `-y` flag in favour of `--confirm` for opt-in TUI review; non-interactive sends require no extra flag when `--to/--subject/--body` are all provided
+- **Empty subject/body warning** before sending
+- **Compose validation:** stay in the form on errors and focus the offending field instead of aborting
+- **TUI cursor** rendered only on the focused field
+- **`pidge ai skill`** no longer ships `--reference`; the emitted skill teaches discovery via `pidge --help` so it keeps working as new commands ship
+
+### Fixed
+
+- Auto-backfill an empty `tenant_id` from the access-token JWT so personal-MSA accounts persist correctly
+- Drop `contentId` from the attachment-list `$select` (Graph returns 400)
+- Send an explicit `Content-Length: 0` on Graph's `/sendMail` endpoint
+- Personal-MSA sign-in: register the native-client redirect URI
+
+### Removed
+
+- `crates/pidge/doc/ai-reference.md` — made obsolete by the new skill design (the SKILL.md now teaches discovery instead of bundling a static reference)
+- `pidge ai skill --reference` flag (see above)
+
 ## [0.2.0] - 2026-05-14
 
 ### Added
