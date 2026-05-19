@@ -27,6 +27,7 @@ pub enum UnsubscribeMethod {
 
     /// HTTPS URL exists but no one-click marker. Won't auto-drive; the
     /// caller should surface the URL for a manual click.
+    /// HTTPS only — plaintext `http://` entries are ignored on purpose.
     HttpsOnly(String),
 
     /// No `List-Unsubscribe` header at all.
@@ -50,9 +51,7 @@ pub fn parse_unsubscribe(headers: &[(String, String)]) -> UnsubscribeMethod {
             if mailto_entry.is_none() {
                 mailto_entry = parse_mailto(rest);
             }
-        } else if (entry.starts_with("https://") || entry.starts_with("http://"))
-            && https_url.is_none()
-        {
+        } else if entry.starts_with("https://") && https_url.is_none() {
             https_url = Some(entry.to_string());
         }
     }
@@ -61,20 +60,16 @@ pub fn parse_unsubscribe(headers: &[(String, String)]) -> UnsubscribeMethod {
         .map(|v| v.trim().eq_ignore_ascii_case("List-Unsubscribe=One-Click"))
         .unwrap_or(false);
 
-    if let (Some(url), true) = (https_url.clone(), one_click) {
-        return UnsubscribeMethod::OneClickPost(url);
-    }
-    if let Some((address, subject, body)) = mailto_entry {
-        return UnsubscribeMethod::Mailto {
+    match (one_click, https_url, mailto_entry) {
+        (true, Some(url), _) => UnsubscribeMethod::OneClickPost(url),
+        (_, _, Some((address, subject, body))) => UnsubscribeMethod::Mailto {
             address,
             subject,
             body,
-        };
+        },
+        (_, Some(url), _) => UnsubscribeMethod::HttpsOnly(url),
+        _ => UnsubscribeMethod::None,
     }
-    if let Some(url) = https_url {
-        return UnsubscribeMethod::HttpsOnly(url);
-    }
-    UnsubscribeMethod::None
 }
 
 fn find_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
@@ -265,5 +260,24 @@ mod tests {
     fn malformed_header_with_only_whitespace_is_none() {
         let h = vec![hdr("List-Unsubscribe", "   ")];
         assert_eq!(parse_unsubscribe(&h), UnsubscribeMethod::None);
+    }
+
+    #[test]
+    fn one_click_marker_without_https_falls_back_to_mailto() {
+        // Sender includes `List-Unsubscribe-Post` but only a mailto URL.
+        // Per RFC 8058 the marker only applies to HTTPS; we must fall
+        // back to the mailto rather than picking nothing.
+        let h = vec![
+            hdr("List-Unsubscribe", "<mailto:unsub@example.com>"),
+            hdr("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"),
+        ];
+        assert_eq!(
+            parse_unsubscribe(&h),
+            UnsubscribeMethod::Mailto {
+                address: "unsub@example.com".into(),
+                subject: None,
+                body: None,
+            }
+        );
     }
 }
