@@ -303,6 +303,12 @@ These are sketches, not contracts. Always check `--help` for exact flags.
   `{invoke} mail forward <hash> --to user@example.com --body \"...\" -y`.
 - **Manage state**: `mail flag`, `mail unflag`, `mail mark-read`,
   `mail mark-unread`, `mail archive`.
+- **Unsubscribe from a sender**: `{invoke} mail unsubscribe <hash> -y`.
+  Reads the message's RFC 2369 `List-Unsubscribe` header and acts:
+  RFC 8058 one-click HTTPS POST when the sender offers it, otherwise a
+  `mailto:` send from the receiving account, otherwise prints the URL
+  for a manual browser click. Use this when the user asks to
+  unsubscribe from a sender or to stop e-mails from someone.
 
 ## Error handling
 

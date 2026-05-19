@@ -118,6 +118,7 @@ fn confirm(yes_flag: bool, prompt: &str) -> Result<bool> {
 async fn one_click_post(url: &str) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .context("building HTTP client")?;
     let resp = client
