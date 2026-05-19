@@ -75,6 +75,9 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             account,
             yes,
         } => crate::commands::mail_delete::run(fragment, older_than, account, yes).await,
+        MailCommands::Unsubscribe { fragment, yes } => {
+            crate::commands::mail_unsubscribe::run(fragment, yes).await
+        }
     }
 }
 

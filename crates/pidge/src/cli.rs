@@ -309,6 +309,18 @@ pub enum MailCommands {
         yes: bool,
     },
 
+    /// Unsubscribe from the sender of a message using its RFC 2369
+    /// `List-Unsubscribe` header (RFC 8058 one-click POST when offered;
+    /// otherwise mailto; otherwise prints the URL).
+    Unsubscribe {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
     /// Compose a new e-mail (full-screen form; pass flags + `-y` to skip the form for scripting)
     New(ComposeArgs),
 
@@ -479,6 +491,7 @@ pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
     "reply-all",
     "forward",
     "delete",
+    "unsubscribe",
     "help",
 ];
 
