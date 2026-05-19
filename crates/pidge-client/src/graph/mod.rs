@@ -5,10 +5,10 @@ mod me;
 
 pub use mail::{
     InboxPage, Outgoing, add_attachment, create_draft, create_forward_draft,
-    create_reply_all_draft, create_reply_draft, delete_attachment, delete_message, forward_message,
-    get_attachment_bytes, get_message, list_attachments, list_drafts, list_inbox, mark_read,
-    mark_unread, move_message, reply_all_message, reply_message, search_messages, send_draft,
-    send_mail, set_flag, update_draft,
+    create_reply_all_draft, create_reply_draft, delete_attachment, delete_message,
+    fetch_message_headers, forward_message, get_attachment_bytes, get_message, list_attachments,
+    list_drafts, list_inbox, mark_read, mark_unread, move_message, reply_all_message,
+    reply_message, search_messages, send_draft, send_mail, set_flag, update_draft,
 };
 pub use me::{Me, get_me};
 
@@ -281,6 +281,16 @@ impl GraphClient {
     ) -> Result<pidge_core::FullMessage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::get_message(&self.http, &self.base_url, &token, account, message_id).await
+    }
+
+    /// GET /me/messages/{id}?$select=internetMessageHeaders.
+    pub async fn fetch_message_headers(
+        &self,
+        account: &str,
+        message_id: &str,
+    ) -> Result<Vec<(String, String)>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::fetch_message_headers(&self.http, &self.base_url, &token, message_id).await
     }
 
     /// GET /me/messages/{id}/attachments.

@@ -378,6 +378,46 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag"
     })
 }
 
+/// GET /me/messages/{id}?$select=internetMessageHeaders — fetch just the
+/// raw RFC 5322 headers for a message. Used by `pidge mail unsubscribe`
+/// to locate `List-Unsubscribe` / `List-Unsubscribe-Post`.
+pub async fn fetch_message_headers(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<Vec<(String, String)>, ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}?$select=internetMessageHeaders");
+    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let body: GraphHeadersResponse = resp.json().await?;
+    Ok(body
+        .internet_message_headers
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| (h.name, h.value))
+        .collect())
+}
+
+#[derive(serde::Deserialize)]
+struct GraphHeadersResponse {
+    #[serde(rename = "internetMessageHeaders", default)]
+    internet_message_headers: Option<Vec<GraphHeader>>,
+}
+
+#[derive(serde::Deserialize)]
+struct GraphHeader {
+    name: String,
+    value: String,
+}
+
 /// GET /me/messages/{id}/attachments — list attachments without fetching bytes.
 /// Filters to file attachments only.
 pub async fn list_attachments(
@@ -1265,5 +1305,31 @@ mod tests {
 
         let http = reqwest::Client::new();
         mark_read(&http, &server.uri(), "AT", "MSG").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_message_headers_parses_array() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/me/messages/.+$"))
+            .and(query_param("$select", "internetMessageHeaders"))
+            .and(header("authorization", "Bearer AT"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "internetMessageHeaders": [
+                    { "name": "List-Unsubscribe", "value": "<mailto:u@x>, <https://x/u>" },
+                    { "name": "List-Unsubscribe-Post", "value": "List-Unsubscribe=One-Click" }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let headers = fetch_message_headers(&http, &server.uri(), "AT", "MSGID")
+            .await
+            .unwrap();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0].0, "List-Unsubscribe");
+        assert_eq!(headers[0].1, "<mailto:u@x>, <https://x/u>");
+        assert_eq!(headers[1].0, "List-Unsubscribe-Post");
     }
 }
