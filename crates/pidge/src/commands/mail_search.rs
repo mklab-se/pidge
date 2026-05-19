@@ -11,11 +11,15 @@ use futures::future::join_all;
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::{Config, Message, MessageCache, short_hash};
 
+use crate::commands::mail::{MessageRow, account_labels, render};
+
 pub async fn run(
     query: String,
     account_filter: Vec<String>,
     limit: usize,
     compact: bool,
+    table: bool,
+    full: bool,
     json: bool,
 ) -> Result<()> {
     let config = Config::load()?;
@@ -71,8 +75,8 @@ pub async fn run(
         return Err(anyhow!("All searched accounts failed."));
     }
 
-    // Graph search returns by relevance, but trim to `limit` total across
-    // accounts so the table doesn't blow up on multi-account searches.
+    // Graph search returns by relevance; trim to `limit` total across accounts
+    // so a wide multi-account search doesn't flood the terminal.
     messages.truncate(limit);
 
     // Cache the IDs so the user can `pidge mail show <fragment>` straight from
@@ -87,84 +91,23 @@ pub async fn run(
         cache.save()?;
     }
 
-    if json {
-        let rows: Vec<serde_json::Value> = messages
-            .iter()
-            .map(|m| {
-                serde_json::json!({
-                    "id": short_hash(&m.id),
-                    "graph_id": m.id,
-                    "account": m.account,
-                    "from": m.from,
-                    "subject": m.subject,
-                    "received_at": m.received_at,
-                    "is_read": m.is_read,
-                    "preview": m.preview,
-                })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&rows)?);
-        return Ok(());
-    }
-
-    print_results(&messages, target_emails.len() == 1, compact)
-}
-
-fn print_results(messages: &[Message], hide_account: bool, compact: bool) -> Result<()> {
-    use comfy_table::{ContentArrangement, Table};
-
-    if messages.is_empty() {
+    if messages.is_empty() && !json {
         println!("No matches.");
         return Ok(());
     }
 
-    let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
-    table.set_content_arrangement(ContentArrangement::Dynamic);
+    let rows: Vec<MessageRow> = messages
+        .into_iter()
+        .map(|m| {
+            let h = short_hash(&m.id);
+            MessageRow {
+                message: m,
+                short_hash: h,
+            }
+        })
+        .collect();
 
-    let mut header = vec!["ID", "ACCOUNT", "FROM", "SUBJECT"];
-    if hide_account {
-        header.remove(1);
-    }
-    table.set_header(header);
-
-    for m in messages {
-        let from = if m.from.name.is_empty() {
-            m.from.address.clone()
-        } else {
-            m.from.name.clone()
-        };
-        let flag = crate::commands::mail::flag_marker(m.flag_status);
-        let subject_cell = if compact || m.preview.is_empty() {
-            format!("{flag}{}", style_subject(&m.subject, m.is_read))
-        } else {
-            format!(
-                "{flag}{}\n{}",
-                style_subject(&m.subject, m.is_read),
-                crate::output::linkify_text(&m.preview).dimmed()
-            )
-        };
-        let mut cells = vec![
-            short_hash(&m.id).dimmed().to_string(),
-            m.account.clone(),
-            from,
-            subject_cell,
-        ];
-        if hide_account {
-            cells.remove(1);
-        }
-        table.add_row(cells);
-    }
-
-    println!("{table}");
-    Ok(())
-}
-
-fn style_subject(subject: &str, is_read: bool) -> String {
-    let linked = crate::output::linkify_text(subject);
-    if is_read {
-        linked.cyan().to_string()
-    } else {
-        linked.bold().magenta().to_string()
-    }
+    let single_account = target_emails.len() == 1;
+    let labels = account_labels(&target_emails);
+    render(&rows, single_account, &labels, compact, table, full, json)
 }

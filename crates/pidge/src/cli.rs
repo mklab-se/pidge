@@ -90,15 +90,19 @@ pub enum AiCommands {
     Config,
     /// Show AI status (same as running `pidge ai` without a subcommand)
     Status,
-    /// AI agent skill information — helps set up Claude Code skills for pidge
+    /// AI agent skill information — emits a SKILL.md so AI agents (Claude
+    /// Code, Codex, Copilot, etc.) can drive pidge on the user's behalf
     Skill {
-        /// Output the skill markdown content (ready to save as a skill file)
+        /// Output the SKILL.md content (ready to save as a skill file)
         #[arg(long)]
         emit: bool,
 
-        /// Output detailed reference documentation for AI agents
+        /// When emitting, build a skill that invokes pidge via `cargo run`
+        /// from the current working directory (the pidge source tree).
+        /// Useful when you're developing against pidge from source instead
+        /// of `cargo install pidge`. Implies --emit.
         #[arg(long)]
-        reference: bool,
+        from_source: bool,
     },
 }
 
@@ -192,9 +196,17 @@ pub enum MailCommands {
         #[arg(long)]
         unread: bool,
 
-        /// One row per message (no preview lines)
-        #[arg(short = 'c', long)]
+        /// Card layout with a single-line preview per message
+        #[arg(short = 'c', long, conflicts_with_all = ["table", "full"])]
         compact: bool,
+
+        /// Tabular layout (one row per message; useful for piping to other tools)
+        #[arg(short = 't', long, conflicts_with = "full")]
+        table: bool,
+
+        /// Show the entire message body for each result instead of a preview
+        #[arg(short = 'f', long)]
+        full: bool,
     },
 
     /// Display a single message identified by a fragment of its short hash
@@ -229,9 +241,17 @@ pub enum MailCommands {
         #[arg(short = 'n', long, default_value = "25")]
         limit: usize,
 
-        /// One row per message (no preview lines)
-        #[arg(short = 'c', long)]
+        /// Card layout with a single-line preview per message
+        #[arg(short = 'c', long, conflicts_with_all = ["table", "full"])]
         compact: bool,
+
+        /// Tabular layout (one row per message; useful for piping to other tools)
+        #[arg(short = 't', long, conflicts_with = "full")]
+        table: bool,
+
+        /// Show the entire message body for each result instead of a preview
+        #[arg(short = 'f', long)]
+        full: bool,
     },
 
     /// Mark a message as read

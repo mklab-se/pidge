@@ -3,7 +3,6 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Datelike, Local, Utc};
 use colored::Colorize;
-use comfy_table::{ContentArrangement, Table};
 use futures::future::join_all;
 use serde::Serialize;
 
@@ -14,9 +13,9 @@ use crate::cli::MailCommands;
 use crate::output::linkify_text;
 
 /// Pair of message and its computed short hash, for rendering.
-struct MessageRow {
-    message: Message,
-    short_hash: String,
+pub(crate) struct MessageRow {
+    pub(crate) message: Message,
+    pub(crate) short_hash: String,
 }
 
 pub async fn run(command: MailCommands, json: bool) -> Result<()> {
@@ -27,7 +26,9 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             page,
             unread,
             compact,
-        } => list(account, limit, page, unread, compact, json).await,
+            table,
+            full,
+        } => list(account, limit, page, unread, compact, table, full, json).await,
         MailCommands::Show {
             fragment,
             mark_read,
@@ -41,7 +42,12 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             account,
             limit,
             compact,
-        } => crate::commands::mail_search::run(query, account, limit, compact, json).await,
+            table,
+            full,
+        } => {
+            crate::commands::mail_search::run(query, account, limit, compact, table, full, json)
+                .await
+        }
         MailCommands::MarkRead { fragment } => {
             crate::commands::mail_actions::mark_read(fragment).await
         }
@@ -72,12 +78,15 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn list(
     account_filter: Vec<String>,
     limit: usize,
     page: usize,
     unread_only: bool,
     compact: bool,
+    table: bool,
+    full: bool,
     json: bool,
 ) -> Result<()> {
     let config = Config::load()?;
@@ -161,22 +170,54 @@ async fn list(
     let single_account = target_emails.len() == 1;
     let labels = account_labels(&target_emails);
 
-    if json {
-        return render_json(&rows);
-    }
-    if compact {
-        render_text_compact(&rows, single_account, &labels)
-    } else {
-        render_text_rich(&rows, single_account, &labels)
-    }
+    render(&rows, single_account, &labels, compact, table, full, json)
 }
+
+/// Pick a renderer based on the user's output flags. Centralised so
+/// `pidge mail list` and `pidge mail search` produce the same shape.
+///
+/// `--json` always wins (so scripting paths are predictable). Then
+/// `--table` for tabular, then `--full` for the entire body inlined,
+/// `--compact` for a 1-line preview per card, otherwise the default
+/// 8-line preview card layout.
+pub(crate) fn render(
+    rows: &[MessageRow],
+    hide_account: bool,
+    labels: &std::collections::HashMap<String, String>,
+    compact: bool,
+    table: bool,
+    full: bool,
+    json: bool,
+) -> Result<()> {
+    if json {
+        return render_json(rows);
+    }
+    if table {
+        return render_table(rows, hide_account, labels);
+    }
+    // 8 lines per card by default — comfortably inside the 5–10 sweet
+    // spot regardless of terminal width. Short emails fill fewer lines
+    // naturally; long emails show 8 lines with a trailing `…` to signal
+    // there's more. `--compact` collapses to a single preview line, and
+    // `--full` removes the cap entirely so the whole body is shown.
+    let preview_lines = if compact {
+        1
+    } else if full {
+        usize::MAX
+    } else {
+        DEFAULT_PREVIEW_LINES
+    };
+    render_cards(rows, hide_account, labels, preview_lines)
+}
+
+const DEFAULT_PREVIEW_LINES: usize = 8;
 
 /// Map each signed-in e-mail to its display label for list views. If a
 /// domain has only one account signed in, we shorten its label to just the
 /// domain (`kristofer@mklab.se` → `mklab.se`) since the local-part is
 /// redundant given the inbox is yours. If two accounts share a domain we
 /// keep both as full addresses to preserve disambiguation.
-fn account_labels(accounts: &[String]) -> std::collections::HashMap<String, String> {
+pub(crate) fn account_labels(accounts: &[String]) -> std::collections::HashMap<String, String> {
     use std::collections::HashMap;
     let mut domain_count: HashMap<&str, usize> = HashMap::new();
     for email in accounts {
@@ -262,63 +303,411 @@ pub fn flag_marker(status: pidge_core::FlagStatus) -> String {
     }
 }
 
-/// Card-style multi-line rendering. Each message gets three lines and a
-/// blank separator:
+/// Card-style multi-line rendering, with a dim grey horizontal rule between
+/// cards to make entry boundaries unmistakable.
 ///
-///   `<id> · <account> · <from> · <received>`     ← dimmed meta header
-///   `<flag> <subject>`                            ← bold magenta when unread
-///   `<preview>`                                   ← dimmed body excerpt
+///   `<id> · Account: <acct> · From: <from> · 📎 · <received>`   ← labeled meta header
+///   `   <flag> <subject>`                                        ← indented; bold magenta when unread
+///   `   <preview line 1>`                                        ← indented, word-wrapped
+///   `   <preview line 2>`                                          to terminal width
+///   `   ...`                                                       up to `preview_lines` lines
+///   `───────────────────`                                        ← dim grey rule
 ///
-/// Uses the full terminal width, no truncation. Avoids the narrow-subject
-/// column problem of the previous table-based rich layout.
-fn render_text_rich(
+/// `preview_lines` controls how much of the body excerpt is shown:
+/// `4` for the default rich view, `1` for `--compact`. If the wrapped
+/// preview has more lines than `preview_lines`, the last shown line ends
+/// in `…` to make the truncation visible.
+fn render_cards(
     rows: &[MessageRow],
     hide_account: bool,
     labels: &std::collections::HashMap<String, String>,
+    preview_lines: usize,
 ) -> Result<()> {
+    const INDENT: &str = "   ";
+    let width = terminal_width();
+    let sep = format!(" {} ", "·".dimmed());
+    let rule_str: String = "─".repeat(width);
+
     for (i, row) in rows.iter().enumerate() {
         if i > 0 {
-            println!();
+            println!("{}", rule_str.dimmed());
         }
         let account_label = labels
             .get(&row.message.account)
             .cloned()
             .unwrap_or_else(|| row.message.account.clone());
-        let mut header_parts: Vec<String> = Vec::with_capacity(4);
+
+        let mut header_parts: Vec<String> = Vec::with_capacity(5);
         header_parts.push(row.short_hash.dimmed().to_string());
         if !hide_account {
-            header_parts.push(account_label.dimmed().to_string());
+            header_parts.push(format!("{}{}", "Account: ".dimmed(), account_label.cyan()));
         }
-        header_parts.push(from_display(&row.message.from).bold().to_string());
+        header_parts.push(format!(
+            "{}{}",
+            "From: ".dimmed(),
+            from_display(&row.message.from).yellow().bold()
+        ));
+        if row.message.has_attachments {
+            header_parts.push("📎".to_string());
+        }
         header_parts.push(
             relative_received(row.message.received_at)
                 .dimmed()
+                .italic()
                 .to_string(),
         );
-        println!("{}", header_parts.join(&" · ".dimmed().to_string()));
+        println!("{}", header_parts.join(&sep));
 
         let flag = flag_marker(row.message.flag_status);
         println!(
-            "{flag}{}",
+            "{INDENT}{flag}{}",
             style_subject(&row.message.subject, row.message.is_read)
         );
 
-        if !row.message.preview.is_empty() {
-            let preview = linkify_text(&row.message.preview);
-            // Preview is usually 200 chars (Graph's bodyPreview). Wrap it
-            // to terminal width minus 2 cols of breathing room. Multi-line
-            // previews get rendered as-is — Graph already trims them.
-            println!("{}", preview.dimmed());
+        if preview_lines > 0 {
+            let max_chars = width.saturating_sub(INDENT.len());
+            let lines = render_preview_lines(&row.message, max_chars, preview_lines);
+            for line in lines {
+                println!("{INDENT}{line}");
+            }
         }
     }
     Ok(())
 }
 
-fn render_text_compact(
+/// Produce up to `max_lines` styled preview lines for `message`, ready to
+/// `println!` straight into a card.
+///
+/// HTML bodies go through `html2text` so each `<a href="…">text</a>` becomes
+/// an OSC 8 hyperlink with the original anchor TEXT as the clickable surface
+/// (matches `pidge mail show`). Plain-text bodies fall back to the legacy
+/// wrap-and-bare-URL-linkify path. If no body is available, we still
+/// render the 255-char `bodyPreview` snippet as plain text.
+fn render_preview_lines(message: &Message, width: usize, max_lines: usize) -> Vec<String> {
+    use pidge_core::BodyContentType;
+    let has_body = !message.body.is_empty();
+    match (has_body, message.body_content_type) {
+        (true, BodyContentType::Html) => render_html_preview(&message.body, width, max_lines),
+        (true, BodyContentType::Text) => wrap_preview(&message.body, width, max_lines)
+            .into_iter()
+            .map(|l| style_preview_line(&l))
+            .collect(),
+        (false, _) => {
+            if message.preview.is_empty() {
+                return Vec::new();
+            }
+            wrap_preview(&message.preview, width, max_lines)
+                .into_iter()
+                .map(|l| style_preview_line(&l))
+                .collect()
+        }
+    }
+}
+
+/// HTML-aware preview renderer. Flattens HTML via `html2text` (raw_mode so
+/// marketing-email layout tables read as ordinary paragraphs), then emits
+/// each visible span — dim for prose, cyan+underline+OSC 8 for `<a>`
+/// anchor text. Image alt text and `<img>` URLs are skipped entirely
+/// (the user has no use for `[Logo]` markers or clickable tracking pixels).
+fn render_html_preview(html: &str, width: usize, max_lines: usize) -> Vec<String> {
+    use html2text::render::text_renderer::{RichAnnotation, TaggedLineElement};
+
+    let no_color = crate::output::no_color();
+    let raw_lines = match html2text::config::rich()
+        .raw_mode(true)
+        .lines_from_read(html.as_bytes(), width)
+    {
+        Ok(l) => l,
+        Err(_) => return Vec::new(),
+    };
+
+    // First pass: assemble plain text per line; collapse blank runs to
+    // avoid huge gaps from flattened layout tables.
+    let mut staged: Vec<Vec<TaggedLinePiece>> = Vec::new();
+    for line in raw_lines {
+        let mut pieces: Vec<TaggedLinePiece> = Vec::new();
+        for elem in line.iter() {
+            let TaggedLineElement::Str(ts) = elem else {
+                continue;
+            };
+            let mut url: Option<&str> = None;
+            let mut is_image = false;
+            for ann in &ts.tag {
+                match ann {
+                    RichAnnotation::Image(_) => is_image = true,
+                    RichAnnotation::Link(u) => url = Some(u.as_str()),
+                    _ => {}
+                }
+            }
+            if is_image {
+                continue;
+            }
+            // Strip the same tracking-padding chars `mail show` does, so
+            // marketing previews don't waste lines on invisible joiners.
+            let cleaned: String =
+                ts.s.chars()
+                    .filter(|c| !matches!(c, '\u{200C}' | '\u{200B}' | '\u{200A}' | '\u{034F}'))
+                    .collect();
+            if cleaned.is_empty() {
+                continue;
+            }
+            pieces.push(TaggedLinePiece {
+                text: cleaned,
+                url: url.map(str::to_string),
+            });
+        }
+        staged.push(pieces);
+    }
+
+    // Drop blank lines entirely — preview budget is 5-10 lines of CONTENT,
+    // and HTML paragraph breaks would otherwise eat 30-50% of that budget
+    // showing nothing useful. Trade visual breathing room for information
+    // density; `mail show` still has the full paragraph structure.
+    let mut compact: Vec<Vec<TaggedLinePiece>> = staged
+        .into_iter()
+        .filter(|pieces| !pieces.is_empty() && pieces.iter().any(|p| !p.text.trim().is_empty()))
+        .collect();
+
+    let total = compact.len();
+    let truncated = total > max_lines;
+    compact.truncate(max_lines);
+
+    // Third pass: style.
+    let mut out: Vec<String> = compact
+        .into_iter()
+        .map(|pieces| style_html_line(pieces, no_color))
+        .collect();
+    if truncated {
+        if let Some(last) = out.last_mut() {
+            if no_color {
+                last.push('…');
+            } else {
+                last.push_str(&"…".dimmed().to_string());
+            }
+        }
+    }
+    out
+}
+
+struct TaggedLinePiece {
+    text: String,
+    url: Option<String>,
+}
+
+fn style_html_line(pieces: Vec<TaggedLinePiece>, no_color: bool) -> String {
+    let mut out = String::new();
+    for piece in pieces {
+        if no_color {
+            out.push_str(&piece.text);
+            continue;
+        }
+        if let Some(url) = piece.url {
+            // OSC 8 wrap with cyan + underline visible text — the same
+            // treatment `mail show` uses so anchor text (not the URL) is
+            // the click target.
+            out.push_str("\x1b]8;;");
+            out.push_str(&url);
+            out.push_str("\x1b\\");
+            out.push_str(&piece.text.cyan().underline().to_string());
+            out.push_str("\x1b]8;;\x1b\\");
+        } else {
+            out.push_str(&piece.text.dimmed().to_string());
+        }
+    }
+    out
+}
+
+/// Render one wrapped preview line so URLs are visually distinct from prose
+/// and clickable in supporting terminals.
+///
+/// - Non-URL stretches are dimmed (preserves the "preview is secondary
+///   context" feel of the card layout).
+/// - URLs are wrapped with an OSC 8 escape so the terminal makes them
+///   clickable, with the visible text styled cyan + underlined — the same
+///   convention `pidge mail show` uses for HTML anchors.
+fn style_preview_line(line: &str) -> String {
+    use linkify::{LinkFinder, LinkKind};
+    if crate::output::no_color() {
+        return line.to_string();
+    }
+    let finder = LinkFinder::new();
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    for link in finder.links(line) {
+        if !matches!(link.kind(), LinkKind::Url) {
+            continue;
+        }
+        let (start, end) = (link.start(), link.end());
+        if cursor < start {
+            out.push_str(&line[cursor..start].dimmed().to_string());
+        }
+        // OSC 8 wrap with cyan + underline visible text — same treatment as
+        // mail show. The full URL is the click target; styling makes the
+        // link visually obvious even before hovering.
+        out.push_str("\x1b]8;;");
+        out.push_str(link.as_str());
+        out.push_str("\x1b\\");
+        out.push_str(&link.as_str().cyan().underline().to_string());
+        out.push_str("\x1b]8;;\x1b\\");
+        cursor = end;
+    }
+    if cursor < line.len() {
+        out.push_str(&line[cursor..].dimmed().to_string());
+    }
+    out
+}
+
+/// Word-wrap `text` to `width` columns, returning at most `max_lines` lines.
+/// If the wrapped output would have been longer, the final returned line ends
+/// in `…` so the caller doesn't need to know whether truncation happened.
+///
+/// Whitespace (including newlines) is collapsed: bodyPreview from Microsoft
+/// Graph often has paragraph breaks that don't align nicely with the card
+/// width, so we reflow the text as a single paragraph.
+///
+/// URLs are recognised via `linkify` and treated as atomic tokens — they are
+/// never split across lines, even when longer than `width`. Splitting a URL
+/// mid-string would prevent the link styler from recognising it and would
+/// produce broken `…`-truncated hrefs.
+fn wrap_preview(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+    if width == 0 || max_lines == 0 {
+        return Vec::new();
+    }
+    let tokens = tokenize_with_urls(text);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut idx = 0;
+    while idx < tokens.len() {
+        let token = &tokens[idx];
+        let tlen = token.text.chars().count();
+        if current.is_empty() {
+            // Long non-URL word: hard-split across lines (URLs stay whole even
+            // when oversized — the terminal will visually wrap them, which is
+            // fine because clicking still works on a soft-wrapped OSC8 link).
+            if !token.is_url && tlen > width {
+                let chars: Vec<char> = token.text.chars().collect();
+                let mut start = 0;
+                while start < chars.len() {
+                    let end = (start + width).min(chars.len());
+                    lines.push(chars[start..end].iter().collect());
+                    if lines.len() == max_lines {
+                        return finalize(lines, width, idx + 1 < tokens.len() || end < chars.len());
+                    }
+                    start = end;
+                }
+            } else {
+                current.push_str(&token.text);
+            }
+            idx += 1;
+        } else if current.chars().count() + 1 + tlen <= width {
+            current.push(' ');
+            current.push_str(&token.text);
+            idx += 1;
+        } else {
+            lines.push(std::mem::take(&mut current));
+            if lines.len() == max_lines {
+                return finalize(lines, width, idx < tokens.len());
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    finalize(lines, width, false)
+}
+
+/// One whitespace-separated piece of text, flagged as either a URL or
+/// regular prose. URL tokens are never split by the wrap algorithm; prose
+/// tokens may be hard-split if longer than the line width.
+struct PreviewToken {
+    text: String,
+    is_url: bool,
+}
+
+/// Tokenise `text` on whitespace, then split each word around any URLs it
+/// contains so URL tokens come out as standalone atomic units (a URL embedded
+/// in `Visit:https://example.com,then…` becomes three tokens).
+fn tokenize_with_urls(text: &str) -> Vec<PreviewToken> {
+    use linkify::{LinkFinder, LinkKind};
+    let finder = LinkFinder::new();
+    let mut tokens: Vec<PreviewToken> = Vec::new();
+    for word in text.split_whitespace() {
+        let urls: Vec<_> = finder
+            .links(word)
+            .filter(|l| matches!(l.kind(), LinkKind::Url))
+            .collect();
+        if urls.is_empty() {
+            tokens.push(PreviewToken {
+                text: word.to_string(),
+                is_url: false,
+            });
+            continue;
+        }
+        let mut cursor = 0;
+        for url in urls {
+            if cursor < url.start() {
+                tokens.push(PreviewToken {
+                    text: word[cursor..url.start()].to_string(),
+                    is_url: false,
+                });
+            }
+            tokens.push(PreviewToken {
+                text: url.as_str().to_string(),
+                is_url: true,
+            });
+            cursor = url.end();
+        }
+        if cursor < word.len() {
+            tokens.push(PreviewToken {
+                text: word[cursor..].to_string(),
+                is_url: false,
+            });
+        }
+    }
+    tokens
+}
+
+/// If the wrapped output was truncated, append `…` to the last shown line,
+/// stealing the trailing character when needed to stay within `width`.
+fn finalize(mut lines: Vec<String>, width: usize, truncated: bool) -> Vec<String> {
+    if !truncated {
+        return lines;
+    }
+    if let Some(last) = lines.last_mut() {
+        if last.chars().count() < width {
+            last.push('…');
+        } else {
+            let mut chars: Vec<char> = last.chars().collect();
+            if !chars.is_empty() {
+                chars.pop();
+            }
+            chars.push('…');
+            *last = chars.into_iter().collect();
+        }
+    }
+    lines
+}
+
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(c, _)| c as usize)
+        .unwrap_or(80)
+}
+
+/// Tabular rendering — one row per message with `ID`, `ACCOUNT`, `FROM`,
+/// `SUBJECT`, `RECEIVED` columns. Useful for piping into other tools or
+/// when the user prefers a dense overview without preview text.
+///
+/// The `📎` marker is appended to `SUBJECT` (rather than getting its own
+/// column) so the table stays compact and the indicator still scans next
+/// to the subject — same place an attachment icon lives in most mail UIs.
+fn render_table(
     rows: &[MessageRow],
     hide_account: bool,
     labels: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
+    use comfy_table::{ContentArrangement, Table};
+
     let mut table = Table::new();
     table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
@@ -330,10 +719,16 @@ fn render_text_compact(
     table.set_header(header);
 
     for row in rows {
+        let attach = if row.message.has_attachments {
+            " 📎"
+        } else {
+            ""
+        };
         let subject = format!(
-            "{}{}",
+            "{}{}{}",
             flag_marker(row.message.flag_status),
-            style_subject(&row.message.subject, row.message.is_read)
+            style_subject(&row.message.subject, row.message.is_read),
+            attach,
         );
 
         let account_label = labels
@@ -367,7 +762,19 @@ struct MessageOut<'a> {
     subject: &'a str,
     received_at: chrono::DateTime<chrono::Utc>,
     is_read: bool,
+    /// Short snippet — Graph's `bodyPreview`, capped at 255 chars. Cheap
+    /// "summary" string suitable for scanning.
     preview: &'a str,
+    /// Full body content as plain text. For HTML emails it's the
+    /// html2text-converted version, for plain-text emails it's the
+    /// original. Aimed at scripting / AI consumers who don't want to
+    /// parse HTML themselves.
+    body_text: String,
+    // Renamed so jq filters can use the same casing as the underlying
+    // FlagStatus enum variants ("flagged" / "notFlagged" / "complete").
+    #[serde(rename = "flagStatus")]
+    flag_status: pidge_core::FlagStatus,
+    has_attachments: bool,
 }
 
 fn render_json(rows: &[MessageRow]) -> Result<()> {
@@ -382,10 +789,33 @@ fn render_json(rows: &[MessageRow]) -> Result<()> {
             received_at: r.message.received_at,
             is_read: r.message.is_read,
             preview: &r.message.preview,
+            body_text: body_as_plain_text(&r.message),
+            flag_status: r.message.flag_status,
+            has_attachments: r.message.has_attachments,
         })
         .collect();
     println!("{}", serde_json::to_string_pretty(&out)?);
     Ok(())
+}
+
+/// Plain-text representation of the message body. For HTML emails we run
+/// html2text locally (no fancy formatting — just text + structure); for
+/// plain-text emails we return the body unchanged. Empty if the body is
+/// missing — callers should fall back to `Message::preview`.
+fn body_as_plain_text(m: &Message) -> String {
+    use pidge_core::BodyContentType;
+    if m.body.is_empty() {
+        return String::new();
+    }
+    match m.body_content_type {
+        BodyContentType::Text => m.body.clone(),
+        BodyContentType::Html => {
+            // 100 cols is a reasonable target width for downstream consumers;
+            // they can re-wrap if they want. We don't care about styling
+            // here — just structured plain text.
+            html2text::from_read(m.body.as_bytes(), 100)
+        }
+    }
 }
 
 fn relative_received(then: DateTime<Utc>) -> String {
@@ -429,5 +859,81 @@ mod tests {
         assert_eq!(compute_per_account_fetch(25, 3), 10);
         // ceil(100 * 1.2 / 3) = ceil(40) = 40
         assert_eq!(compute_per_account_fetch(100, 3), 40);
+    }
+
+    #[test]
+    fn wrap_preview_fits_in_one_line() {
+        assert_eq!(wrap_preview("hello world", 40, 4), vec!["hello world"]);
+    }
+
+    #[test]
+    fn wrap_preview_wraps_at_word_boundary() {
+        let out = wrap_preview("the quick brown fox jumps", 10, 4);
+        assert_eq!(out, vec!["the quick", "brown fox", "jumps"]);
+    }
+
+    #[test]
+    fn wrap_preview_collapses_newlines_and_extra_spaces() {
+        let out = wrap_preview("Hello\n\nworld   here", 40, 4);
+        assert_eq!(out, vec!["Hello world here"]);
+    }
+
+    #[test]
+    fn wrap_preview_truncates_with_ellipsis_when_more_lines_remain() {
+        let out = wrap_preview("aaa bbb ccc ddd eee fff ggg", 7, 2);
+        // first two wrapped lines, last line gets trailing …
+        assert_eq!(out.len(), 2);
+        assert!(
+            out[1].ends_with('…'),
+            "expected truncation marker, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_preview_returns_empty_when_max_lines_is_zero() {
+        assert!(wrap_preview("anything", 40, 0).is_empty());
+    }
+
+    #[test]
+    fn default_preview_lines_is_in_the_5_to_10_range() {
+        assert!(
+            (5..=10).contains(&DEFAULT_PREVIEW_LINES),
+            "default preview line count should stay inside the 5-10 sweet spot"
+        );
+    }
+
+    #[test]
+    fn wrap_preview_keeps_long_url_whole() {
+        // A URL longer than the line width must stay on a single line — even
+        // though it exceeds `width` — so the link styler later finds it intact.
+        let long_url = "https://example.com/path/with/many/segments?q=a&also=this-is-extra-padding";
+        let text = format!("see {long_url} for details");
+        let out = wrap_preview(&text, 20, 5);
+        assert!(
+            out.iter().any(|l| l == long_url),
+            "expected the long URL to appear as its own line, got: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|l| l.contains('…') && l.contains("https://")),
+            "URL was truncated mid-string: {out:?}"
+        );
+    }
+
+    #[test]
+    fn wrap_preview_splits_around_url_inside_word() {
+        // "Visit:https://example.com,thanks" should pop the URL into its own
+        // token; otherwise the URL would not be wrappable as a unit.
+        let out = wrap_preview("Visit:https://example.com,thanks for reading", 80, 5);
+        // First line should contain the URL intact.
+        assert!(out[0].contains("https://example.com"), "got: {out:?}");
+    }
+
+    #[test]
+    fn wrap_preview_splits_oversized_word() {
+        // A 30-char "word" must fit in 10-col lines.
+        let out = wrap_preview("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 10, 4);
+        assert!(out.iter().all(|l| l.chars().count() <= 10));
+        assert_eq!(out.iter().map(|l| l.len()).sum::<usize>(), 30);
     }
 }

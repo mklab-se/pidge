@@ -16,6 +16,12 @@ struct GraphMessage {
     is_read: Option<bool>,
     #[serde(rename = "bodyPreview")]
     body_preview: Option<String>,
+    /// Full body, requested with `Prefer: outlook.body-content-type="text"`
+    /// so Graph converts HTML to plain text server-side. Used to build a
+    /// richer preview than the 255-char `bodyPreview` cap allows.
+    body: Option<GraphBody>,
+    #[serde(rename = "hasAttachments")]
+    has_attachments: Option<bool>,
     #[serde(default)]
     flag: Option<GraphFlag>,
 }
@@ -177,10 +183,13 @@ async fn list_folder(
     unread_only: bool,
 ) -> Result<InboxPage, ClientError> {
     let url = format!("{base_url}/me/mailFolders/{folder}/messages");
+    // Body is fetched in its native content type (HTML or text) so the
+    // renderer can use html2text to extract anchor text + click targets —
+    // making LINK TEXT (not URLs) the clickable surface in previews.
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
             "$select",
-            "id,subject,from,receivedDateTime,isRead,bodyPreview,flag",
+            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
         ),
         ("$orderby", "receivedDateTime desc"),
         ("$top", &limit.to_string()),
@@ -237,10 +246,11 @@ pub async fn search_messages(
     let resp = http
         .get(&url)
         .bearer_auth(access_token)
+        .header("Prefer", "outlook.body-content-type=\"text\"")
         .query(&[
             (
                 "$select",
-                "id,subject,from,receivedDateTime,isRead,bodyPreview,flag",
+                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
             ),
             ("$top", &limit.to_string()),
             ("$search", &quoted),
@@ -264,6 +274,17 @@ pub async fn search_messages(
 }
 
 fn to_message(g: GraphMessage, account: &str) -> Message {
+    let (body, body_content_type) = match g.body {
+        Some(b) => {
+            let kind = if b.content_type.eq_ignore_ascii_case("html") {
+                pidge_core::BodyContentType::Html
+            } else {
+                pidge_core::BodyContentType::Text
+            };
+            (b.content, kind)
+        }
+        None => (String::new(), pidge_core::BodyContentType::Text),
+    };
     Message {
         account: account.to_string(),
         id: g.id,
@@ -282,8 +303,15 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
         subject: g.subject.unwrap_or_default(),
         received_at: g.received_date_time,
         is_read: g.is_read.unwrap_or(true),
+        // `preview` keeps the 255-char plain-text snippet Graph computes
+        // (bodyPreview). It's used as a cheap fallback when body is absent
+        // and as the plain-text source for `--json` output (AI agents and
+        // scripts that don't want to deal with HTML).
         preview: g.body_preview.unwrap_or_default(),
         flag_status: flag_status_from(g.flag),
+        has_attachments: g.has_attachments.unwrap_or(false),
+        body,
+        body_content_type,
     }
 }
 

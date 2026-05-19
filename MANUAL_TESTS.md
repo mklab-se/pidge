@@ -72,11 +72,11 @@ is now a full-screen TUI form.
 
 ### Non-interactive (scripting) path
 
-- [ ] `pidge mail new --to kristofer@mklab.se --subject "flag test" --body "one-line body"` → sends immediately, no TUI (no `-y` needed when `--to`, `--subject`, `--body` are all given)
+- [X] `pidge mail new --to kristofer@mklab.se --subject "flag test" --body "one-line body"` → sends immediately, no TUI (no `-y` needed when `--to`, `--subject`, `--body` are all given)
 - [ ] Same command with `--confirm` appended → opens the TUI pre-filled with your flags so you can review/edit before pressing Ctrl-S
-- [ ] Find that arrived message:
-  - [ ] `pidge mail reply <fragment> --body "thanks" -y` → reply sends
-  - [ ] `pidge mail forward <fragment> --to kristofer@mklab.se --body "fyi" -y` → forward sends
+- [X] Find that arrived message:
+  - [X] `pidge mail reply <fragment> --body "thanks" -y` → reply sends
+  - [X] `pidge mail forward <fragment> --to kristofer@mklab.se --body "fyi" -y` → forward sends
 
 ---
 
@@ -102,25 +102,25 @@ Reply-as-draft round-trip:
 
 ## Attachments — `pidge drafts attachments ...`
 
-- [ ] Save a draft with one attachment:
+- [X] Save a draft with one attachment:
   `pidge mail new --to kristofer@mklab.se --subject "draft+attach" --body "ditto" --attach crates/pidge/tests/fixtures/speedledger_newsletter.html --draft`
-- [ ] `pidge drafts attachments list <fragment>` → shows the speedledger file
-- [ ] `pidge drafts attachments add <fragment> crates/pidge/tests/fixtures/linkedin_jobs_digest.html` → adds a second
-- [ ] `pidge drafts attachments list <fragment>` → shows both
-- [ ] `pidge drafts attachments remove <fragment> linkedin_jobs_digest.html` → removes by filename
-- [ ] `pidge drafts attachments list <fragment>` → only speedledger remains
+- [X] `pidge drafts attachments list <fragment>` → shows the speedledger file
+- [X] `pidge drafts attachments add <fragment> crates/pidge/tests/fixtures/linkedin_jobs_digest.html` → adds a second
+- [X] `pidge drafts attachments list <fragment>` → shows both
+- [X] `pidge drafts attachments remove <fragment> linkedin_jobs_digest.html` → removes by filename
+- [X] `pidge drafts attachments list <fragment>` → only speedledger remains
 - [X] `pidge drafts delete <fragment> -y` → cleanup
 
 Oversized attachment safety:
-- [ ] `dd if=/dev/zero of=/tmp/big.bin bs=1m count=5`
-- [ ] `pidge mail new --to kristofer@mklab.se --subject "big" --body "test" --attach /tmp/big.bin` → clean error: "above the 3 MB simple-upload limit"
+- [X] `dd if=/dev/zero of=/tmp/big.bin bs=1m count=5`
+- [X] `pidge mail new --to kristofer@mklab.se --subject "big" --body "test" --attach /tmp/big.bin` → clean error: "above the 3 MB simple-upload limit"
 
 ---
 
 ## Pagination
 
-- [ ] `pidge mail list -p 1 -n 10` and `pidge mail list -p 2 -n 10` return **different** messages (no overlap)
-- [ ] `pidge mail list -p 99 -n 10` → likely empty table, no crash
+- [X] `pidge mail list -p 1 -n 10` and `pidge mail list -p 2 -n 10` return **different** messages (no overlap)
+- [X] `pidge mail list -p 99 -n 10` → likely empty table, no crash (deep inbox returned results; `-p 9999` confirmed empty + exit 0)
 
 ---
 
@@ -134,8 +134,8 @@ Single delete:
 - [ ] In Outlook → Deleted Items folder, confirm the message is there (not hard-deleted)
 
 Bulk delete safety gate:
-- [ ] `pidge mail delete --older-than 2050-01-01` (no `-y`) → errors: "Bulk delete requires explicit `-y` confirmation — there is no interactive prompt. Re-run with `-y` if you really mean it."
-- [ ] `pidge mail delete --older-than 2000-01-01 -y` (safe cutoff) → walks accounts, reports 0 deleted
+- [X] `pidge mail delete --older-than 2050-01-01` (no `-y`) → errors: "Bulk delete requires explicit `-y` confirmation — there is no interactive prompt. Re-run with `-y` if you really mean it."
+- [X] `pidge mail delete --older-than 2000-01-01 -y` (safe cutoff) → walks accounts, reports 0 deleted
 
 **Do not run** `pidge mail delete --older-than 2050-01-01 -y` — would wipe your inbox.
 
@@ -143,28 +143,28 @@ Bulk delete safety gate:
 
 ## Visual polish (recently added)
 
-- [ ] `pidge mail list -n 10 --compact` shows `⚑` (yellow) before any flagged subjects, `✓` (green) before completed
-- [ ] `pidge mail show <flagged-fragment>` → flag marker prepended to the Subject line of the header
-- [ ] `pidge account list` shows a `TYPE` column with `M365` (org tenant) or `Outlook` (personal MSA)
-- [ ] `pidge account list` uses the same horizontal-only table style as `pidge mail` (no vertical borders)
-- [ ] `pidge --help` does **not** mention "Microsoft 365" — wording is provider-agnostic
+- [X] `pidge mail list -n 10 --compact` shows `⚑` (yellow) before any flagged subjects, `✓` (green) before completed
+- [X] `pidge mail show <flagged-fragment>` → flag marker prepended to the Subject line of the header
+- [X] `pidge account list` shows a `TYPE` column with `M365` (org tenant) or `Outlook` (personal MSA)
+- [X] `pidge account list` uses the same horizontal-only table style as `pidge mail` (no vertical borders)
+- [X] `pidge --help` does **not** mention "Microsoft 365" — wording is provider-agnostic
 - [ ] Any inquire prompt (e.g. `pidge mail delete <fragment>` confirm, or the `pidge mail send` summary confirm if you trip it) shows a bold cyan label and a yellow `?` prefix
 
 ---
 
 ## Output / JSON
 
-- [ ] `pidge mail --json | jq '.[0].subject'` returns a subject string
-- [ ] `pidge mail --json | jq '.[0].flagStatus'` returns one of `"flagged"`, `"notFlagged"`, `"complete"`
-- [ ] `pidge account list --json` includes `provider` field (`"m365"` or `"outlook"`) plus `is_default_email` / `is_default_calendar`
-- [ ] `pidge mail --no-color | head -3` strips ANSI styling (no escape sequences in the output)
+- [X] `pidge mail --json | jq '.[0].subject'` returns a subject string
+- [X] `pidge mail --json | jq '.[0].flagStatus'` returns one of `"flagged"`, `"notFlagged"`, `"complete"`
+- [X] `pidge account list --json` includes `provider` field (`"m365"` or `"outlook"`) plus `is_default_email` / `is_default_calendar`
+- [X] `pidge mail --no-color | head -3` strips ANSI styling (no escape sequences in the output)
 
 ---
 
 ## Account management round-trip
 
-- [ ] `pidge account default e-mail kristofer@mklab.se` → no-op confirmation, syntax works
-- [ ] `pidge account default calendar kristofer@mklab.se` → no-op confirmation
+- [X] `pidge account default e-mail kristofer@mklab.se` → no-op confirmation, syntax works
+- [X] `pidge account default calendar kristofer@mklab.se` → no-op confirmation
 - [ ] `pidge account migrate-storage kristofer@mklab.se --to keychain` → moves tokens; next Graph call may prompt for keychain access
 - [ ] `pidge mail -n 1` runs successfully against the keychain backend
 - [ ] `pidge account migrate-storage kristofer@mklab.se --to file` → moves back, no more keychain prompts

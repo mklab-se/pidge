@@ -25,9 +25,8 @@ pub async fn run(cmd: Option<AiCommands>) -> Result<()> {
             Ok(())
         }
         Some(AiCommands::Status) => config_tui::print_ai_status("pidge", &["chat"]),
-        Some(AiCommands::Skill { emit, reference }) => {
-            crate::commands::skill::run(emit, reference);
-            Ok(())
+        Some(AiCommands::Skill { emit, from_source }) => {
+            crate::commands::skill::run(emit, from_source)
         }
     }
 }

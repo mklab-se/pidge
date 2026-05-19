@@ -20,6 +20,19 @@ pub struct Message {
     /// and providers that don't expose flags deserialize cleanly.
     #[serde(default)]
     pub flag_status: FlagStatus,
+    /// Whether the message carries one or more attachments. Surfaced in
+    /// list views as a 📎 indicator so the user can scan for "which mail
+    /// had that file." Defaults to `false` for old cache entries.
+    #[serde(default)]
+    pub has_attachments: bool,
+    /// Full body content as returned by Graph. For HTML emails this is the
+    /// raw markup; for plain-text emails it's the original text. The
+    /// renderer uses [`body_content_type`] to decide how to convert it
+    /// (html2text → text+OSC8 links for HTML; word-wrap for text).
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub body_content_type: BodyContentType,
 }
 
 /// Outlook's follow-up flag state on a message. Three values to match what
@@ -64,9 +77,10 @@ pub struct FullMessage {
     pub flag_status: FlagStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BodyContentType {
+    #[default]
     Text,
     Html,
 }
@@ -104,6 +118,9 @@ mod tests {
             is_read: false,
             preview: "Hi, attached are…".into(),
             flag_status: FlagStatus::NotFlagged,
+            has_attachments: false,
+            body: String::new(),
+            body_content_type: BodyContentType::Text,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: Message = serde_json::from_str(&json).unwrap();

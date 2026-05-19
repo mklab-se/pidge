@@ -5,7 +5,7 @@
 <h1 align="center">pidge</h1>
 
 <p align="center">
-  A fast CLI for e-mail and calendar.
+  A fast CLI for e-mail and calendar, designed to be operated by AI agents.
 </p>
 
 <p align="center">
@@ -18,7 +18,21 @@
 
 ## Status
 
-**Early days.** pidge can sign in to one or more Microsoft 365 / personal Microsoft accounts and list inbox messages from each. Read/write mail, draft, send, and calendar commands are on the roadmap.
+**Early days.** pidge can sign in to one or more Microsoft 365 / personal Microsoft accounts, browse / search / send / reply to e-mail, and manage drafts + attachments. Calendar support is on the roadmap.
+
+## Built for AI agents
+
+pidge is designed to be operated by AI coding agents — Claude Code, Codex, Copilot, etc. — on your behalf. You can run it directly too, but the primary surface is your agent.
+
+Wire it into your agent with one command:
+
+```bash
+pidge ai skill --emit > ~/.claude/skills/pidge/SKILL.md
+# or, if you run pidge from a source checkout instead of `cargo install`:
+pidge ai skill --emit --from-source > ~/.claude/skills/pidge/SKILL.md
+```
+
+The emitted skill is deliberately small: it teaches the agent the concept plus a handful of patterns (JSON output, confirmation gates, account context) and tells it to use `pidge --help` for live command discovery — so the skill keeps working as pidge ships new functionality.
 
 ## Account setup
 
