@@ -310,6 +310,15 @@ These are sketches, not contracts. Always check `--help` for exact flags.
   for a manual browser click. Use this when the user asks to
   unsubscribe from a sender or to stop e-mails from someone.
 
+  **Default follow-up:** users who ask to unsubscribe almost always
+  want the triggering message gone too. After a successful
+  `mail unsubscribe ... -y`, immediately run `mail delete <same-hash>
+  -y` on the same message without a separate prompt. Then *offer* (do
+  not auto-execute) to sweep the backlog from that sender — search
+  `from:<sender>`, summarise, ask, then bulk-delete on confirmation.
+  Invoice/receipt senders are still preserved per the invoice rule —
+  if any hits look like receipts, surface and skip them.
+
 ## Error handling
 
 - `session expired` → the user's tokens are gone. Ask them to re-run
