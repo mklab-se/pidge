@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-19
+
+### Added
+
+- **`pidge mail unsubscribe <hash>`** — opt out of a sender via the message's `List-Unsubscribe` header. Picks the best method per RFC 2369 + RFC 8058: HTTPS one-click POST when offered, otherwise a `mailto:` send from the receiving account, otherwise prints the URL for a manual click. Confirmation prompts by default; pass `-y` to skip.
+- **Graph helper** `GraphClient::fetch_message_headers` exposes a message's `internetMessageHeaders` for any consumer that needs the raw RFC 5322 headers.
+
+### Notes
+
+- The HTTPS one-click POST uses a fresh `reqwest::Client` (not the Graph one) so the bearer token never leaves Microsoft hosts. 10-second request timeout to keep misbehaving senders from hanging the CLI.
+- The emitted skill template (`pidge ai skill --emit`) documents the new command so AI agents can drive it without further prompting.
+
 ## [0.3.0] - 2026-05-19
 
 ### Added
