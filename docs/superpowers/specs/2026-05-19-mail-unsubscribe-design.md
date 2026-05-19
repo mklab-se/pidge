@@ -45,7 +45,10 @@ pidge mail unsubscribe <hash> [-y|--yes]
   delete`, etc. Resolved against the existing local cache.
 - `-y` — skip the confirmation prompt. Default behaviour is to prompt,
   consistent with `mail delete`.
-- `--json` — machine-readable result (status, method used, target).
+
+`--json` is intentionally left out of v1 to keep the surface tight; the
+human output is enough to script with via exit codes. Add it later if a
+real consumer asks for it.
 
 ## Method selection
 
