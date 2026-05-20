@@ -20,4 +20,5 @@ pub mod mail_search;
 pub mod mail_show;
 pub mod mail_unsubscribe;
 pub mod skill;
+pub mod time;
 pub mod trust;
