@@ -169,10 +169,13 @@ fn print_skill(prefix: &CommandPrefix) {
         "\
 ---
 name: pidge
-description: Operate Microsoft 365 / Outlook mailboxes via the pidge CLI — \
-list, search, read, send, reply, forward, flag, archive, and delete e-mail; \
-manage drafts and attachments. Use whenever the user mentions their e-mail, \
-inbox, outlook, m365, mailbox, drafts, or messages.
+description: Operate Microsoft 365 / Outlook mailboxes and calendars via \
+the pidge CLI — list, search, read, send, reply, forward, flag, archive, \
+and delete e-mail; manage drafts and attachments; create, edit, move, \
+duplicate, cancel, and rsvp calendar events; manage recurring meetings \
+and multiple calendars. Use whenever the user mentions their e-mail, \
+inbox, outlook, m365, mailbox, drafts, messages, calendar, meeting, \
+event, invite, schedule, or rsvp.
 ---
 
 # pidge — E-mail (and Calendar) CLI
@@ -310,6 +313,15 @@ These are sketches, not contracts. Always check `--help` for exact flags.
   for a manual browser click. Use this when the user asks to
   unsubscribe from a sender or to stop e-mails from someone.
 
+  **Default follow-up:** users who ask to unsubscribe almost always
+  want the triggering message gone too. After a successful
+  `mail unsubscribe ... -y`, immediately run `mail delete <same-hash>
+  -y` on the same message without a separate prompt. Then *offer* (do
+  not auto-execute) to sweep the backlog from that sender — search
+  `from:<sender>`, summarise, ask, then bulk-delete on confirmation.
+  Invoice/receipt senders are still preserved per the invoice rule —
+  if any hits look like receipts, surface and skip them.
+
 ## Error handling
 
 - `session expired` → the user's tokens are gone. Ask them to re-run
@@ -318,13 +330,72 @@ These are sketches, not contracts. Always check `--help` for exact flags.
 - Any other Graph error → surface the message verbatim. pidge tries to
   return actionable text.
 
+## Calendar
+
+`pidge calendar` is the calendar surface. Default subcommand is `list`.
+
+### Read / search
+- `{invoke} calendar --json` — default window: today + next 7 days.
+- `{invoke} calendar --today` / `--tomorrow` / `--week` / `--month` —
+  canned windows.
+- `{invoke} calendar --from 2026-05-22 --to 2026-05-30 --json` — arbitrary
+  windows.
+- `{invoke} calendar search \"team sync\" --json` — KQL search.
+- `{invoke} calendar show <hash> --json` — full event details + attendees +
+  organizer + RSVP states + recurrence summary.
+- `{invoke} calendar calendars` — enumerate the calendars on each account.
+
+### Create
+- Required flags: `--title`, `--start`. `--end` defaults to start+1h.
+- Time strings: ISO (`2026-05-22T15:00`, `2026-05-22T13:00Z`), date+
+  `--all-day`, or natural (`\"tomorrow 15:00\"`, `\"next mon 09:00\"`, `+2h`
+  on `--end` only).
+- `--invite a@x,b@x` — required attendees. `--invite-optional c@x` —
+  optional attendees.
+- `--repeat daily|weekly|monthly|yearly`. Weekly accepts `--on
+  mon,wed,fri`. Range: `--until 2026-12-31` OR `--count 10` (mutually
+  exclusive). `--interval N` for every-Nth-period.
+- `--online` adds a Microsoft Teams meeting URL.
+- `--calendar <name-or-id>` to create in a non-default calendar.
+
+### Modify
+- `{invoke} calendar edit <hash> --title \"...\" --start \"...\"` etc. Pass
+  `--series` to apply to the whole recurring series instead of just this
+  occurrence.
+- `{invoke} calendar move-time <hash> --start \"fri 14:00\"` — reschedule
+  without touching other fields.
+- `{invoke} calendar duplicate <hash> --start \"2026-06-01T15:00\"` —
+  copy as a single (non-recurring) new event.
+- `{invoke} calendar move <hash> --to <calendar-name>` — move between
+  calendars.
+
+### Remove
+- `{invoke} calendar cancel <hash>` — organizer-only; sends cancellation
+  notices to attendees. Surfaces a clear error if you're not the
+  organizer.
+- `{invoke} calendar delete <hash> -y` — silent removal; use when the
+  event has no attendees or when you don't want to notify.
+- `{invoke} calendar rsvp <hash> --decline` — remove yourself from
+  someone else's invite (sends a response unless `--no-notify`).
+
+### Conventions
+- pidge does **not** check conflicts. To check, call
+  `{invoke} calendar list --json --from … --to …` first and reason.
+- pidge does **not** look up names. Pass e-mail addresses. If the user
+  said \"John\", confirm John's e-mail with them first.
+- For recurring events, the default acts on the single occurrence.
+  Pass `--series` only when the user clearly meant \"all of them\".
+- Convert relative dates (\"next Tuesday\") to absolute (`2026-05-26`)
+  before invoking pidge — keeps logs reproducible.
+
 ## What pidge will NOT do for you
 
-- pidge does not yet support calendar (`pidge calendar` doesn't exist).
 - pidge does not yet expose itself as an MCP server. The supported
   integration today is via this skill.
 - pidge does not store or summarize e-mail content for you; you read and
   reason over it yourself using `mail show` / `mail --json`.
+- pidge does not check calendar conflicts or look up contacts by name —
+  see the Conventions notes under Calendar above.
 
 ## Keeping this skill fresh
 

@@ -171,5 +171,66 @@ Bulk delete safety gate:
 
 ---
 
+## Calendar surface
+
+The calendar feature is new in this release. None of these have been
+exercised against a live mailbox yet.
+
+### Read
+
+- [ ] `pidge calendar` (no args) lists today + next 7 days
+- [ ] `pidge calendar --today` shows only today's events
+- [ ] `pidge calendar --week` covers the next 7 days
+- [ ] `pidge calendar --month` covers the next 30 days
+- [ ] `pidge calendar --from 2026-06-01 --to 2026-06-15` honours explicit
+  windows
+- [ ] `pidge calendar --json` produces valid JSON with `start.at`,
+  `start.tz`, `attendees`, `recurrence`
+- [ ] `pidge calendar --table` produces a tabular layout
+- [ ] `pidge calendar --compact` produces a one-line-per-event layout
+- [ ] `pidge calendar <hash>` is a shortcut for `calendar show <hash>`
+- [ ] `pidge calendar show <hash>` renders subject, when, until, where,
+  organizer, attendees (with RSVP), online meeting URL, recurrence
+- [ ] `pidge calendar calendars` enumerates calendars, marking the
+  default with `*` and read-only ones with `(read-only)`
+- [ ] `pidge calendar search "team sync"` returns matching events
+
+### Create
+
+- [ ] `pidge calendar new --title "Test" --start "tomorrow 15:00"` creates
+  an event ending one hour later
+- [ ] `pidge calendar new --title "Test" --start "2026-06-01T15:00"
+  --end "+90m"` creates a 90-minute event
+- [ ] `pidge calendar new --title "Sync" --start "next mon 09:00"
+  --invite a@example.com,b@example.com` sends invitations to both
+- [ ] `pidge calendar new --title "Weekly sync" --start "next mon 09:00"
+  --repeat weekly --on mon --until 2026-12-31` creates a recurring event
+  whose occurrences appear in `calendar list`
+- [ ] `--online` adds a Teams meeting URL (visible in `calendar show`)
+- [ ] `--calendar <name>` creates the event in a non-default calendar
+
+### Modify
+
+- [ ] `pidge calendar edit <hash> --title "Renamed"` updates the title
+  without affecting other fields
+- [ ] `pidge calendar edit <hash> --series` applied to a recurrence
+  instance affects the whole series
+- [ ] `pidge calendar move-time <hash> --start "fri 14:00"` reschedules
+  without dropping attendees
+- [ ] `pidge calendar duplicate <hash>` creates a new single (non-recurring)
+  event one week later
+- [ ] `pidge calendar move <hash> --to <other-calendar>` moves between
+  calendars
+
+### Remove
+
+- [ ] `pidge calendar delete <hash>` removes silently (no attendee notice)
+- [ ] `pidge calendar cancel <hash>` on an organized event sends notices;
+  on someone else's event it errors with the rsvp suggestion
+- [ ] `pidge calendar rsvp <hash> --accept` from a second account flips
+  the response status in the organizer's view
+
+---
+
 When everything is checked, delete this file (`rm MANUAL_TESTS.md`) and tag
 the release: `/release minor`.

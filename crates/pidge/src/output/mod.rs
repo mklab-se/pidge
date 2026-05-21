@@ -5,6 +5,23 @@ pub mod linkify;
 
 pub use linkify::linkify_text;
 
+/// Resolve the IANA TZ to display calendar times in.
+///
+/// `--tz` overrides the system local. Falls back to UTC if neither
+/// works (rare; happens when `iana-time-zone` can't read the host's zone).
+pub fn resolve_tz(override_iana: Option<&str>) -> chrono_tz::Tz {
+    use std::str::FromStr;
+    if let Some(name) = override_iana {
+        if let Ok(tz) = chrono_tz::Tz::from_str(name) {
+            return tz;
+        }
+    }
+    let local = iana_time_zone::get_timezone()
+        .ok()
+        .unwrap_or_else(|| "UTC".to_string());
+    chrono_tz::Tz::from_str(&local).unwrap_or(chrono_tz::UTC)
+}
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static NO_COLOR: AtomicBool = AtomicBool::new(false);

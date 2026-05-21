@@ -16,17 +16,21 @@ pub struct CachedMessageRef {
 }
 
 /// Result of looking up a fragment against the cache.
+///
+/// Generic over the cached entry type so the same enum serves both
+/// `MessageCache` (default: `CachedMessageRef`) and `EventCache`
+/// (`CacheLookup<CachedEventRef>`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CacheLookup {
+pub enum CacheLookup<T = CachedMessageRef> {
     NotFound,
-    One(String, CachedMessageRef),
+    One(String, T),
     /// Two or more entries match the fragment.
     ///
-    /// The inner vec is capped at 10 entries by `MessageCache::find_by_fragment`
+    /// The inner vec is capped at 10 entries by `find_by_fragment`
     /// to keep error messages readable. If more than 10 entries actually match,
     /// only the first 10 are surfaced — callers should ask the user for a
     /// longer fragment rather than try to enumerate all candidates.
-    Ambiguous(Vec<(String, CachedMessageRef)>),
+    Ambiguous(Vec<(String, T)>),
 }
 
 /// Compute the 8-char hex short hash for a Graph ID.
@@ -134,6 +138,123 @@ impl MessageCache {
             return CacheLookup::NotFound;
         }
         let mut matches: Vec<(String, CachedMessageRef)> = self
+            .entries
+            .iter()
+            .filter(|(k, _)| k.contains(fragment))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        match matches.len() {
+            0 => CacheLookup::NotFound,
+            1 => {
+                let (k, v) = matches.remove(0);
+                CacheLookup::One(k, v)
+            }
+            _ => CacheLookup::Ambiguous(matches.into_iter().take(10).collect()),
+        }
+    }
+}
+
+const MAX_EVENT_ENTRIES: usize = 1000;
+
+/// Cached pointer to a Microsoft Graph event. Keyed in the cache by
+/// `short_hash("{account}|{event_id}")` so the same event ID under
+/// different signed-in accounts gets distinct hashes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedEventRef {
+    pub event_id: String,
+    pub calendar_id: String,
+    pub account: String,
+    pub cached_at: DateTime<Utc>,
+}
+
+impl CachedEventRef {
+    pub fn new(event_id: String, calendar_id: String, account: String) -> Self {
+        Self {
+            event_id,
+            calendar_id,
+            account,
+            cached_at: Utc::now(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct EventCache {
+    #[serde(default)]
+    pub entries: HashMap<String, CachedEventRef>,
+}
+
+impl EventCache {
+    /// Default path: `${XDG_CACHE_HOME:-~/.cache}/pidge/events.json`.
+    pub fn default_path() -> Result<PathBuf, CoreError> {
+        let dir = dirs::cache_dir()
+            .ok_or(CoreError::NoConfigDir)?
+            .join("pidge");
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir.join("events.json"))
+    }
+
+    pub fn load() -> Result<Self, CoreError> {
+        let path = Self::default_path()?;
+        Self::load_from(&path)
+    }
+
+    pub fn load_from(path: &Path) -> Result<Self, CoreError> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let text = std::fs::read_to_string(path)?;
+        let cache: EventCache = serde_json::from_str(&text)
+            .map_err(|e| CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        Ok(cache)
+    }
+
+    pub fn save(&self) -> Result<(), CoreError> {
+        let path = Self::default_path()?;
+        self.save_to(&path)
+    }
+
+    pub fn save_to(&self, path: &Path) -> Result<(), CoreError> {
+        let text = serde_json::to_string_pretty(self)
+            .map_err(|e| CoreError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
+        std::fs::write(path, text)?;
+        Ok(())
+    }
+
+    /// Insert event refs and evict oldest entries if over MAX_EVENT_ENTRIES.
+    pub fn insert_many(&mut self, events: &[CachedEventRef]) {
+        let now = Utc::now();
+        for e in events {
+            let key = format!("{}|{}", e.account, e.event_id);
+            let hash = short_hash(&key);
+            let mut entry = e.clone();
+            entry.cached_at = now;
+            self.entries.insert(hash, entry);
+        }
+        self.evict_oldest_if_needed();
+    }
+
+    fn evict_oldest_if_needed(&mut self) {
+        if self.entries.len() <= MAX_EVENT_ENTRIES {
+            return;
+        }
+        let excess = self.entries.len() - MAX_EVENT_ENTRIES;
+        let mut sorted: Vec<(String, DateTime<Utc>)> = self
+            .entries
+            .iter()
+            .map(|(k, v)| (k.clone(), v.cached_at))
+            .collect();
+        sorted.sort_by_key(|(_, t)| *t);
+        for (k, _) in sorted.into_iter().take(excess) {
+            self.entries.remove(&k);
+        }
+    }
+
+    pub fn find_by_fragment(&self, fragment: &str) -> CacheLookup<CachedEventRef> {
+        if fragment.is_empty() {
+            return CacheLookup::NotFound;
+        }
+        let mut matches: Vec<(String, CachedEventRef)> = self
             .entries
             .iter()
             .filter(|(k, _)| k.contains(fragment))
@@ -307,6 +428,85 @@ mod tests {
             cache.find_by_fragment(middle),
             CacheLookup::One(_, _)
         ));
+    }
+
+    #[test]
+    fn event_cache_roundtrips_through_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("events.json");
+
+        let mut cache = EventCache::default();
+        cache.insert_many(&[CachedEventRef::new(
+            "evt-1".into(),
+            "cal-1".into(),
+            "u@e.com".into(),
+        )]);
+        cache.save_to(&path).unwrap();
+
+        let loaded = EventCache::load_from(&path).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        let h = short_hash("u@e.com|evt-1");
+        let e = loaded.entries.get(&h).unwrap();
+        assert_eq!(e.event_id, "evt-1");
+        assert_eq!(e.calendar_id, "cal-1");
+        assert_eq!(e.account, "u@e.com");
+    }
+
+    #[test]
+    fn event_hash_differs_for_different_accounts() {
+        let a = short_hash("user-a@x|same-event");
+        let b = short_hash("user-b@x|same-event");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn event_cache_find_by_fragment_returns_one_on_exact_match() {
+        let mut cache = EventCache::default();
+        cache.insert_many(&[CachedEventRef::new(
+            "evt-1".into(),
+            "cal-1".into(),
+            "u@e.com".into(),
+        )]);
+        let h = short_hash("u@e.com|evt-1");
+        match cache.find_by_fragment(&h) {
+            CacheLookup::One(found, _) => assert_eq!(found, h),
+            other => panic!("expected One, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_cache_load_from_missing_file_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("none.json");
+        let cache = EventCache::load_from(&path).unwrap();
+        assert!(cache.entries.is_empty());
+    }
+
+    #[test]
+    fn event_cache_evicts_oldest_when_over_max() {
+        let mut cache = EventCache::default();
+        let now = Utc::now();
+        let old = now - chrono::Duration::seconds(3600);
+        for i in 0..MAX_EVENT_ENTRIES {
+            let hash = format!("{:08x}", i);
+            cache.entries.insert(
+                hash,
+                CachedEventRef {
+                    event_id: format!("old-{i}"),
+                    calendar_id: "cal".into(),
+                    account: "u@e.com".into(),
+                    cached_at: old,
+                },
+            );
+        }
+        cache.insert_many(&[CachedEventRef::new(
+            "new".into(),
+            "cal".into(),
+            "u@e.com".into(),
+        )]);
+        assert_eq!(cache.entries.len(), MAX_EVENT_ENTRIES);
+        let new_hash = short_hash("u@e.com|new");
+        assert!(cache.entries.contains_key(&new_hash));
     }
 
     #[test]

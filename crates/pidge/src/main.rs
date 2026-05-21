@@ -27,14 +27,28 @@ use cli::Cli;
 /// new subcommands land (search, flag, archive, new, …) add their kebab-case
 /// names there too, or users will see "No message found for fragment '<name>'"
 /// instead of the new behavior.
-fn preprocess_args(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
-    // Only intervene on `pidge mail <something>` — every other top-level
-    // command has a required, non-shortcut subcommand and passes through.
-    if args.len() < 2 || args[1] != "mail" {
+fn preprocess_args(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
+    if args.len() < 2 {
         return args;
     }
+    match args[1].to_string_lossy().as_ref() {
+        "mail" => preprocess_subcommand(args, cli::MAIL_SUBCOMMAND_NAMES),
+        "calendar" => preprocess_subcommand(args, cli::CALENDAR_SUBCOMMAND_NAMES),
+        _ => args,
+    }
+}
 
-    // `pidge mail` → `pidge mail list`
+/// Apply the shared "bare word → show" rewrite used by both `pidge mail` and
+/// `pidge calendar`:
+///
+/// - `pidge <ns>`                          → `pidge <ns> list`
+/// - `pidge <ns> --account a@b.com -n 50`  → `pidge <ns> list --account ...`
+/// - `pidge <ns> <fragment>`               → `pidge <ns> show <fragment>`
+/// - `pidge <ns> list ...` / explicit subcommand / `--help` → unchanged
+fn preprocess_subcommand(
+    mut args: Vec<std::ffi::OsString>,
+    known: &[&str],
+) -> Vec<std::ffi::OsString> {
     if args.len() == 2 {
         args.push("list".into());
         return args;
@@ -42,23 +56,16 @@ fn preprocess_args(mut args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString>
 
     let arg2 = args[2].to_string_lossy();
 
-    // Help / version flags pass through so clap prints `mail` help, not `list` help.
     if matches!(arg2.as_ref(), "-h" | "--help" | "-V" | "--version") {
         return args;
     }
-
-    // Any other flag means the user wants `list` with those flags.
     if arg2.starts_with('-') {
         args.insert(2, "list".into());
         return args;
     }
-
-    // A bare word that matches a known subcommand passes through.
-    if cli::MAIL_SUBCOMMAND_NAMES.contains(&arg2.as_ref()) {
+    if known.contains(&arg2.as_ref()) {
         return args;
     }
-
-    // Otherwise treat the bare word as a message fragment.
     args.insert(2, "show".into());
     args
 }
@@ -184,6 +191,50 @@ mod preprocess_tests {
         assert_eq!(
             pp(&["pidge", "mail", "lsit"]),
             ["pidge", "mail", "show", "lsit"]
+        );
+    }
+
+    // The calendar surface uses the same arg-preprocessor as mail, so we
+    // exercise the same rewrites against the `calendar` namespace.
+
+    #[test]
+    fn bare_calendar_inserts_list() {
+        assert_eq!(pp(&["pidge", "calendar"]), ["pidge", "calendar", "list"]);
+    }
+
+    #[test]
+    fn calendar_with_flags_inserts_list_before_flags() {
+        assert_eq!(
+            pp(&["pidge", "calendar", "--week"]),
+            ["pidge", "calendar", "list", "--week"]
+        );
+    }
+
+    #[test]
+    fn calendar_known_subcommand_passes_through() {
+        assert_eq!(
+            pp(&["pidge", "calendar", "new", "--title", "Sync"]),
+            ["pidge", "calendar", "new", "--title", "Sync"]
+        );
+        assert_eq!(
+            pp(&["pidge", "calendar", "move-time", "abc", "--start", "10:00"]),
+            ["pidge", "calendar", "move-time", "abc", "--start", "10:00"]
+        );
+    }
+
+    #[test]
+    fn calendar_bare_word_inserts_show() {
+        assert_eq!(
+            pp(&["pidge", "calendar", "abcd"]),
+            ["pidge", "calendar", "show", "abcd"]
+        );
+    }
+
+    #[test]
+    fn calendar_help_passes_through() {
+        assert_eq!(
+            pp(&["pidge", "calendar", "--help"]),
+            ["pidge", "calendar", "--help"]
         );
     }
 }

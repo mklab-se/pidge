@@ -1,8 +1,15 @@
 //! Microsoft Graph API client.
 
+mod calendars;
+pub mod events;
 mod mail;
 mod me;
 
+pub use calendars::list_calendars;
+pub use events::{
+    EventsPage, NewEvent, RsvpKind, cancel_event, create_event, delete_event, get_event,
+    list_calendar_view, move_event_to_calendar, move_time, rsvp_event, search_events, update_event,
+};
 pub use mail::{
     InboxPage, Outgoing, add_attachment, create_draft, create_forward_draft,
     create_reply_all_draft, create_reply_draft, delete_attachment, delete_message,
@@ -325,5 +332,152 @@ impl GraphClient {
     pub async fn mark_read(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::mark_read(&self.http, &self.base_url, &token, message_id).await
+    }
+
+    // -------- Calendar surface --------
+
+    /// GET /me/calendars.
+    pub async fn list_calendars(
+        &self,
+        account: &str,
+    ) -> Result<Vec<pidge_core::Calendar>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        calendars::list_calendars(&self.http, &self.base_url, &token, account).await
+    }
+
+    /// GET /me/calendarView (or /me/calendars/{id}/calendarView).
+    pub async fn list_calendar_view(
+        &self,
+        account: &str,
+        calendar_id: Option<&str>,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> Result<events::EventsPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::list_calendar_view(
+            &self.http,
+            &self.base_url,
+            &token,
+            account,
+            calendar_id,
+            start,
+            end,
+            limit,
+        )
+        .await
+    }
+
+    /// GET /me/events/{id}.
+    pub async fn get_event(
+        &self,
+        account: &str,
+        event_id: &str,
+    ) -> Result<pidge_core::Event, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::get_event(&self.http, &self.base_url, &token, account, event_id).await
+    }
+
+    /// POST /me/calendar/events (or /me/calendars/{id}/events).
+    pub async fn create_event(
+        &self,
+        account: &str,
+        calendar_id: Option<&str>,
+        new_event: &events::NewEvent,
+    ) -> Result<String, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::create_event(&self.http, &self.base_url, &token, calendar_id, new_event).await
+    }
+
+    /// PATCH /me/events/{id} — overwrite editable fields.
+    pub async fn update_event(
+        &self,
+        account: &str,
+        event_id: &str,
+        new_event: &events::NewEvent,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::update_event(&self.http, &self.base_url, &token, event_id, new_event).await
+    }
+
+    /// PATCH /me/events/{id} — change only start + end.
+    pub async fn move_time(
+        &self,
+        account: &str,
+        event_id: &str,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+        tz: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::move_time(&self.http, &self.base_url, &token, event_id, start, end, tz).await
+    }
+
+    /// DELETE /me/events/{id} — silent removal.
+    pub async fn delete_event(&self, account: &str, event_id: &str) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::delete_event(&self.http, &self.base_url, &token, event_id).await
+    }
+
+    /// POST /me/events/{id}/cancel — organizer-only.
+    pub async fn cancel_event(
+        &self,
+        account: &str,
+        event_id: &str,
+        comment: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::cancel_event(&self.http, &self.base_url, &token, event_id, comment).await
+    }
+
+    /// POST /me/events/{id}/accept | /tentativelyAccept | /decline.
+    pub async fn rsvp_event(
+        &self,
+        account: &str,
+        event_id: &str,
+        kind: events::RsvpKind,
+        comment: &str,
+        send_response: bool,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::rsvp_event(
+            &self.http,
+            &self.base_url,
+            &token,
+            event_id,
+            kind,
+            comment,
+            send_response,
+        )
+        .await
+    }
+
+    /// PATCH /me/events/{id} with `calendar@odata.bind` — move between calendars.
+    pub async fn move_event_to_calendar(
+        &self,
+        account: &str,
+        event_id: &str,
+        destination_calendar_id: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::move_event_to_calendar(
+            &self.http,
+            &self.base_url,
+            &token,
+            event_id,
+            destination_calendar_id,
+        )
+        .await
+    }
+
+    /// GET /me/events?$search="<query>".
+    pub async fn search_events(
+        &self,
+        account: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<pidge_core::Event>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        events::search_events(&self.http, &self.base_url, &token, account, query, limit).await
     }
 }
