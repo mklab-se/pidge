@@ -16,6 +16,22 @@ use chrono::{
 };
 use chrono_tz::Tz;
 
+/// Pick the timezone to interpret a user-typed time argument in.
+///
+/// - If the user passed `--tz <name>` and it parses as an IANA zone, that wins.
+/// - Otherwise, falls back to the system's local timezone (UTC if that lookup
+///   fails).
+///
+/// **Never derive the input tz from an event's storage timezone.** Outlook
+/// commonly stores events with `tz: "UTC"` regardless of the user's locale,
+/// so passing the storage tz here would silently parse naive input like
+/// `2026-05-21T16:45` as 16:45 UTC instead of 16:45 on the user's wall clock.
+/// Use this helper at every site that turns a CLI time string into a
+/// `DateTime<Utc>`.
+pub fn input_tz(user_override: Option<&str>) -> Tz {
+    crate::output::resolve_tz(user_override)
+}
+
 pub fn parse_when(
     input: &str,
     tz: &Tz,
@@ -199,6 +215,27 @@ mod tests {
         DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
             .unwrap()
             .to_utc()
+    }
+
+    #[test]
+    fn input_tz_uses_user_override_when_provided() {
+        let tz = input_tz(Some("America/Los_Angeles"));
+        assert_eq!(tz.name(), "America/Los_Angeles");
+    }
+
+    #[test]
+    fn input_tz_falls_back_to_system_local_when_no_override() {
+        // Returns whatever iana-time-zone reports for this host; we only
+        // assert the call succeeds and yields *some* valid Tz, since CI
+        // hosts may run in any zone.
+        let _ = input_tz(None).name();
+    }
+
+    #[test]
+    fn input_tz_falls_back_to_local_on_invalid_override() {
+        // Garbage strings must not panic — fall through to the local
+        // resolution path.
+        let _ = input_tz(Some("Not/A/Real/TZ")).name();
     }
 
     #[test]

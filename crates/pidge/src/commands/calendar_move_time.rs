@@ -7,8 +7,7 @@ use pidge_client::{AuthClient, GraphClient};
 use pidge_core::Config;
 
 use crate::commands::calendar_fragment;
-use crate::commands::time::parse_when;
-use crate::output::resolve_tz;
+use crate::commands::time::{input_tz, parse_when};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -32,7 +31,7 @@ pub async fn run(
             event_id = m.clone();
         }
     }
-    let tz = resolve_tz(Some(&cur.start.tz));
+    let tz = input_tz(None);
     let new_start = parse_when(start_s, &tz, Utc::now(), None)?;
     let new_end = match end_s {
         Some(s) => parse_when(s, &tz, Utc::now(), Some(new_start))?,

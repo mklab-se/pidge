@@ -7,8 +7,7 @@ use pidge_client::{AuthClient, GraphClient, graph::events::NewEvent};
 use pidge_core::Config;
 
 use crate::commands::calendar_fragment;
-use crate::commands::time::parse_when;
-use crate::output::resolve_tz;
+use crate::commands::time::{input_tz, parse_when};
 
 pub async fn run(
     fragment: &str,
@@ -22,7 +21,7 @@ pub async fn run(
     let auth = AuthClient::from_env()?;
     let graph = GraphClient::new(auth)?;
     let cur = graph.get_event(&r.account, &r.event_id).await?;
-    let tz = resolve_tz(Some(&cur.start.tz));
+    let tz = input_tz(None);
     let dur = cur.end.at - cur.start.at;
     let start = match start_s {
         Some(s) => parse_when(s, &tz, Utc::now(), None)?,
