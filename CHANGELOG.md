@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `pidge calendar list`, `calendar search`, and `calendar show` now include a `hash` field as the first key in each event's JSON output, matching the 8-char short hash printed in the human card view. Agents can pipe `--json` output directly into follow-up commands (`show`, `move-time`, `delete`, …) without re-running pidge to recover the hash. Non-breaking: the existing `id` field (full Graph ID) is unchanged.
+
 ## [0.4.1] - 2026-05-21
 
 ### Fixed

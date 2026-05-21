@@ -7,6 +7,7 @@ use pidge_client::{AuthClient, GraphClient};
 use pidge_core::{CachedEventRef, Config, Event, EventCache};
 // note: `Config` is loaded only for the account list; `from_env()` reads creds
 
+use crate::commands::calendar_list::events_to_json;
 use crate::commands::time::format_when;
 use crate::output::resolve_tz;
 
@@ -47,7 +48,7 @@ pub async fn run(
     cache.save()?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&all)?);
+        println!("{}", events_to_json(&all)?);
         return Ok(());
     }
     let tz = resolve_tz(None);

@@ -202,8 +202,29 @@ fn refresh_cache(events: &[Event]) -> Result<()> {
 }
 
 fn print_json(events: &[Event]) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(events)?);
+    println!("{}", events_to_json(events)?);
     Ok(())
+}
+
+/// Serialize events to pretty JSON with an added `hash` field per event so
+/// agents can take the result of `calendar list --json` and feed it straight
+/// into follow-up commands (`show`, `move-time`, …) without a second call to
+/// pidge to recover the short hash.
+pub(crate) fn events_to_json(events: &[Event]) -> Result<String> {
+    #[derive(serde::Serialize)]
+    struct EventOut<'a> {
+        hash: String,
+        #[serde(flatten)]
+        event: &'a Event,
+    }
+    let out: Vec<EventOut<'_>> = events
+        .iter()
+        .map(|e| EventOut {
+            hash: short_id_for(e),
+            event: e,
+        })
+        .collect();
+    Ok(serde_json::to_string_pretty(&out)?)
 }
 
 fn print_compact(events: &[Event], tz: &Tz) {
@@ -275,11 +296,68 @@ pub fn short_id_for(e: &Event) -> String {
 mod tests {
     use super::*;
     use chrono_tz::Europe::Stockholm;
+    use pidge_core::{Attendee, EventTime};
 
     fn now() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
             .unwrap()
             .to_utc()
+    }
+
+    fn sample_event() -> Event {
+        Event {
+            account: "user@example.com".into(),
+            calendar_id: "primary".into(),
+            id: "AAMkAGRAW_GRAPH_ID".into(),
+            subject: "Sync".into(),
+            start: EventTime {
+                at: now(),
+                tz: "UTC".into(),
+            },
+            end: EventTime {
+                at: now() + Duration::hours(1),
+                tz: "UTC".into(),
+            },
+            all_day: false,
+            location: None,
+            organizer: Attendee {
+                name: "Organizer".into(),
+                address: "organizer@example.com".into(),
+                kind: Default::default(),
+                response: Default::default(),
+            },
+            attendees: vec![],
+            body_preview: String::new(),
+            body_content: String::new(),
+            body_content_type: Default::default(),
+            recurrence: None,
+            is_organizer: true,
+            response_status: Default::default(),
+            online_meeting_url: None,
+            series_master_id: None,
+        }
+    }
+
+    #[test]
+    fn json_output_includes_short_hash_per_event() {
+        let event = sample_event();
+        let expected_hash = short_id_for(&event);
+        let json = events_to_json(&[event.clone()]).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = v.as_array().expect("top level is an array");
+        assert_eq!(arr.len(), 1);
+        let hash = arr[0]
+            .get("hash")
+            .and_then(|h| h.as_str())
+            .expect("hash field present");
+        assert_eq!(hash.len(), 8, "short hash is exactly 8 chars");
+        assert_eq!(hash, expected_hash);
+        // Existing fields still present (non-breaking).
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some(&*event.id));
+        assert_eq!(
+            arr[0].get("subject").and_then(|v| v.as_str()),
+            Some(&*event.subject)
+        );
     }
 
     #[test]

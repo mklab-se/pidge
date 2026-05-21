@@ -7,6 +7,7 @@ use pidge_client::{AuthClient, GraphClient};
 use pidge_core::Config;
 
 use crate::commands::calendar_fragment;
+use crate::commands::calendar_list::short_id_for;
 use crate::commands::time::format_when;
 use crate::output::resolve_tz;
 
@@ -18,7 +19,17 @@ pub async fn run(fragment: &str, json: bool) -> Result<()> {
     let event = graph.get_event(&r.account, &r.event_id).await?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&event)?);
+        #[derive(serde::Serialize)]
+        struct EventOut<'a> {
+            hash: String,
+            #[serde(flatten)]
+            event: &'a pidge_core::Event,
+        }
+        let out = EventOut {
+            hash: short_id_for(&event),
+            event: &event,
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
 
