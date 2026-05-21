@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-21
+
 ### Fixed
 
 - `pidge calendar move-time`, `calendar duplicate`, and `calendar edit` (when `--tz` is not given) now interpret naive ISO datetimes like `2026-05-21T16:45` in the user's **local** timezone instead of the event's storage timezone. Previously, events stored as `tz: "UTC"` (Outlook's default for many events) caused naive input to be parsed as UTC, silently shifting times by the local offset (e.g. typing `16:45` produced 18:45 Stockholm). Added `commands::time::input_tz` to document and enforce this contract at every call site that turns a CLI time string into a `DateTime<Utc>`.
