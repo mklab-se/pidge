@@ -18,7 +18,7 @@
 
 ## Status
 
-**Early days.** pidge can sign in to one or more Microsoft 365 / personal Microsoft accounts, browse / search / send / reply to e-mail, and manage drafts + attachments. Calendar support is on the roadmap.
+**Early days.** pidge can sign in to one or more Microsoft 365 / personal Microsoft accounts, browse / search / send / reply to e-mail, manage drafts + attachments, and **manage calendars** — create / edit / search / reschedule / cancel / duplicate events, move between calendars, RSVP, and create recurring meetings.
 
 ## Built for AI agents
 
@@ -72,6 +72,47 @@ pidge mail show 3515 --mark-read
 
 # Pipe to scripts
 pidge mail --json | jq '.[].subject'
+```
+
+## Calendar
+
+```bash
+# Shortcut: list events for today + next 7 days across every account
+pidge calendar
+
+# Canned windows
+pidge calendar --today
+pidge calendar --tomorrow
+pidge calendar --week
+pidge calendar --month
+
+# Open one event by fragment of its 8-char hash
+pidge calendar 4cabda75
+
+# Schedule a meeting with attendees and a Teams URL
+pidge calendar new \
+  --title "Q3 planning" \
+  --start "tomorrow 15:00" --end "+90m" \
+  --invite alice@example.com,bob@example.com \
+  --location "Office" --online
+
+# Recurring weekly team sync
+pidge calendar new \
+  --title "Team sync" \
+  --start "next mon 09:00" --end "+30m" \
+  --repeat weekly --on mon --until 2026-12-31
+
+# Reschedule
+pidge calendar move-time 4cabda75 --start "fri 14:00"
+
+# Cancel (organizer-only; sends notices to attendees)
+pidge calendar cancel 4cabda75 --comment "Postponed to next week"
+
+# RSVP to someone else's invite
+pidge calendar rsvp 4cabda75 --accept
+
+# Pipe to scripts
+pidge calendar --json --week | jq '.[] | .subject'
 ```
 
 ## Quick Start

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`pidge calendar` surface** — full calendar management against Microsoft Graph:
+  - `pidge calendar list` (default: today + next 7 days; `--today` / `--tomorrow` / `--week` / `--month` / `--from`/`--to` for arbitrary windows)
+  - `pidge calendar show <hash>` — full details including attendees, organizer, RSVP states, recurrence, and online meeting URL
+  - `pidge calendar search <query>` — KQL `$search` across events
+  - `pidge calendar new` — title/start/end, optional location/body, required + optional attendees (Graph auto-sends invitations), recurrence presets (`--repeat daily|weekly|monthly|yearly` with `--on`, `--until`, `--count`, `--interval`), and `--online` to attach a Microsoft Teams meeting
+  - `pidge calendar edit <hash>` and `pidge calendar move-time <hash>` (`--series` for recurring events)
+  - `pidge calendar duplicate <hash>` — use an existing event as a template
+  - `pidge calendar delete <hash>` (silent) and `pidge calendar cancel <hash>` (organizer-only; sends notices)
+  - `pidge calendar move <hash> --to <calendar>` — move between calendars on the same account
+  - `pidge calendar rsvp <hash> --accept|--tentative|--decline` (`--no-notify` skips the response email)
+  - `pidge calendar calendars` — enumerate calendars on each account
+- **Local-TZ display**: events stored as UTC + their original IANA zone; output formatted in the system's local time zone, with `--tz` to override.
+- **`pidge calendar <hash>` shortcut**: bare-word fragments route to `calendar show`, mirroring the mail surface's ergonomics.
+- **Core types**: `Event`, `Calendar`, `Attendee`, `RecurrencePattern`, `EventCache` (parallel to `MessageCache`).
+- **AI skill emission** updated to document the calendar surface; description/keywords cover calendar, meeting, event, invite, schedule, and rsvp.
+
+### Notes
+
+- `Calendars.ReadWrite` was already in the requested OAuth scopes, so no re-auth is needed on existing accounts.
+- The compose-form TUI wizard for `calendar new` is a stub — pass `--title`, `--start`, etc. directly; the wizard lands in a follow-up.
+
 ## [0.3.1] - 2026-05-19
 
 ### Added
