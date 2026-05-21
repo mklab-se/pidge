@@ -1,8 +1,3 @@
-// Temporarily allow dead_code: these functions are consumed by upcoming
-// calendar commands in subsequent commits; without this, clippy fails
-// the workspace under -D warnings.
-#![allow(dead_code)]
-
 //! Human time-string parsing for calendar commands.
 //!
 //! Accepted forms (all interpreted in `tz` unless the input itself carries

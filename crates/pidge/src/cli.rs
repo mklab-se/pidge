@@ -52,6 +52,12 @@ pub enum Commands {
         command: MailCommands,
     },
 
+    /// Read, create, edit, search, and manage calendar events
+    Calendar {
+        #[command(subcommand)]
+        command: Option<CalendarCommands>,
+    },
+
     /// Manage the trusted-senders list (auto-renders inline images from these senders)
     Trust {
         #[command(subcommand)]
@@ -602,6 +608,280 @@ pub enum Shell {
     Powershell,
 }
 
+#[derive(clap::Subcommand)]
+pub enum CalendarCommands {
+    /// List upcoming events (default: today + next 7 days)
+    List {
+        /// Filter to a specific account (repeatable for a subset)
+        #[arg(long)]
+        account: Vec<String>,
+        /// Window start (ISO date or natural string)
+        #[arg(long)]
+        from: Option<String>,
+        /// Window end (ISO date or natural string)
+        #[arg(long)]
+        to: Option<String>,
+        #[arg(long, conflicts_with_all = ["tomorrow", "week", "month"])]
+        today: bool,
+        #[arg(long, conflicts_with_all = ["today", "week", "month"])]
+        tomorrow: bool,
+        #[arg(long, conflicts_with_all = ["today", "tomorrow", "month"])]
+        week: bool,
+        #[arg(long, conflicts_with_all = ["today", "tomorrow", "week"])]
+        month: bool,
+        /// Restrict to a specific calendar (name or id)
+        #[arg(long)]
+        calendar: Option<String>,
+        #[arg(short = 'n', long, default_value = "50")]
+        limit: usize,
+        #[arg(short = 'c', long, conflicts_with = "table")]
+        compact: bool,
+        #[arg(short = 't', long)]
+        table: bool,
+    },
+
+    /// Display a single event identified by a fragment of its short hash
+    Show {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Search events using Graph's KQL `$search` syntax
+    Search {
+        /// Search query
+        query: String,
+        #[arg(long)]
+        account: Vec<String>,
+        #[arg(long)]
+        calendar: Option<String>,
+        #[arg(short = 'n', long, default_value = "25")]
+        limit: usize,
+    },
+
+    /// List calendars on each signed-in account
+    Calendars {
+        #[command(subcommand)]
+        command: Option<CalendarsCommands>,
+    },
+
+    /// Create a new event
+    New(CalendarNewArgs),
+
+    /// Edit an existing event
+    Edit {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        #[command(flatten)]
+        new: CalendarEditArgs,
+    },
+
+    /// Reschedule an event without editing other fields
+    #[command(name = "move-time")]
+    MoveTime {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        /// New start time
+        #[arg(long)]
+        start: String,
+        /// New end time (defaults to preserving the existing duration)
+        #[arg(long)]
+        end: Option<String>,
+        #[arg(long, conflicts_with = "no_notify")]
+        notify: bool,
+        #[arg(long)]
+        no_notify: bool,
+        /// Apply to the whole recurring series instead of this occurrence
+        #[arg(long)]
+        series: bool,
+    },
+
+    /// Use an existing event as a template for a new one
+    Duplicate {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        /// Start time of the new event (default: 7 days after the original)
+        #[arg(long)]
+        start: Option<String>,
+        /// Override the new event's title
+        #[arg(long)]
+        title: Option<String>,
+        /// Create the new event in a different calendar
+        #[arg(long)]
+        calendar: Option<String>,
+    },
+
+    /// Delete an event silently (no attendee notification)
+    Delete {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Delete the whole series instead of just this occurrence
+        #[arg(long)]
+        series: bool,
+    },
+
+    /// Cancel an event you organized (sends notices to all attendees)
+    Cancel {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        /// Cancellation comment included in the notification
+        #[arg(long)]
+        comment: Option<String>,
+        #[arg(short = 'y', long)]
+        yes: bool,
+        /// Cancel the whole series instead of just this occurrence
+        #[arg(long)]
+        series: bool,
+    },
+
+    /// Move an event to a different calendar
+    Move {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        /// Destination calendar (name or id)
+        #[arg(long = "to")]
+        to: String,
+    },
+
+    /// Respond to a meeting invitation
+    Rsvp {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+        #[arg(long, conflicts_with_all = ["tentative", "decline"])]
+        accept: bool,
+        #[arg(long, conflicts_with_all = ["accept", "decline"])]
+        tentative: bool,
+        #[arg(long, conflicts_with_all = ["accept", "tentative"])]
+        decline: bool,
+        /// Optional comment included with the response
+        #[arg(long)]
+        comment: Option<String>,
+        /// Don't email the organizer with the response
+        #[arg(long)]
+        no_notify: bool,
+    },
+}
+
+#[derive(clap::Subcommand)]
+pub enum CalendarsCommands {
+    /// List calendars (default)
+    List,
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct CalendarNewArgs {
+    /// Account to create the event on (defaults to `account default calendar`)
+    #[arg(long)]
+    pub from: Option<String>,
+    /// Event title
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Start time
+    #[arg(long)]
+    pub start: Option<String>,
+    /// End time (defaults to start + 1 hour)
+    #[arg(long)]
+    pub end: Option<String>,
+    /// All-day event (start/end are dates)
+    #[arg(long)]
+    pub all_day: bool,
+    /// Location (free text)
+    #[arg(long)]
+    pub location: Option<String>,
+    /// Body text
+    #[arg(long, conflicts_with = "body_file")]
+    pub body: Option<String>,
+    /// Read body from a file (`-` reads from stdin)
+    #[arg(long)]
+    pub body_file: Option<String>,
+    /// Required attendees (comma-separated, repeatable)
+    #[arg(long, value_delimiter = ',')]
+    pub invite: Vec<String>,
+    /// Optional attendees (comma-separated, repeatable)
+    #[arg(long = "invite-optional", value_delimiter = ',')]
+    pub invite_optional: Vec<String>,
+    /// Recurrence frequency: daily | weekly | monthly | yearly
+    #[arg(long)]
+    pub repeat: Option<String>,
+    /// Weekdays (weekly only): mon,tue,wed,thu,fri,sat,sun
+    #[arg(long, value_delimiter = ',')]
+    pub on: Vec<String>,
+    /// Stop repeating on this date (YYYY-MM-DD)
+    #[arg(long, conflicts_with = "count")]
+    pub until: Option<String>,
+    /// Stop after N occurrences
+    #[arg(long)]
+    pub count: Option<u32>,
+    /// Recurrence interval (1 = every freq, 2 = every other, …)
+    #[arg(long, default_value_t = 1)]
+    pub interval: u32,
+    /// Add a Microsoft Teams meeting URL
+    #[arg(long)]
+    pub online: bool,
+    /// Create in a non-default calendar (name or id)
+    #[arg(long)]
+    pub calendar: Option<String>,
+    /// Override the local time zone for input/display (IANA)
+    #[arg(long)]
+    pub tz: Option<String>,
+    /// Open the TUI compose form pre-filled with your flags
+    #[arg(long)]
+    pub confirm: bool,
+    /// Skip the final confirmation prompt
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct CalendarEditArgs {
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long)]
+    pub start: Option<String>,
+    #[arg(long)]
+    pub end: Option<String>,
+    #[arg(long)]
+    pub location: Option<String>,
+    #[arg(long, conflicts_with = "body_file")]
+    pub body: Option<String>,
+    #[arg(long)]
+    pub body_file: Option<String>,
+    #[arg(long, value_delimiter = ',')]
+    pub invite: Vec<String>,
+    #[arg(long = "invite-optional", value_delimiter = ',')]
+    pub invite_optional: Vec<String>,
+    #[arg(long, conflicts_with = "no_notify")]
+    pub notify: bool,
+    #[arg(long)]
+    pub no_notify: bool,
+    /// Apply to the whole recurring series instead of this occurrence
+    #[arg(long)]
+    pub series: bool,
+    #[arg(long)]
+    pub tz: Option<String>,
+    #[arg(short = 'y', long)]
+    pub yes: bool,
+}
+
+/// Calendar subcommand names recognized by the arg-preprocessor in main.rs.
+/// Keep in sync with [`CalendarCommands`].
+pub const CALENDAR_SUBCOMMAND_NAMES: &[&str] = &[
+    "list",
+    "show",
+    "search",
+    "calendars",
+    "new",
+    "edit",
+    "move-time",
+    "duplicate",
+    "delete",
+    "cancel",
+    "move",
+    "rsvp",
+    "help",
+];
+
 impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.command {
@@ -611,6 +891,9 @@ impl Cli {
             }
             Some(Commands::Mail { command }) => {
                 crate::commands::mail::run(command, self.json).await
+            }
+            Some(Commands::Calendar { command }) => {
+                crate::commands::calendar::run(command, self.json).await
             }
             Some(Commands::Trust { command }) => {
                 crate::commands::trust::run(command, self.json).await
