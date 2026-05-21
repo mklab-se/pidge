@@ -505,40 +505,6 @@ pub async fn move_event_to_calendar(
     bubble_no_body(resp).await
 }
 
-/// GET /me/events?$search="<query>"
-pub async fn search_events(
-    http: &reqwest::Client,
-    base_url: &str,
-    access_token: &str,
-    account: &str,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<Event>, ClientError> {
-    let quoted = format!("\"{}\"", query.replace('"', "\\\""));
-    let url = format!("{base_url}/me/events");
-    let resp = http
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("Prefer", PREFER_UTC)
-        .query(&[("$search", quoted.as_str()), ("$top", &limit.to_string())])
-        .send()
-        .await?;
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ClientError::Graph {
-            status: status.as_u16(),
-            message: text,
-        });
-    }
-    let list: GraphEventList = resp.json().await?;
-    Ok(list
-        .value
-        .into_iter()
-        .map(|g| to_event(g, account, None))
-        .collect())
-}
-
 async fn bubble_no_body(resp: reqwest::Response) -> Result<(), ClientError> {
     let status = resp.status();
     if !status.is_success() {
@@ -948,32 +914,5 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&reqs[0].body).unwrap();
         let expected = format!("{}/me/calendars/CAL-2", server.uri());
         assert_eq!(body["calendar@odata.bind"], expected);
-    }
-
-    #[tokio::test]
-    async fn search_events_passes_quoted_query() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/me/events"))
-            .and(query_param("$search", "\"team sync\""))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "value": [
-                    {
-                        "id": "evt-1",
-                        "subject": "Team sync",
-                        "start": { "dateTime": "2026-05-22T13:00:00.000", "timeZone": "UTC" },
-                        "end":   { "dateTime": "2026-05-22T14:00:00.000", "timeZone": "UTC" },
-                        "organizer": { "emailAddress": { "name": "K", "address": "k@x.com" } }
-                    }
-                ]
-            })))
-            .mount(&server)
-            .await;
-        let http = reqwest::Client::new();
-        let r = search_events(&http, &server.uri(), "AT", "u@e.com", "team sync", 25)
-            .await
-            .unwrap();
-        assert_eq!(r.len(), 1);
-        assert_eq!(r[0].subject, "Team sync");
     }
 }

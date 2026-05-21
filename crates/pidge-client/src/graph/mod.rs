@@ -8,7 +8,7 @@ mod me;
 pub use calendars::list_calendars;
 pub use events::{
     EventsPage, NewEvent, RsvpKind, cancel_event, create_event, delete_event, get_event,
-    list_calendar_view, move_event_to_calendar, move_time, rsvp_event, search_events, update_event,
+    list_calendar_view, move_event_to_calendar, move_time, rsvp_event, update_event,
 };
 pub use mail::{
     InboxPage, Outgoing, add_attachment, create_draft, create_forward_draft,
@@ -468,16 +468,5 @@ impl GraphClient {
             destination_calendar_id,
         )
         .await
-    }
-
-    /// GET /me/events?$search="<query>".
-    pub async fn search_events(
-        &self,
-        account: &str,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<pidge_core::Event>, ClientError> {
-        let token = self.auth.get_valid_token(account).await?;
-        events::search_events(&self.http, &self.base_url, &token, account, query, limit).await
     }
 }

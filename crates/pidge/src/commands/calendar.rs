@@ -34,7 +34,12 @@ pub async fn run(command: Option<CalendarCommands>, json: bool) -> Result<()> {
             account,
             calendar,
             limit,
-        }) => crate::commands::calendar_search::run(query, account, calendar, limit, json).await,
+            from,
+            to,
+        }) => {
+            crate::commands::calendar_search::run(query, account, calendar, limit, from, to, json)
+                .await
+        }
         Some(CalendarCommands::Calendars { command }) => {
             let cmd = command.unwrap_or(CalendarsCommands::List);
             crate::commands::calendar_calendars::run(cmd, json).await

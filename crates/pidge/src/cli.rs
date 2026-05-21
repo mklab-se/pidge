@@ -646,7 +646,8 @@ pub enum CalendarCommands {
         fragment: String,
     },
 
-    /// Search events using Graph's KQL `$search` syntax
+    /// Substring search across calendar events (case-insensitive, matches
+    /// subject, body preview, location, organizer, and attendees).
     Search {
         /// Search query
         query: String,
@@ -654,8 +655,15 @@ pub enum CalendarCommands {
         account: Vec<String>,
         #[arg(long)]
         calendar: Option<String>,
+        /// Maximum number of matches to return after filtering
         #[arg(short = 'n', long, default_value = "25")]
         limit: usize,
+        /// Earliest event start to consider (default: 365 days ago)
+        #[arg(long)]
+        from: Option<String>,
+        /// Latest event start to consider (default: 365 days from now)
+        #[arg(long)]
+        to: Option<String>,
     },
 
     /// List calendars on each signed-in account

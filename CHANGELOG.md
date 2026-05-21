@@ -7,6 +7,11 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - `pidge calendar list`, `calendar search`, and `calendar show` now include a `hash` field as the first key in each event's JSON output, matching the 8-char short hash printed in the human card view. Agents can pipe `--json` output directly into follow-up commands (`show`, `move-time`, `delete`, …) without re-running pidge to recover the hash. Non-breaking: the existing `id` field (full Graph ID) is unchanged.
+- `pidge calendar search` learned `--from <date>` and `--to <date>` flags to scope the window of events to consider (defaults to ±365 days from now).
+
+### Fixed
+
+- `pidge calendar search` no longer crashes with `Microsoft Graph: 501 SearchEvents — The parameter $search is not currently supported on the Events resource.` Graph's `$search` parameter is not implemented for the Events resource; pidge now fetches the calendar view over the configured window and applies a case-insensitive substring filter client-side across subject, body preview, location, organizer, and attendees. The `--limit` flag now caps post-filter matches; per-account fetch capacity is 500 events per window.
 
 ## [0.4.1] - 2026-05-21
 
