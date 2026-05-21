@@ -6,6 +6,7 @@
 mod account;
 mod cache;
 mod config;
+mod contacts;
 mod error;
 mod event;
 mod message;
@@ -15,6 +16,7 @@ pub use cache::{
     CacheLookup, CachedEventRef, CachedMessageRef, EventCache, MessageCache, short_hash,
 };
 pub use config::{Config, Defaults};
+pub use contacts::{Contact, ContactSource, ContactsCache};
 pub use error::CoreError;
 pub use event::{
     Attendee, AttendeeKind, Calendar, Event, EventTime, RecurrenceFreq, RecurrencePattern,

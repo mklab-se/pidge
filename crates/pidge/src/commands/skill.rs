@@ -381,12 +381,38 @@ These are sketches, not contracts. Always check `--help` for exact flags.
 ### Conventions
 - pidge does **not** check conflicts. To check, call
   `{invoke} calendar list --json --from … --to …` first and reason.
-- pidge does **not** look up names. Pass e-mail addresses. If the user
-  said \"John\", confirm John's e-mail with them first.
+- pidge **can** look up names — see Contacts below. Prefer the `@name`
+  inline syntax in `--invite` / `--to` / `--cc` / `--bcc` over asking
+  the user for an e-mail address; fall back to asking only when the
+  lookup is ambiguous or unknown.
 - For recurring events, the default acts on the single occurrence.
   Pass `--series` only when the user clearly meant \"all of them\".
 - Convert relative dates (\"next Tuesday\") to absolute (`2026-05-26`)
   before invoking pidge — keeps logs reproducible.
+
+## Contacts
+
+`{invoke} contacts` is a local name → e-mail index built from the
+user's own recent inbox senders and calendar attendees.
+
+- `{invoke} contacts refresh [--days 365]` — rebuild the index.
+  Slowish (one Graph round-trip per account for mail and another for
+  calendar). Run it once on first use and roughly weekly thereafter.
+- `{invoke} contacts find <query> --json` — substring match on name,
+  e-mail, or local-part. Exact e-mail match wins.
+
+**Inline resolution.** Any token starting with `@` in `--invite`,
+`--invite-optional`, `--to`, `--cc`, or `--bcc` is resolved against the
+index. Plain tokens are treated as literal e-mail addresses, so this is
+fully non-breaking:
+
+```
+{invoke} calendar new --title \"Sync\" --start \"tomorrow 14:00\" --invite \"@dino,alice@x.com\"
+```
+
+Ambiguous queries error out with every candidate listed — the agent
+should pick one (typically the most recently-seen, listed first) and
+re-issue with the full e-mail, or ask the user.
 
 ## What pidge will NOT do for you
 
@@ -394,8 +420,12 @@ These are sketches, not contracts. Always check `--help` for exact flags.
   integration today is via this skill.
 - pidge does not store or summarize e-mail content for you; you read and
   reason over it yourself using `mail show` / `mail --json`.
-- pidge does not check calendar conflicts or look up contacts by name —
-  see the Conventions notes under Calendar above.
+- pidge does not check calendar conflicts. See the Calendar Conventions
+  note above.
+- The contacts index is populated only from inbox senders + calendar
+  organizer/attendees. People you've e-mailed but who haven't replied
+  won't appear unless they're also on a calendar invite (Sent Items
+  scanning is a planned follow-up).
 
 ## Keeping this skill fresh
 

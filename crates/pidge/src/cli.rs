@@ -64,6 +64,13 @@ pub enum Commands {
         command: TrustCommands,
     },
 
+    /// Local name → email index. Use `@name` in --invite / --to / --cc / --bcc
+    /// to resolve against it.
+    Contacts {
+        #[command(subcommand)]
+        command: ContactsCommands,
+    },
+
     /// List, edit, send, or delete draft e-mails
     Drafts {
         #[command(subcommand)]
@@ -585,6 +592,29 @@ pub enum DraftAttachmentCommands {
 }
 
 #[derive(clap::Subcommand)]
+pub enum ContactsCommands {
+    /// Rebuild the local index from inbox senders and calendar attendees.
+    Refresh {
+        /// Window of history to scan for both mail and calendar
+        #[arg(long, default_value = "365")]
+        days: i64,
+        /// Limit refresh to a specific signed-in account (repeatable)
+        #[arg(long)]
+        account: Vec<String>,
+    },
+    /// Search the local index. Case-insensitive substring match on name,
+    /// email, and local-part. Exact email match wins.
+    Find {
+        /// Query — substring of name, email, or local-part. Omit to list all.
+        #[arg(default_value = "")]
+        query: String,
+        /// Maximum number of matches to print
+        #[arg(short = 'n', long, default_value = "25")]
+        limit: usize,
+    },
+}
+
+#[derive(clap::Subcommand)]
 pub enum TrustCommands {
     /// List trusted sender addresses
     List,
@@ -905,6 +935,9 @@ impl Cli {
             }
             Some(Commands::Trust { command }) => {
                 crate::commands::trust::run(command, self.json).await
+            }
+            Some(Commands::Contacts { command }) => {
+                crate::commands::contacts::run(command, self.json).await
             }
             Some(Commands::Drafts { command }) => {
                 crate::commands::drafts::run(command, self.json).await

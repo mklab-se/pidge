@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Contact name resolution.** New `pidge contacts refresh` builds a local name → e-mail index from recent inbox senders and calendar organizer/attendees (default ±365 day window, per-account). `pidge contacts find <query>` searches it (case-insensitive substring on name, e-mail, or local-part; exact e-mail match wins).
+- **Inline `@name` syntax.** Tokens in `--invite`, `--invite-optional`, `--to`, `--cc`, and `--bcc` that start with `@` resolve against the index; bare e-mails without `@` prefix are passed through unchanged (fully non-breaking). Multi-match resolution errors with every candidate listed (most recently seen first, capped at 8) rather than prompting — agent-friendly deterministic failure.
+- AI skill emit documents the contacts surface and the inline-resolution convention.
+
 ## [0.4.2] - 2026-05-21
 
 ### Added

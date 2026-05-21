@@ -5,9 +5,12 @@ use chrono::{Duration, Utc};
 use chrono_tz::Tz;
 
 use pidge_client::{AuthClient, GraphClient, graph::events::NewEvent};
-use pidge_core::{Config, RecurrenceFreq, RecurrencePattern, RecurrenceRange, Weekday};
+use pidge_core::{
+    Config, ContactsCache, RecurrenceFreq, RecurrencePattern, RecurrenceRange, Weekday,
+};
 
 use crate::cli::CalendarNewArgs;
+use crate::commands::name_resolve::resolve_addresses;
 use crate::commands::time::parse_when;
 use crate::output::resolve_tz;
 
@@ -37,6 +40,10 @@ pub async fn run(args: CalendarNewArgs, json: bool) -> Result<()> {
 
     let recurrence = build_recurrence(&args)?;
 
+    let contacts = ContactsCache::load()?;
+    let required_attendees = resolve_addresses(&args.invite, &contacts)?;
+    let optional_attendees = resolve_addresses(&args.invite_optional, &contacts)?;
+
     let new = NewEvent {
         subject: title,
         start,
@@ -45,8 +52,8 @@ pub async fn run(args: CalendarNewArgs, json: bool) -> Result<()> {
         all_day: args.all_day,
         location: args.location.clone(),
         body_text,
-        required_attendees: args.invite.clone(),
-        optional_attendees: args.invite_optional.clone(),
+        required_attendees,
+        optional_attendees,
         recurrence,
         online_meeting: args.online,
     };

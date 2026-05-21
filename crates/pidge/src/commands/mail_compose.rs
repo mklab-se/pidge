@@ -144,7 +144,9 @@ async fn send_or_draft(from: &str, c: compose_form::Compose, save_as_draft: bool
 
 fn parse_addrs(raw: &[String]) -> Result<Vec<String>> {
     let joined = raw.join(",");
-    compose_form::parse_addresses(&joined)
+    let parsed = compose_form::parse_addresses(&joined)?;
+    let contacts = pidge_core::ContactsCache::load()?;
+    crate::commands::name_resolve::resolve_addresses(&parsed, &contacts)
 }
 
 /// `--body`/`--body-file` flag resolution that returns "" if neither was set,

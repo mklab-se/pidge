@@ -4,10 +4,11 @@ use anyhow::Result;
 use chrono::Utc;
 
 use pidge_client::{AuthClient, GraphClient, graph::events::NewEvent};
-use pidge_core::Config;
+use pidge_core::{Config, ContactsCache};
 
 use crate::cli::CalendarEditArgs;
 use crate::commands::calendar_fragment;
+use crate::commands::name_resolve::resolve_addresses;
 use crate::commands::time::{input_tz, parse_when};
 
 pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<()> {
@@ -59,6 +60,7 @@ pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<(
         _ => Some(cur.body_content.clone()),
     };
 
+    let contacts = ContactsCache::load()?;
     let required_attendees: Vec<String> = if args.invite.is_empty() {
         cur.attendees
             .iter()
@@ -66,7 +68,7 @@ pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<(
             .map(|a| a.address.clone())
             .collect()
     } else {
-        args.invite.clone()
+        resolve_addresses(&args.invite, &contacts)?
     };
     let optional_attendees: Vec<String> = if args.invite_optional.is_empty() {
         cur.attendees
@@ -75,7 +77,7 @@ pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<(
             .map(|a| a.address.clone())
             .collect()
     } else {
-        args.invite_optional.clone()
+        resolve_addresses(&args.invite_optional, &contacts)?
     };
 
     let new = NewEvent {
