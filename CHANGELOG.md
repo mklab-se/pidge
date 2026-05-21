@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-05-21
+
 ### Added
 
 - **Contact name resolution.** New `pidge contacts refresh` builds a local name → e-mail index from recent inbox senders and calendar organizer/attendees (default ±365 day window, per-account). `pidge contacts find <query>` searches it (case-insensitive substring on name, e-mail, or local-part; exact e-mail match wins).
