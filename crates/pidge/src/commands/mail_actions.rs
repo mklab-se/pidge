@@ -160,10 +160,7 @@ async fn archive_bulk(
         let count = if from_set.is_empty() {
             // Date-only mode: walk the Inbox sorted by date and stop once
             // we've passed the cutoff.
-            archive_bulk_inbox_for_account(
-                &graph, email, cutoff, PAGE_SIZE, MAX_PAGES,
-            )
-            .await?
+            archive_bulk_inbox_for_account(&graph, email, cutoff, PAGE_SIZE, MAX_PAGES).await?
         } else {
             // Sender-filter mode: run one Graph search per sender so we
             // sweep ALL folders (marketing senders frequently land in
@@ -280,11 +277,7 @@ async fn archive_bulk_by_sender_for_account(
         {
             Ok(m) => m,
             Err(e) => {
-                eprintln!(
-                    "  {} search failed for {}: {e}",
-                    "!".red(),
-                    sender.dimmed()
-                );
+                eprintln!("  {} search failed for {}: {e}", "!".red(), sender.dimmed());
                 continue;
             }
         };

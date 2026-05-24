@@ -36,9 +36,7 @@ pub async fn run(
 ) -> Result<()> {
     match (fragment, from.is_empty(), older_than.as_ref()) {
         (Some(f), true, None) => delete_single(f, yes).await,
-        (None, false, _) | (None, _, Some(_)) => {
-            delete_bulk(from, older_than, accounts, yes).await
-        }
+        (None, false, _) | (None, _, Some(_)) => delete_bulk(from, older_than, accounts, yes).await,
         (None, true, None) => Err(anyhow!(
             "Specify a fragment, `--from <sender>`, or `--older-than <spec>`. \
              Run `pidge mail delete --help`."
@@ -105,7 +103,11 @@ async fn delete_bulk(
         account_filter
     };
 
-    let scope = if from_set.is_empty() { "Inbox" } else { "mailbox" };
+    let scope = if from_set.is_empty() {
+        "Inbox"
+    } else {
+        "mailbox"
+    };
     let filter_desc = describe_filter(&from_set, cutoff.as_ref(), older_than.as_deref());
     println!(
         "{} Deleting {scope} messages where {}…",
