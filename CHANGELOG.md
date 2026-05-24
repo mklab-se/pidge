@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-05-24
+
+### Added
+
+- **Bulk archive and bulk delete by sender.** `pidge mail archive` and `pidge mail delete` gain a repeatable `--from <sender>` flag (combinable with `--older-than`) that searches every folder per sender and moves matching messages in one call. Sender mode runs Graph `$search` per address, so marketing mail that Outlook auto-routes to Junk gets swept along with whatever is still in the Inbox. Concurrency is capped at 4 in-flight with exponential-backoff retry on HTTP 429 to stay under Graph's per-mailbox throttling. Both bulk surfaces still require explicit `-y`.
+
+### Fixed
+
+- `mail reply`, `mail reply-all`, and `mail forward` now preserve paragraph and line breaks in the comment when the source message body is HTML (which Outlook always serves). Previously Graph's `/reply`-style endpoints collapsed user-typed newlines because their `comment` parameter is treated as inline text inside the HTML body. Pidge now sends the comment as well-formed `<p>` / `<br>` HTML via a `createReply` + GET + PATCH dance, splicing it in above the auto-generated quoted text.
+
 ## [0.4.3] - 2026-05-21
 
 ### Added
