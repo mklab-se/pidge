@@ -596,8 +596,115 @@ pub async fn send_mail(
     post_no_body(http, &url, access_token, &body).await
 }
 
-/// POST /me/messages/{id}/reply — reply to a message with an optional comment
-/// prepended to Graph's auto-generated quoted text.
+/// Convert plain-text body to HTML, escaping special chars and preserving
+/// the line- and paragraph-breaks the user typed.
+///
+/// Graph's `/reply` and `/forward` endpoints accept a `comment` string and
+/// insert it into the reply body — but when the source message body is HTML
+/// (which Outlook always serves), newlines in `comment` collapse to spaces.
+/// To keep the user's formatting, we send the body as HTML via a
+/// `createReply` + PATCH dance (see `prepend_html_to_draft`), and this helper
+/// is the text→HTML conversion that feeds it.
+fn text_to_html(text: &str) -> String {
+    fn escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+    }
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    normalized
+        .split("\n\n")
+        .filter(|p| !p.trim().is_empty())
+        .map(|paragraph| {
+            let lines: Vec<String> = paragraph
+                .trim_matches('\n')
+                .split('\n')
+                .map(escape)
+                .collect();
+            format!("<p>{}</p>", lines.join("<br>"))
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphBodyOnly {
+    body: GraphBody,
+}
+
+/// GET a draft's body, splice `html_to_prepend` in above Graph's auto-quoted
+/// text, and PATCH the draft. Used by reply/reply-all/forward to deliver
+/// HTML-formatted comments that survive Outlook's HTML rendering.
+async fn prepend_html_to_draft(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    html_to_prepend: &str,
+) -> Result<(), ClientError> {
+    let get_url = format!("{base_url}/me/messages/{message_id}?$select=body");
+    let resp = http.get(&get_url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let existing: GraphBodyOnly = resp.json().await?;
+    let existing_content = existing.body.content;
+
+    // Insert right after the opening `<body...>` tag if present, otherwise
+    // prepend to the whole string. Case-insensitive match because Outlook
+    // sometimes serves uppercase `<BODY>`.
+    let new_content = match find_body_tag_end(&existing_content) {
+        Some(pos) => {
+            let mut s = String::with_capacity(existing_content.len() + html_to_prepend.len());
+            s.push_str(&existing_content[..pos]);
+            s.push_str(html_to_prepend);
+            s.push_str(&existing_content[pos..]);
+            s
+        }
+        None => format!("{html_to_prepend}{existing_content}"),
+    };
+
+    let patch_url = format!("{base_url}/me/messages/{message_id}");
+    let patch_body = serde_json::json!({
+        "body": {
+            "contentType": "HTML",
+            "content": new_content,
+        }
+    });
+    let resp = http
+        .patch(&patch_url)
+        .bearer_auth(access_token)
+        .json(&patch_body)
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
+fn find_body_tag_end(html: &str) -> Option<usize> {
+    let lc = html.to_ascii_lowercase();
+    let start = lc.find("<body")?;
+    let after = &html[start..];
+    let close_rel = after.find('>')?;
+    Some(start + close_rel + 1)
+}
+
+/// Reply to a message — sends immediately. Uses createReply + body PATCH +
+/// send so the comment is delivered as HTML and the user's paragraph and
+/// line breaks survive Outlook's HTML rendering.
 pub async fn reply_message(
     http: &reqwest::Client,
     base_url: &str,
@@ -605,12 +712,11 @@ pub async fn reply_message(
     message_id: &str,
     comment: &str,
 ) -> Result<(), ClientError> {
-    let url = format!("{base_url}/me/messages/{message_id}/reply");
-    let body = serde_json::json!({ "comment": comment });
-    post_no_body(http, &url, access_token, &body).await
+    let draft_id = create_reply_draft(http, base_url, access_token, message_id, comment).await?;
+    send_draft(http, base_url, access_token, &draft_id).await
 }
 
-/// POST /me/messages/{id}/replyAll — reply to every recipient on the thread.
+/// Reply-all variant of `reply_message`.
 pub async fn reply_all_message(
     http: &reqwest::Client,
     base_url: &str,
@@ -618,12 +724,12 @@ pub async fn reply_all_message(
     message_id: &str,
     comment: &str,
 ) -> Result<(), ClientError> {
-    let url = format!("{base_url}/me/messages/{message_id}/replyAll");
-    let body = serde_json::json!({ "comment": comment });
-    post_no_body(http, &url, access_token, &body).await
+    let draft_id =
+        create_reply_all_draft(http, base_url, access_token, message_id, comment).await?;
+    send_draft(http, base_url, access_token, &draft_id).await
 }
 
-/// POST /me/messages/{id}/forward — forward to new recipients with optional comment.
+/// Forward — sends immediately, with HTML-formatted comment.
 pub async fn forward_message(
     http: &reqwest::Client,
     base_url: &str,
@@ -632,14 +738,9 @@ pub async fn forward_message(
     to: &[String],
     comment: &str,
 ) -> Result<(), ClientError> {
-    let url = format!("{base_url}/me/messages/{message_id}/forward");
-    let body = serde_json::json!({
-        "comment": comment,
-        "toRecipients": to.iter().map(|addr| serde_json::json!({
-            "emailAddress": { "address": addr }
-        })).collect::<Vec<_>>(),
-    });
-    post_no_body(http, &url, access_token, &body).await
+    let draft_id =
+        create_forward_draft(http, base_url, access_token, message_id, to, comment).await?;
+    send_draft(http, base_url, access_token, &draft_id).await
 }
 
 async fn post_no_body(
@@ -686,6 +787,10 @@ pub async fn create_draft(
 
 /// POST /me/messages/{id}/createReply — create a reply draft. Returns the
 /// new draft's Graph message ID.
+///
+/// The comment is converted from plain text to HTML and spliced into the
+/// draft body via PATCH, so paragraph- and line-breaks survive Outlook's
+/// HTML rendering. (Graph's own `comment` parameter would collapse them.)
 pub async fn create_reply_draft(
     http: &reqwest::Client,
     base_url: &str,
@@ -697,10 +802,21 @@ pub async fn create_reply_draft(
     let resp = http
         .post(&url)
         .bearer_auth(access_token)
-        .json(&serde_json::json!({ "comment": comment }))
+        .json(&serde_json::json!({}))
         .send()
         .await?;
-    parse_id_from_response(resp).await
+    let draft_id = parse_id_from_response(resp).await?;
+    if !comment.is_empty() {
+        prepend_html_to_draft(
+            http,
+            base_url,
+            access_token,
+            &draft_id,
+            &text_to_html(comment),
+        )
+        .await?;
+    }
+    Ok(draft_id)
 }
 
 /// POST /me/messages/{id}/createReplyAll — create a reply-all draft.
@@ -715,10 +831,21 @@ pub async fn create_reply_all_draft(
     let resp = http
         .post(&url)
         .bearer_auth(access_token)
-        .json(&serde_json::json!({ "comment": comment }))
+        .json(&serde_json::json!({}))
         .send()
         .await?;
-    parse_id_from_response(resp).await
+    let draft_id = parse_id_from_response(resp).await?;
+    if !comment.is_empty() {
+        prepend_html_to_draft(
+            http,
+            base_url,
+            access_token,
+            &draft_id,
+            &text_to_html(comment),
+        )
+        .await?;
+    }
+    Ok(draft_id)
 }
 
 /// POST /me/messages/{id}/createForward — create a forward draft with the
@@ -736,14 +863,24 @@ pub async fn create_forward_draft(
         .post(&url)
         .bearer_auth(access_token)
         .json(&serde_json::json!({
-            "comment": comment,
             "toRecipients": to.iter().map(|addr| serde_json::json!({
                 "emailAddress": { "address": addr }
             })).collect::<Vec<_>>(),
         }))
         .send()
         .await?;
-    parse_id_from_response(resp).await
+    let draft_id = parse_id_from_response(resp).await?;
+    if !comment.is_empty() {
+        prepend_html_to_draft(
+            http,
+            base_url,
+            access_token,
+            &draft_id,
+            &text_to_html(comment),
+        )
+        .await?;
+    }
+    Ok(draft_id)
 }
 
 /// POST /me/messages/{id}/send — send an existing draft.
@@ -1133,17 +1270,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reply_message_posts_comment() {
+    async fn reply_message_creates_draft_patches_body_and_sends() {
         use wiremock::matchers::body_partial_json;
         let server = MockServer::start().await;
+
+        // 1. createReply → returns draft ID
         Mock::given(method("POST"))
-            .and(path_regex("/me/messages/[A-Za-z0-9]+/reply"))
-            .and(body_partial_json(
-                serde_json::json!({ "comment": "Thanks!" }),
-            ))
+            .and(path_regex("/me/messages/MSG/createReply"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": "DRAFT" })),
+            )
+            .mount(&server)
+            .await;
+        // 2. GET draft body
+        Mock::given(method("GET"))
+            .and(path("/me/messages/DRAFT"))
+            .and(query_param("$select", "body"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "body": { "contentType": "HTML", "content": "<html><body><div></div></body></html>" }
+            })))
+            .mount(&server)
+            .await;
+        // 3. PATCH draft body — verify our HTML lands in `body.content`
+        Mock::given(method("PATCH"))
+            .and(path("/me/messages/DRAFT"))
+            .and(body_partial_json(serde_json::json!({
+                "body": { "contentType": "HTML" }
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        // 4. send
+        Mock::given(method("POST"))
+            .and(path("/me/messages/DRAFT/send"))
             .respond_with(ResponseTemplate::new(202))
             .mount(&server)
             .await;
+
         let http = reqwest::Client::new();
         reply_message(&http, &server.uri(), "AT", "MSG", "Thanks!")
             .await
@@ -1151,18 +1314,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forward_message_posts_recipients_and_comment() {
+    async fn forward_message_creates_draft_with_recipients_and_sends() {
         use wiremock::matchers::body_partial_json;
         let server = MockServer::start().await;
+
         Mock::given(method("POST"))
-            .and(path_regex("/me/messages/[A-Za-z0-9]+/forward"))
+            .and(path_regex("/me/messages/MSG/createForward"))
             .and(body_partial_json(serde_json::json!({
-                "comment": "FYI",
                 "toRecipients": [{ "emailAddress": { "address": "bob@example.com" } }]
             })))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({ "id": "DRAFT" })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/DRAFT"))
+            .and(query_param("$select", "body"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "body": { "contentType": "HTML", "content": "<html><body></body></html>" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/me/messages/DRAFT"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/me/messages/DRAFT/send"))
             .respond_with(ResponseTemplate::new(202))
             .mount(&server)
             .await;
+
         let http = reqwest::Client::new();
         forward_message(
             &http,
@@ -1174,6 +1358,29 @@ mod tests {
         )
         .await
         .unwrap();
+    }
+
+    #[test]
+    fn text_to_html_escapes_and_breaks_paragraphs() {
+        let out = text_to_html("Hej Edward,\n\nLine 1\nLine 2\n\n<script>x</script>");
+        assert!(out.contains("<p>Hej Edward,</p>"));
+        assert!(out.contains("<p>Line 1<br>Line 2</p>"));
+        assert!(out.contains("&lt;script&gt;x&lt;/script&gt;"));
+        assert!(!out.contains("<script>"));
+    }
+
+    #[test]
+    fn text_to_html_normalizes_crlf() {
+        let out = text_to_html("A\r\nB\r\n\r\nC");
+        assert!(out.contains("<p>A<br>B</p>"));
+        assert!(out.contains("<p>C</p>"));
+    }
+
+    #[test]
+    fn find_body_tag_end_handles_attributes_and_case() {
+        let html = "<html><BODY class=\"x\">content</BODY></html>";
+        let pos = find_body_tag_end(html).unwrap();
+        assert_eq!(&html[pos..pos + 7], "content");
     }
 
     #[tokio::test]
