@@ -293,17 +293,46 @@ pub enum MailCommands {
         fragment: String,
     },
 
-    /// Move a message to the Archive folder
+    /// Move a message to the Archive folder. Single or bulk.
     Archive {
-        /// Fragment of the 8-char short hash
-        fragment: String,
+        /// Fragment of a single message's 8-char short hash. Omit when
+        /// using a bulk-mode flag like `--from` or `--older-than`.
+        fragment: Option<String>,
+
+        /// BULK: archive every Inbox message from this sender address
+        /// (repeatable). Combine with `--older-than` to also constrain by
+        /// date. Requires `-y`.
+        #[arg(long, conflicts_with = "fragment")]
+        from: Vec<String>,
+
+        /// BULK: archive every Inbox message older than this date or
+        /// duration (e.g. `2026-01-01`, `30d`, `6m`, `1y`). Can be combined
+        /// with `--from` to filter further. Requires `-y`.
+        #[arg(long, conflicts_with = "fragment")]
+        older_than: Option<String>,
+
+        /// Filter bulk archive to a specific account (repeatable). Ignored
+        /// for single-fragment archives.
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Grant required consent for bulk archives. Has no effect on
+        /// single-fragment archives (they don't prompt anyway).
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Delete a message (moves to Deleted Items folder). Single or bulk.
     Delete {
         /// Fragment of a single message's 8-char short hash. Omit when using
-        /// a bulk-mode flag like `--older-than`.
+        /// a bulk-mode flag like `--from` or `--older-than`.
         fragment: Option<String>,
+
+        /// BULK: delete every message from this sender address across all
+        /// folders (repeatable). Combine with `--older-than` to also
+        /// constrain by date. Requires `-y`.
+        #[arg(long, conflicts_with = "fragment")]
+        from: Vec<String>,
 
         /// BULK: delete every message in the Inbox older than this date or
         /// duration (e.g. `2026-01-01`, `30d`, `6m`, `1y`). Always requires

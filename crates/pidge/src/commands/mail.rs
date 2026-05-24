@@ -56,8 +56,17 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
         }
         MailCommands::Flag { fragment } => crate::commands::mail_actions::flag(fragment).await,
         MailCommands::Unflag { fragment } => crate::commands::mail_actions::unflag(fragment).await,
-        MailCommands::Archive { fragment } => {
-            crate::commands::mail_actions::archive(fragment).await
+        MailCommands::Archive {
+            fragment,
+            from,
+            older_than,
+            account,
+            yes,
+        } => {
+            crate::commands::mail_actions::archive_dispatch(
+                fragment, from, older_than, account, yes,
+            )
+            .await
         }
         MailCommands::New(args) => crate::commands::mail_compose::send(args).await,
         MailCommands::Reply { fragment, compose } => {
@@ -71,10 +80,11 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
         }
         MailCommands::Delete {
             fragment,
+            from,
             older_than,
             account,
             yes,
-        } => crate::commands::mail_delete::run(fragment, older_than, account, yes).await,
+        } => crate::commands::mail_delete::run(fragment, from, older_than, account, yes).await,
         MailCommands::Unsubscribe { fragment, yes } => {
             crate::commands::mail_unsubscribe::run(fragment, yes).await
         }

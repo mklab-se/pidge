@@ -14,8 +14,13 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use colored::Colorize;
+use futures::StreamExt;
 use futures::future::join_all;
+use futures::stream;
 use inquire::Confirm;
+use std::collections::HashSet;
+use std::time::Duration as StdDuration;
+use tokio::time::sleep;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
@@ -24,17 +29,21 @@ use crate::commands::mail_fragment::{purge_from_cache, resolve};
 
 pub async fn run(
     fragment: Option<String>,
+    from: Vec<String>,
     older_than: Option<String>,
     accounts: Vec<String>,
     yes: bool,
 ) -> Result<()> {
-    match (fragment, older_than) {
-        (Some(f), None) => delete_single(f, yes).await,
-        (None, Some(spec)) => delete_bulk(spec, accounts, yes).await,
-        (None, None) => Err(anyhow!(
-            "Specify a fragment or `--older-than <spec>`. Run `pidge mail delete --help`."
+    match (fragment, from.is_empty(), older_than.as_ref()) {
+        (Some(f), true, None) => delete_single(f, yes).await,
+        (None, false, _) | (None, _, Some(_)) => {
+            delete_bulk(from, older_than, accounts, yes).await
+        }
+        (None, true, None) => Err(anyhow!(
+            "Specify a fragment, `--from <sender>`, or `--older-than <spec>`. \
+             Run `pidge mail delete --help`."
         )),
-        (Some(_), Some(_)) => unreachable!("clap enforces conflicts_with"),
+        (Some(_), _, _) => unreachable!("clap enforces conflicts_with"),
     }
 }
 
@@ -63,7 +72,12 @@ async fn delete_single(fragment: String, yes: bool) -> Result<()> {
     Ok(())
 }
 
-async fn delete_bulk(spec: String, account_filter: Vec<String>, yes: bool) -> Result<()> {
+async fn delete_bulk(
+    from: Vec<String>,
+    older_than: Option<String>,
+    account_filter: Vec<String>,
+    yes: bool,
+) -> Result<()> {
     if !yes {
         return Err(anyhow!(
             "Bulk delete requires explicit `-y` confirmation — there is no \
@@ -71,7 +85,9 @@ async fn delete_bulk(spec: String, account_filter: Vec<String>, yes: bool) -> Re
         ));
     }
 
-    let cutoff = parse_older_than(&spec)?;
+    let cutoff: Option<DateTime<Utc>> = older_than.as_deref().map(parse_older_than).transpose()?;
+    let from_set: HashSet<String> = from.iter().map(|s| s.to_ascii_lowercase()).collect();
+
     let config = Config::load()?;
     if config.accounts.is_empty() {
         return Err(anyhow!(
@@ -89,23 +105,36 @@ async fn delete_bulk(spec: String, account_filter: Vec<String>, yes: bool) -> Re
         account_filter
     };
 
+    let scope = if from_set.is_empty() { "Inbox" } else { "mailbox" };
+    let filter_desc = describe_filter(&from_set, cutoff.as_ref(), older_than.as_deref());
     println!(
-        "{} Deleting Inbox messages older than {} (cutoff {})…",
+        "{} Deleting {scope} messages where {}…",
         "Bulk".yellow().bold(),
-        spec,
-        cutoff.format("%Y-%m-%d %H:%M UTC")
+        filter_desc
     );
 
-    // Walk each account's inbox in pages (newest-first), stopping once we see
-    // a message newer than the cutoff (since list_inbox sorts desc, everything
-    // after that is also newer).
     let graph = GraphClient::new(AuthClient::from_env()?)?;
     const PAGE_SIZE: usize = 50;
-    const MAX_PAGES: usize = 200; // hard ceiling to avoid runaway
+    const MAX_PAGES: usize = 200;
 
     let mut total_deleted = 0usize;
     for email in &target_emails {
-        let count = delete_bulk_for_account(&graph, email, cutoff, PAGE_SIZE, MAX_PAGES).await?;
+        let count = if from_set.is_empty() {
+            // Date-only mode: same shape as before — walk Inbox newest-first
+            // and stop once we cross the cutoff.
+            delete_bulk_for_account(
+                &graph,
+                email,
+                cutoff.expect("date-only mode implies cutoff is Some"),
+                PAGE_SIZE,
+                MAX_PAGES,
+            )
+            .await?
+        } else {
+            // Sender-filter mode: search the whole mailbox per sender so
+            // we sweep across all folders (Inbox + Junk + Archive + …).
+            delete_bulk_by_sender_for_account(&graph, email, &from_set, cutoff).await?
+        };
         total_deleted += count;
         println!(
             "{} {}: removed {count} message{}",
@@ -116,6 +145,116 @@ async fn delete_bulk(spec: String, account_filter: Vec<String>, yes: bool) -> Re
     }
     println!("{} Total: {total_deleted}.", "✔".green().bold());
     Ok(())
+}
+
+fn describe_filter(
+    from: &HashSet<String>,
+    cutoff: Option<&DateTime<Utc>>,
+    older_than_spec: Option<&str>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !from.is_empty() {
+        let mut senders: Vec<&str> = from.iter().map(String::as_str).collect();
+        senders.sort_unstable();
+        parts.push(format!("from is one of [{}]", senders.join(", ")));
+    }
+    if let (Some(c), Some(spec)) = (cutoff, older_than_spec) {
+        parts.push(format!(
+            "received before {} (cutoff {})",
+            spec,
+            c.format("%Y-%m-%d %H:%M UTC")
+        ));
+    }
+    parts.join(" AND ")
+}
+
+/// Sender-filter bulk: one Graph search per sender across the whole
+/// mailbox, then delete each match. Mirrors the corresponding archive
+/// helper — see `mail_actions::archive_bulk_by_sender_for_account` for
+/// the rationale (in short: marketing often auto-routes to Junk, so an
+/// Inbox-only scan would miss it).
+async fn delete_bulk_by_sender_for_account(
+    graph: &GraphClient,
+    account: &str,
+    from_set: &HashSet<String>,
+    cutoff: Option<DateTime<Utc>>,
+) -> Result<usize> {
+    const SEARCH_LIMIT: usize = 1000;
+    let mut deleted = 0usize;
+    for sender in from_set {
+        let messages = match graph
+            .search_messages(account, &format!("from:{sender}"), SEARCH_LIMIT)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("  {} search failed for {}: {e}", "!".red(), sender.dimmed());
+                continue;
+            }
+        };
+        let matches: Vec<&pidge_core::Message> = messages
+            .iter()
+            .filter(|m| {
+                m.from.address.to_ascii_lowercase() == *sender
+                    && cutoff.is_none_or(|c| m.received_at < c)
+            })
+            .collect();
+        deleted += delete_messages(graph, account, &matches).await;
+    }
+    Ok(deleted)
+}
+
+/// Concurrently delete a batch of messages with the same throttling
+/// safeguards as `move_to_archive`: 4 inflight, retry on HTTP 429.
+async fn delete_messages(
+    graph: &GraphClient,
+    account: &str,
+    messages: &[&pidge_core::Message],
+) -> usize {
+    const MAX_INFLIGHT: usize = 4;
+    let mut ok = 0usize;
+    let tasks = messages.iter().map(|m| {
+        let id = m.id.clone();
+        let short = pidge_core::short_hash(&m.id);
+        async move {
+            let res = delete_with_retry(graph, account, &id).await;
+            (short, res)
+        }
+    });
+    let mut stream = stream::iter(tasks).buffer_unordered(MAX_INFLIGHT);
+    while let Some((short, res)) = stream.next().await {
+        match res {
+            Ok(()) => {
+                ok += 1;
+                let _ = purge_from_cache(&short);
+            }
+            Err(ClientError::Graph { status: 404, .. }) => { /* already gone */ }
+            Err(e) => {
+                eprintln!("  {} failed to delete {}: {e}", "!".red(), short.dimmed());
+            }
+        }
+    }
+    ok
+}
+
+async fn delete_with_retry(
+    graph: &GraphClient,
+    account: &str,
+    message_id: &str,
+) -> Result<(), ClientError> {
+    const MAX_RETRIES: u32 = 5;
+    let mut delay_ms = 500u64;
+    for attempt in 0..=MAX_RETRIES {
+        match graph.delete_message(account, message_id).await {
+            Ok(()) => return Ok(()),
+            Err(ClientError::Graph { status: 429, .. }) if attempt < MAX_RETRIES => {
+                sleep(StdDuration::from_millis(delay_ms)).await;
+                delay_ms = (delay_ms * 2).min(8_000);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("loop returns on Ok or after MAX_RETRIES exits")
 }
 
 async fn delete_bulk_for_account(
