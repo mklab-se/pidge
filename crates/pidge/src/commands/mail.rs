@@ -88,6 +88,9 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
         MailCommands::Unsubscribe { fragment, yes } => {
             crate::commands::mail_unsubscribe::run(fragment, yes).await
         }
+        MailCommands::Attachments { command } => {
+            crate::commands::mail_attachments::run(command, json).await
+        }
     }
 }
 

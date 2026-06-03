@@ -390,6 +390,50 @@ pub enum MailCommands {
         #[command(flatten)]
         compose: ForwardArgs,
     },
+
+    /// List or download a message's file attachments
+    Attachments {
+        #[command(subcommand)]
+        command: MailAttachmentCommands,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum MailAttachmentCommands {
+    /// List the attachments on a message (name, size, type)
+    List {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+
+        /// Also list inline attachments (embedded images, signature logos)
+        #[arg(long)]
+        include_inline: bool,
+    },
+
+    /// Download a message's attachments to disk
+    Save {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+
+        /// Case-insensitive substring of a single attachment's filename.
+        /// Omit to download every (non-inline) attachment.
+        name: Option<String>,
+
+        /// Destination. A directory (existing, or ending in a path separator)
+        /// receives files under their original names; otherwise this is the
+        /// target file path, valid only when one attachment is selected.
+        /// Defaults to your Downloads folder.
+        #[arg(short = 'o', long)]
+        out: Option<std::path::PathBuf>,
+
+        /// Also include inline attachments (embedded images, signature logos)
+        #[arg(long)]
+        include_inline: bool,
+
+        /// Overwrite existing files instead of erroring
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
 }
 
 /// Flags shared between `mail new` and (mostly) the explicit forms of
@@ -534,6 +578,7 @@ pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
     "forward",
     "delete",
     "unsubscribe",
+    "attachments",
     "help",
 ];
 

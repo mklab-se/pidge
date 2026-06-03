@@ -178,6 +178,12 @@ mod preprocess_tests {
             pp(&["pidge", "mail", "show", "3515"]),
             ["pidge", "mail", "show", "3515"]
         );
+        // `attachments` is a subcommand group, not a fragment — it must not be
+        // rewritten to `mail show attachments`.
+        assert_eq!(
+            pp(&["pidge", "mail", "attachments", "list", "3515"]),
+            ["pidge", "mail", "attachments", "list", "3515"]
+        );
     }
 
     #[test]

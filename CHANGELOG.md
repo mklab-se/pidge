@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Download received attachments.** New `pidge mail attachments list <hash>` shows a message's file attachments (name, size, type) and `pidge mail attachments save <hash> [name]` writes them to disk. With no name every non-inline attachment is saved; a case-insensitive filename substring grabs one (ambiguous or no match errors with the candidates listed). `-o <path>` chooses the destination — a directory keeps original names, a file path renames a single attachment — defaulting to the user's Downloads folder. `--include-inline` also pulls embedded images; `-f`/`--force` overwrites existing files (otherwise an existing target is refused). The emitted AI skill documents the new surface.
+
 ## [0.4.4] - 2026-05-24
 
 ### Added
