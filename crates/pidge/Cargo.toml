@@ -45,6 +45,10 @@ html2text.workspace = true
 humansize.workspace = true
 viuer.workspace = true
 image.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/pidge-v{ version }-{ target }.{ archive-format }"
