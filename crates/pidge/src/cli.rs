@@ -112,7 +112,8 @@ pub enum AiCommands {
     Enable,
     /// Disable AI features for pidge
     Disable,
-    /// Interactively configure AI provider and model settings
+    /// Interactively configure AI provider and model settings.
+    /// (See `pidge config` for pidge's own settings.)
     Config,
     /// Show AI status (same as running `pidge ai` without a subcommand)
     Status,
@@ -161,7 +162,7 @@ pub struct ClassifyArgs {
     /// BULK: classify within this folder (nested path allowed).
     #[arg(long, conflicts_with_all = ["fragment", "text"])]
     pub folder: Option<String>,
-    /// BULK: max messages to classify.
+    /// BULK: max messages to classify (per-account fetch, then truncated to this total; with multiple accounts the cap is filled in account order).
     #[arg(short = 'n', long)]
     pub limit: Option<usize>,
     /// Account(s) to act on (default: all signed-in).

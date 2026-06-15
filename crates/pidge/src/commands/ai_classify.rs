@@ -47,6 +47,11 @@ pub fn resolve_prompt(
 }
 
 pub async fn run(args: ClassifyArgs, json: bool) -> Result<()> {
+    if !crate::commands::ai::is_ai_active() {
+        return Err(anyhow!(
+            "AI is not active for pidge. Run `pidge ai enable` and `pidge ai config` to set up a provider."
+        ));
+    }
     let config = Config::load()?;
     let prompt = resolve_prompt(
         args.prompt.clone(),
@@ -79,7 +84,7 @@ pub async fn run(args: ClassifyArgs, json: bool) -> Result<()> {
             parse_labels(&model.classify(&prompt, &input).await?),
             &allowed,
         );
-        if args.set_category {
+        if args.set_category && worth_categorizing(&labels) {
             g.set_categories(&msg.account, &msg.graph_id, &labels)
                 .await?;
         }
@@ -144,7 +149,7 @@ pub(crate) async fn run_batch(
                         }
                     },
                 };
-                if set_category {
+                if set_category && worth_categorizing(&labels) {
                     if let Err(e) = g.set_categories(&account, &id, &labels).await {
                         eprintln!("  ! {short}: set-category failed: {e}");
                     }
@@ -188,9 +193,9 @@ pub(crate) async fn run_batch(
     Ok(())
 }
 
-async fn classify_one(
+async fn classify_one<M: LabelModel>(
     g: &GraphClient,
-    model: &AilloyModel,
+    model: &M,
     account: &str,
     id: &str,
     prompt: &str,
@@ -300,6 +305,12 @@ pub(crate) fn body_text(m: &pidge_core::FullMessage) -> String {
     }
 }
 
+/// Whether a label set is worth writing as categories. A lone `unknown`
+/// (failed/empty/out-of-set classification) is not.
+fn worth_categorizing(labels: &[String]) -> bool {
+    !(labels.len() == 1 && labels[0] == "unknown")
+}
+
 fn emit_single(
     hash: Option<String>,
     from: Option<String>,
@@ -344,5 +355,15 @@ mod tests {
     #[test]
     fn resolve_prompt_errors_when_unset() {
         assert!(resolve_prompt(None, None, None).is_err());
+    }
+
+    #[test]
+    fn worth_categorizing_rejects_lone_unknown() {
+        assert!(!worth_categorizing(&["unknown".to_string()]));
+        assert!(worth_categorizing(&["receipt".to_string()]));
+        assert!(worth_categorizing(&[
+            "unknown".to_string(),
+            "receipt".to_string()
+        ]));
     }
 }

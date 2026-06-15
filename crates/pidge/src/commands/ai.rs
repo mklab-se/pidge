@@ -33,7 +33,6 @@ pub async fn run(cmd: Option<AiCommands>, json: bool) -> Result<()> {
 }
 
 /// Check if AI features are active (configured via ailloy + enabled for this tool).
-#[allow(dead_code)]
 pub fn is_ai_active() -> bool {
     config_tui::is_ai_active("pidge")
 }
