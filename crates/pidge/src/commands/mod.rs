@@ -23,6 +23,7 @@ pub mod calendar_new;
 pub mod calendar_rsvp;
 pub mod calendar_search;
 pub mod calendar_show;
+pub mod classify_model;
 pub mod classify_parse;
 pub mod completion;
 pub mod compose_form;
