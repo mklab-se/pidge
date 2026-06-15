@@ -579,6 +579,51 @@ pub async fn set_flag(
     .await
 }
 
+#[derive(serde::Deserialize)]
+struct GraphCategories {
+    #[serde(default)]
+    categories: Vec<String>,
+}
+
+/// GET /me/messages/{id}?$select=categories — read a message's categories.
+pub async fn get_categories(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Result<Vec<String>, ClientError> {
+    let url = format!("{base_url}/me/messages/{message_id}?$select=categories");
+    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let body: GraphCategories = resp.json().await?;
+    Ok(body.categories)
+}
+
+/// PATCH /me/messages/{id} with `{ "categories": [...] }` — replace categories.
+pub async fn set_categories(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    categories: &[String],
+) -> Result<(), ClientError> {
+    patch_message(
+        http,
+        base_url,
+        access_token,
+        message_id,
+        &serde_json::json!({ "categories": categories }),
+    )
+    .await
+}
+
 async fn patch_message(
     http: &reqwest::Client,
     base_url: &str,
@@ -1682,6 +1727,48 @@ mod tests {
         delete_mail_folder(&http, &server.uri(), "AT", "F1")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_categories_parses_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/me/messages/.+$"))
+            .and(query_param("$select", "categories"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "categories": ["Receipts", "Urgent"]
+            })))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let cats = get_categories(&http, &server.uri(), "AT", "MSG")
+            .await
+            .unwrap();
+        assert_eq!(cats, vec!["Receipts", "Urgent"]);
+    }
+
+    #[tokio::test]
+    async fn set_categories_patches_array() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path_regex(r"^/me/messages/.+$"))
+            .and(body_partial_json(
+                serde_json::json!({ "categories": ["receipt", "ticket"] }),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        set_categories(
+            &http,
+            &server.uri(),
+            "AT",
+            "MSG",
+            &["receipt".to_string(), "ticket".to_string()],
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

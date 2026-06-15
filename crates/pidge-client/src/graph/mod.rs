@@ -14,10 +14,10 @@ pub use mail::{
     InboxPage, MailFolder, Outgoing, add_attachment, create_child_folder, create_draft,
     create_forward_draft, create_mail_folder, create_reply_all_draft, create_reply_draft,
     delete_attachment, delete_mail_folder, delete_message, fetch_message_headers, forward_message,
-    get_attachment_bytes, get_message, list_attachments, list_child_folders, list_drafts,
-    list_folder_messages, list_inbox, list_mail_folders, mark_read, mark_unread, move_message,
-    reply_all_message, reply_message, search_messages, send_draft, send_mail, set_flag,
-    update_draft,
+    get_attachment_bytes, get_categories, get_message, list_attachments, list_child_folders,
+    list_drafts, list_folder_messages, list_inbox, list_mail_folders, mark_read, mark_unread,
+    move_message, reply_all_message, reply_message, search_messages, send_draft, send_mail,
+    set_categories, set_flag, update_draft,
 };
 pub use me::{Me, get_me};
 
@@ -132,6 +132,27 @@ impl GraphClient {
     ) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::set_flag(&self.http, &self.base_url, &token, message_id, flagged).await
+    }
+
+    /// GET /me/messages/{id}?$select=categories.
+    pub async fn get_categories(
+        &self,
+        account: &str,
+        message_id: &str,
+    ) -> Result<Vec<String>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::get_categories(&self.http, &self.base_url, &token, message_id).await
+    }
+
+    /// PATCH /me/messages/{id} categories.
+    pub async fn set_categories(
+        &self,
+        account: &str,
+        message_id: &str,
+        categories: &[String],
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::set_categories(&self.http, &self.base_url, &token, message_id, categories).await
     }
 
     /// POST /me/messages/{id}/move — move to a folder by ID or well-known name.
