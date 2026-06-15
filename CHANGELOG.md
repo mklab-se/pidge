@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **AI e-mail classification.** `pidge ai classify` labels e-mail(s) using the configured AI provider (via ailloy) against a user-defined prompt — a single message by hash, arbitrary `--text` (handy for testing a prompt), or a batch selected with `--from`/`--older-than`/`--folder`/`-n` and run `--parallel N` at a time. Classification is multi-label aware (a message can be both `receipt` and `ticket`); `--labels a,b,c` validates the answer against an allowed set (out-of-set → `unknown`); `--set-category` writes the result to the message's native Outlook categories. Results are cached by message-id + prompt hash (`--no-cache` to bypass). The primary use case is an AI agent reading the label off stdout (`--json` for structured output) and then acting on it.
+- **`pidge categorize`** — manage a message's native Outlook categories directly: `show` / `set` / `add` / `clear`.
+- **`pidge config`** — git-style get/set/unset/show for pidge's own settings, with `classify.prompt`, `classify.parallel`, `classify.cache`, and `classify.labels` as defaults for `ai classify`. Multi-line values (the prompt) accept `--file <path>` or `-` for stdin. Distinct from `pidge ai config`, which configures the AI provider.
+
 ## [0.4.7] - 2026-06-15
 
 ### Added
