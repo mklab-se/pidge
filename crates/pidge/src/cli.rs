@@ -197,6 +197,11 @@ pub enum MailCommands {
         #[arg(long)]
         account: Vec<String>,
 
+        /// List a specific folder instead of the Inbox. Accepts a nested path
+        /// like `Kvitton/MKLab` (matched case-insensitively).
+        #[arg(long)]
+        folder: Option<String>,
+
         /// Maximum number of messages to show per page
         #[arg(short = 'n', long, default_value = "25")]
         limit: usize,
@@ -328,8 +333,10 @@ pub enum MailCommands {
         /// a bulk-mode flag like `--from` or `--older-than`.
         fragment: Option<String>,
 
-        /// Destination folder's display name. Matched case-insensitively
-        /// against existing folders; created at the top level if absent.
+        /// Destination folder. Matched case-insensitively against existing
+        /// folders; created if absent. Use `/` for nested folders, e.g.
+        /// `--to "Kvitton/MKLab"` files under the `MKLab` child of `Kvitton`
+        /// (both levels created as needed).
         #[arg(long)]
         to: String,
 
@@ -363,15 +370,33 @@ pub enum MailCommands {
     },
 
     /// Create a folder (idempotent) in each account. Useful for setting up a
-    /// consistent folder per account before sorting mail into it.
+    /// consistent folder per account before sorting mail into it. Use `/` for
+    /// nested folders, e.g. `mail mkdir "Kvitton/MKLab"`.
     Mkdir {
-        /// Display name of the folder to create.
+        /// Display name of the folder to create. `/` denotes nesting
+        /// (`Kvitton/MKLab` creates `MKLab` under `Kvitton`).
         name: String,
 
         /// Create only in a specific account (repeatable). Defaults to all
         /// signed-in accounts.
         #[arg(long)]
         account: Vec<String>,
+    },
+
+    /// Delete a folder (its contents move to Deleted Items) in each account.
+    /// Use `/` for nested folders. Requires `-y`.
+    Rmdir {
+        /// Folder to delete. `/` denotes nesting (`Kvitton/MKLab`).
+        name: String,
+
+        /// Delete only in a specific account (repeatable). Defaults to all
+        /// signed-in accounts.
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Confirm the deletion. Required — there is no interactive prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Delete a message (moves to Deleted Items folder). Single or bulk.
@@ -627,6 +652,7 @@ pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
     "move",
     "folders",
     "mkdir",
+    "rmdir",
     "new",
     "reply",
     "reply-all",

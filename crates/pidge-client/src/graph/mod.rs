@@ -11,12 +11,13 @@ pub use events::{
     list_calendar_view, move_event_to_calendar, move_time, rsvp_event, update_event,
 };
 pub use mail::{
-    InboxPage, MailFolder, Outgoing, add_attachment, create_draft, create_forward_draft,
-    create_mail_folder, create_reply_all_draft, create_reply_draft, delete_attachment,
-    delete_message, fetch_message_headers, forward_message, get_attachment_bytes, get_message,
-    list_attachments, list_drafts, list_inbox, list_mail_folders, mark_read, mark_unread,
-    move_message, reply_all_message, reply_message, search_messages, send_draft, send_mail,
-    set_flag, update_draft,
+    InboxPage, MailFolder, Outgoing, add_attachment, create_child_folder, create_draft,
+    create_forward_draft, create_mail_folder, create_reply_all_draft, create_reply_draft,
+    delete_attachment, delete_mail_folder, delete_message, fetch_message_headers, forward_message,
+    get_attachment_bytes, get_message, list_attachments, list_child_folders, list_drafts,
+    list_folder_messages, list_inbox, list_mail_folders, mark_read, mark_unread, move_message,
+    reply_all_message, reply_message, search_messages, send_draft, send_mail, set_flag,
+    update_draft,
 };
 pub use me::{Me, get_me};
 
@@ -82,6 +83,29 @@ impl GraphClient {
         .await
     }
 
+    /// GET /me/mailFolders/{folder_id}/messages — list a custom folder.
+    pub async fn list_folder(
+        &self,
+        account: &str,
+        folder_id: &str,
+        limit: usize,
+        skip: usize,
+        unread_only: bool,
+    ) -> Result<InboxPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        list_folder_messages(
+            &self.http,
+            &self.base_url,
+            &token,
+            account,
+            folder_id,
+            limit,
+            skip,
+            unread_only,
+        )
+        .await
+    }
+
     /// GET /me/messages with `$search="<query>"` for a given account.
     pub async fn search_messages(
         &self,
@@ -135,6 +159,38 @@ impl GraphClient {
     ) -> Result<MailFolder, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::create_mail_folder(&self.http, &self.base_url, &token, display_name).await
+    }
+
+    /// GET /me/mailFolders/{parent_id}/childFolders — list a folder's children.
+    pub async fn list_child_folders(
+        &self,
+        account: &str,
+        parent_id: &str,
+    ) -> Result<Vec<MailFolder>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::list_child_folders(&self.http, &self.base_url, &token, parent_id).await
+    }
+
+    /// POST /me/mailFolders/{parent_id}/childFolders — create a child folder.
+    pub async fn create_child_folder(
+        &self,
+        account: &str,
+        parent_id: &str,
+        display_name: &str,
+    ) -> Result<MailFolder, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::create_child_folder(&self.http, &self.base_url, &token, parent_id, display_name).await
+    }
+
+    /// DELETE /me/mailFolders/{id} — delete a folder (contents move to
+    /// Deleted Items).
+    pub async fn delete_mail_folder(
+        &self,
+        account: &str,
+        folder_id: &str,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::delete_mail_folder(&self.http, &self.base_url, &token, folder_id).await
     }
 
     /// POST /me/sendMail — compose-and-send a new message.

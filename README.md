@@ -151,6 +151,11 @@ cargo fmt                # Format
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor guide.
 
+## Changelog
+
+Curious what's new? See [CHANGELOG.md](CHANGELOG.md) for the full history of
+changes, newest first.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

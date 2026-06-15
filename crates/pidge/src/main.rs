@@ -113,8 +113,11 @@ async fn main() -> Result<()> {
 
     let result = cli.run().await;
 
+    // The update check is best-effort. Bound the wait so a slow or hung
+    // crates.io request (e.g. flaky DNS) can never delay process exit beyond
+    // a moment — previously a hung check could wedge the CLI indefinitely.
     if let Some(handle) = update_handle {
-        let _ = handle.await;
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
     }
 
     result

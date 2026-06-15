@@ -22,13 +22,19 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
     match command {
         MailCommands::List {
             account,
+            folder,
             limit,
             page,
             unread,
             compact,
             table,
             full,
-        } => list(account, limit, page, unread, compact, table, full, json).await,
+        } => {
+            list(
+                account, folder, limit, page, unread, compact, table, full, json,
+            )
+            .await
+        }
         MailCommands::Show {
             fragment,
             mark_read,
@@ -82,6 +88,9 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
         MailCommands::Mkdir { name, account } => {
             crate::commands::mail_folders::mkdir(name, account).await
         }
+        MailCommands::Rmdir { name, account, yes } => {
+            crate::commands::mail_folders::rmdir(name, account, yes).await
+        }
         MailCommands::New(args) => crate::commands::mail_compose::send(args).await,
         MailCommands::Reply { fragment, compose } => {
             crate::commands::mail_compose::reply(fragment, compose, false).await
@@ -111,6 +120,7 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 async fn list(
     account_filter: Vec<String>,
+    folder: Option<String>,
     limit: usize,
     page: usize,
     unread_only: bool,
@@ -149,8 +159,32 @@ async fn list(
     let futures = target_emails.iter().map(|email| {
         let graph = &graph;
         let e = email.clone();
+        let folder = folder.clone();
         async move {
-            let result = graph.list_inbox(&e, per_account, skip, unread_only).await;
+            let result = match folder {
+                None => graph.list_inbox(&e, per_account, skip, unread_only).await,
+                Some(path) => {
+                    // Resolve the (possibly nested) folder path to an ID for
+                    // this account, then list it. A path that doesn't exist
+                    // in this account surfaces as an empty, explanatory error.
+                    match crate::commands::mail_folders::resolve_folder_path(graph, &e, &path).await
+                    {
+                        Ok(Some(id)) => {
+                            graph
+                                .list_folder(&e, &id, per_account, skip, unread_only)
+                                .await
+                        }
+                        Ok(None) => Err(pidge_client::ClientError::Graph {
+                            status: 404,
+                            message: format!("no folder '{path}' in {e}"),
+                        }),
+                        Err(err) => Err(pidge_client::ClientError::Graph {
+                            status: 500,
+                            message: err.to_string(),
+                        }),
+                    }
+                }
+            };
             (e, result)
         }
     });

@@ -148,6 +148,33 @@ pub async fn list_inbox(
     .await
 }
 
+/// List a page of messages from an arbitrary folder, identified by its Graph
+/// folder ID (or a well-known name). Same shape as `list_inbox`; used by
+/// `mail list --folder` to page through custom folders.
+#[allow(clippy::too_many_arguments)]
+pub async fn list_folder_messages(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    folder_id: &str,
+    limit: usize,
+    skip: usize,
+    unread_only: bool,
+) -> Result<InboxPage, ClientError> {
+    list_folder(
+        http,
+        base_url,
+        access_token,
+        account,
+        folder_id,
+        limit,
+        skip,
+        unread_only,
+    )
+    .await
+}
+
 /// List a page of drafts from the Drafts folder. Drafts don't have a real
 /// "received" time, so Graph sorts by `lastModifiedDateTime desc` here.
 pub async fn list_drafts(
@@ -1109,6 +1136,10 @@ pub struct MailFolder {
     /// Unread message count, present when selected.
     #[serde(rename = "unreadItemCount", default)]
     pub unread_item_count: Option<u64>,
+    /// Number of immediate child folders, present when selected. Lets callers
+    /// skip a `childFolders` round-trip for folders that have none.
+    #[serde(rename = "childFolderCount", default)]
+    pub child_folder_count: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1118,17 +1149,17 @@ struct GraphFolderList {
     next_link: Option<String>,
 }
 
-/// GET /me/mailFolders — list the top-level mail folders (id, displayName,
-/// counts). Pages through `@odata.nextLink` so mailboxes with many folders
-/// are fully enumerated rather than silently truncated at one page.
-pub async fn list_mail_folders(
+/// Fields every folder listing selects — shared so top-level and child
+/// listings return identically-shaped `MailFolder`s.
+const FOLDER_SELECT: &str = "id,displayName,totalItemCount,unreadItemCount,childFolderCount";
+
+/// Page through a `mailFolders`/`childFolders` collection starting at `url`,
+/// following `@odata.nextLink` until exhausted.
+async fn fetch_folder_pages(
     http: &reqwest::Client,
-    base_url: &str,
     access_token: &str,
+    mut url: String,
 ) -> Result<Vec<MailFolder>, ClientError> {
-    let mut url = format!(
-        "{base_url}/me/mailFolders?$select=id,displayName,totalItemCount,unreadItemCount&$top=100"
-    );
     let mut folders: Vec<MailFolder> = Vec::new();
     loop {
         let resp = http.get(&url).bearer_auth(access_token).send().await?;
@@ -1152,20 +1183,40 @@ pub async fn list_mail_folders(
     Ok(folders)
 }
 
-/// POST /me/mailFolders — create a new top-level folder, returning it.
-///
-/// Graph rejects a duplicate `displayName` with 409; callers that want
-/// "create if missing" semantics should list first and only call this when
-/// no case-insensitive match exists.
-pub async fn create_mail_folder(
+/// GET /me/mailFolders — list the top-level mail folders (id, displayName,
+/// counts). Pages through `@odata.nextLink` so mailboxes with many folders
+/// are fully enumerated rather than silently truncated at one page.
+pub async fn list_mail_folders(
     http: &reqwest::Client,
     base_url: &str,
     access_token: &str,
+) -> Result<Vec<MailFolder>, ClientError> {
+    let url = format!("{base_url}/me/mailFolders?$select={FOLDER_SELECT}&$top=100");
+    fetch_folder_pages(http, access_token, url).await
+}
+
+/// GET /me/mailFolders/{parent_id}/childFolders — list a folder's immediate
+/// children. Same shape and paging as `list_mail_folders`.
+pub async fn list_child_folders(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    parent_id: &str,
+) -> Result<Vec<MailFolder>, ClientError> {
+    let url = format!(
+        "{base_url}/me/mailFolders/{parent_id}/childFolders?$select={FOLDER_SELECT}&$top=100"
+    );
+    fetch_folder_pages(http, access_token, url).await
+}
+
+async fn post_folder(
+    http: &reqwest::Client,
+    url: &str,
+    access_token: &str,
     display_name: &str,
 ) -> Result<MailFolder, ClientError> {
-    let url = format!("{base_url}/me/mailFolders");
     let resp = http
-        .post(&url)
+        .post(url)
         .bearer_auth(access_token)
         .json(&serde_json::json!({ "displayName": display_name }))
         .send()
@@ -1180,6 +1231,56 @@ pub async fn create_mail_folder(
     }
     let folder: MailFolder = resp.json().await?;
     Ok(folder)
+}
+
+/// POST /me/mailFolders — create a new top-level folder, returning it.
+///
+/// Graph rejects a duplicate `displayName` with 409; callers that want
+/// "create if missing" semantics should list first and only call this when
+/// no case-insensitive match exists.
+pub async fn create_mail_folder(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    display_name: &str,
+) -> Result<MailFolder, ClientError> {
+    let url = format!("{base_url}/me/mailFolders");
+    post_folder(http, &url, access_token, display_name).await
+}
+
+/// POST /me/mailFolders/{parent_id}/childFolders — create a child folder
+/// under `parent_id`, returning it.
+pub async fn create_child_folder(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    parent_id: &str,
+    display_name: &str,
+) -> Result<MailFolder, ClientError> {
+    let url = format!("{base_url}/me/mailFolders/{parent_id}/childFolders");
+    post_folder(http, &url, access_token, display_name).await
+}
+
+/// DELETE /me/mailFolders/{id} — delete a folder. Outlook moves the folder
+/// (and any contents) to Deleted Items, so this is recoverable. Works for
+/// top-level and child folders alike.
+pub async fn delete_mail_folder(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    folder_id: &str,
+) -> Result<(), ClientError> {
+    let url = format!("{base_url}/me/mailFolders/{folder_id}");
+    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1525,6 +1626,62 @@ mod tests {
             .unwrap();
         assert_eq!(folder.id, "NEWF");
         assert_eq!(folder.display_name, "Biljetter");
+    }
+
+    #[tokio::test]
+    async fn list_child_folders_hits_child_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/PARENT/childFolders"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [
+                    { "id": "C1", "displayName": "MKLab", "totalItemCount": 5, "unreadItemCount": 0, "childFolderCount": 0 }
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let children = list_child_folders(&http, &server.uri(), "AT", "PARENT")
+            .await
+            .unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].display_name, "MKLab");
+    }
+
+    #[tokio::test]
+    async fn create_child_folder_posts_to_parent() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/me/mailFolders/PARENT/childFolders"))
+            .and(body_partial_json(
+                serde_json::json!({ "displayName": "MKLab" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(serde_json::json!({ "id": "C9", "displayName": "MKLab" })),
+            )
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let folder = create_child_folder(&http, &server.uri(), "AT", "PARENT", "MKLab")
+            .await
+            .unwrap();
+        assert_eq!(folder.id, "C9");
+    }
+
+    #[tokio::test]
+    async fn delete_mail_folder_hits_delete_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/me/mailFolders/F1"))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        delete_mail_folder(&http, &server.uri(), "AT", "F1")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

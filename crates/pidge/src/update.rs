@@ -69,6 +69,10 @@ async fn fetch_latest_version() -> Option<String> {
     let url = format!("https://crates.io/api/v1/crates/{CRATE_NAME}");
     let client = reqwest::Client::builder()
         .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
+        // Hard cap the whole request so a hung/blocked crates.io connection
+        // (flaky DNS, captive portal, offline) can't stall the update check.
+        .timeout(std::time::Duration::from_secs(3))
+        .connect_timeout(std::time::Duration::from_secs(3))
         .build()
         .ok()?;
 

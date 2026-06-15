@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-06-15
+
+### Added
+
+- **Nested folders.** `mail move` and `mail mkdir` now accept a `/`-separated path — `mail move <hash> --to "Kvitton/MKLab"` files under the `MKLab` child of a top-level `Kvitton` folder, creating each missing level. Matching is case-insensitive per level. Backed by new Graph `childFolders` list/create endpoints.
+- **`mail rmdir <path>`.** Delete a folder (its contents move to Deleted Items, so it's recoverable) in each account; supports nested paths and requires `-y`. Rounds out the folder surface (create / list / move / delete).
+- **`mail list --folder <path>`.** List the messages in any folder — including nested paths like `Kvitton/MKLab` — instead of the Inbox. Works with `--json`, `--compact`, `--table`, and `-n`, so you can audit or script over a custom folder's contents.
+- **Recursive folder listing.** `mail folders` now shows child folders indented under their parent, with per-folder total/unread counts at every level.
+
+### Fixed
+
+- **CLI could hang indefinitely after running a command** when the background crates.io update check stalled (flaky DNS, captive portal, offline). The program awaited the update-check task before exiting with no upper bound; a blocked HTTP request therefore wedged the process *after* its work was done. The wait is now capped at 2 seconds, and the update-check HTTP client has its own 3-second connect/request timeout.
+
 ## [0.4.6] - 2026-06-15
 
 ### Added
