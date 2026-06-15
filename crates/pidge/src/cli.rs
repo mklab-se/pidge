@@ -91,6 +91,12 @@ pub enum Commands {
         command: ConfigCommands,
     },
 
+    /// Manage a message's native Outlook categories (labels).
+    Categorize {
+        #[command(subcommand)]
+        command: CategorizeCommands,
+    },
+
     /// Show version information
     Version,
 }
@@ -518,6 +524,24 @@ pub enum MailAttachmentCommands {
         #[arg(short = 'f', long)]
         force: bool,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum CategorizeCommands {
+    /// Show a message's current categories
+    Show { fragment: String },
+    /// Replace a message's categories with the given labels
+    Set {
+        fragment: String,
+        labels: Vec<String>,
+    },
+    /// Add labels, keeping existing categories
+    Add {
+        fragment: String,
+        labels: Vec<String>,
+    },
+    /// Remove all categories from a message
+    Clear { fragment: String },
 }
 
 /// Flags shared between `mail new` and (mostly) the explicit forms of
@@ -1127,6 +1151,9 @@ impl Cli {
             Some(Commands::Completion { shell }) => {
                 crate::commands::completion::generate_completions(shell);
                 Ok(())
+            }
+            Some(Commands::Categorize { command }) => {
+                crate::commands::mail_categorize::run(command).await
             }
             Some(Commands::Config { command }) => crate::commands::config_cmd::run(command),
             Some(Commands::Version) => {

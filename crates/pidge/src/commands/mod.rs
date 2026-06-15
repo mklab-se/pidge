@@ -36,6 +36,7 @@ pub mod drafts;
 pub mod mail;
 pub mod mail_actions;
 pub mod mail_attachments;
+pub mod mail_categorize;
 pub mod mail_compose;
 pub mod mail_delete;
 pub mod mail_folders;
