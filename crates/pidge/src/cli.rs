@@ -130,6 +130,52 @@ pub enum AiCommands {
         #[arg(long)]
         from_source: bool,
     },
+    /// Classify e-mail(s) into label(s) using the configured AI provider.
+    Classify(Box<ClassifyArgs>),
+}
+
+/// Flags for `pidge ai classify`. One of: a `fragment` (single), `--text`
+/// (literal), or the bulk filters (`--from`/`--older-than`/`--folder`).
+#[derive(clap::Args, Debug, Clone)]
+pub struct ClassifyArgs {
+    /// Fragment of one message's 8-char short hash (single mode).
+    pub fragment: Option<String>,
+    /// Classify a literal string instead of a message (prompt test).
+    #[arg(long, conflicts_with = "fragment")]
+    pub text: Option<String>,
+    /// Override the configured prompt for this run.
+    #[arg(long)]
+    pub prompt: Option<String>,
+    /// Read the prompt from a file (`-` = stdin).
+    #[arg(long, conflicts_with = "prompt")]
+    pub prompt_file: Option<String>,
+    /// Allowed label set; answers are validated against it.
+    #[arg(long, value_delimiter = ',')]
+    pub labels: Vec<String>,
+    /// BULK: only classify messages from this sender (repeatable).
+    #[arg(long, conflicts_with_all = ["fragment", "text"])]
+    pub from: Vec<String>,
+    /// BULK: only classify messages older than this date/duration.
+    #[arg(long, conflicts_with_all = ["fragment", "text"])]
+    pub older_than: Option<String>,
+    /// BULK: classify within this folder (nested path allowed).
+    #[arg(long, conflicts_with_all = ["fragment", "text"])]
+    pub folder: Option<String>,
+    /// BULK: max messages to classify.
+    #[arg(short = 'n', long)]
+    pub limit: Option<usize>,
+    /// Account(s) to act on (default: all signed-in).
+    #[arg(long)]
+    pub account: Vec<String>,
+    /// Max concurrent AI calls in batch mode (overrides config).
+    #[arg(long)]
+    pub parallel: Option<usize>,
+    /// Bypass the classification cache.
+    #[arg(long)]
+    pub no_cache: bool,
+    /// Also write the result to the message's native Outlook categories.
+    #[arg(long)]
+    pub set_category: bool,
 }
 
 #[derive(clap::Subcommand)]
@@ -1129,7 +1175,7 @@ pub const CALENDAR_SUBCOMMAND_NAMES: &[&str] = &[
 impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.command {
-            Some(Commands::Ai { command }) => crate::commands::ai::run(command).await,
+            Some(Commands::Ai { command }) => crate::commands::ai::run(command, self.json).await,
             Some(Commands::Account { command }) => {
                 crate::commands::account::run(command, self.json).await
             }

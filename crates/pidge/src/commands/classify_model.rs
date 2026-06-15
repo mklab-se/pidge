@@ -3,9 +3,6 @@
 //! production implementation. `build_input` assembles the text shown to the
 //! model from a message (pure, unit-tested).
 
-// Functions/types are pub and will be used by later tasks; suppress dead_code for now.
-#![allow(dead_code)]
-
 use anyhow::Result;
 
 /// Maximum characters of body text fed to the model (token budget guard).

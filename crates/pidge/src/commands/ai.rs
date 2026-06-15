@@ -13,7 +13,7 @@ use ailloy::config_tui;
 
 use crate::cli::AiCommands;
 
-pub async fn run(cmd: Option<AiCommands>) -> Result<()> {
+pub async fn run(cmd: Option<AiCommands>, json: bool) -> Result<()> {
     match cmd {
         None => config_tui::print_ai_status("pidge", &["chat"]),
         Some(AiCommands::Test { message }) => config_tui::run_test_chat("pidge", message).await,
@@ -28,6 +28,7 @@ pub async fn run(cmd: Option<AiCommands>) -> Result<()> {
         Some(AiCommands::Skill { emit, from_source }) => {
             crate::commands::skill::run(emit, from_source)
         }
+        Some(AiCommands::Classify(args)) => crate::commands::ai_classify::run(*args, json).await,
     }
 }
 
