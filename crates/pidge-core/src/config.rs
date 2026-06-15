@@ -16,6 +16,7 @@ pub struct Config {
     pub accounts: Vec<Account>,
     pub defaults: Defaults,
     pub trusted_senders: Vec<String>,
+    pub classify: ClassifyConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +24,21 @@ pub struct Config {
 pub struct Defaults {
     pub send: Option<String>,
     pub calendar: Option<String>,
+}
+
+/// User-configurable defaults for `pidge ai classify`. Every field is
+/// optional; an unset field falls back to a built-in default at call time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClassifyConfig {
+    /// Default classification prompt (instructions + valid outputs).
+    pub prompt: Option<String>,
+    /// Default batch concurrency.
+    pub parallel: Option<usize>,
+    /// Whether to cache classifications by message-id + prompt hash.
+    pub cache: Option<bool>,
+    /// Optional allowed-label set for validation.
+    pub labels: Vec<String>,
 }
 
 impl Config {
@@ -146,6 +162,91 @@ impl Config {
             .iter()
             .any(|s| s.to_lowercase() == lower)
     }
+
+    /// Read a dotted config key as a display string, or `None` if unset.
+    pub fn get_key(&self, key: &str) -> Option<String> {
+        match key {
+            "classify.prompt" => self.classify.prompt.clone(),
+            "classify.parallel" => self.classify.parallel.map(|n| n.to_string()),
+            "classify.cache" => self.classify.cache.map(|b| b.to_string()),
+            "classify.labels" => {
+                if self.classify.labels.is_empty() {
+                    None
+                } else {
+                    Some(self.classify.labels.join(","))
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Set a dotted config key from a string value. Errors on unknown key or
+    /// unparseable value.
+    pub fn set_key(&mut self, key: &str, value: &str) -> Result<(), CoreError> {
+        match key {
+            "classify.prompt" => self.classify.prompt = Some(value.to_string()),
+            "classify.parallel" => {
+                let n: usize = value
+                    .trim()
+                    .parse()
+                    .map_err(|_| CoreError::InvalidConfigValue {
+                        key: key.to_string(),
+                        value: value.to_string(),
+                    })?;
+                self.classify.parallel = Some(n);
+            }
+            "classify.cache" => {
+                let b = match value.trim() {
+                    "true" => true,
+                    "false" => false,
+                    _ => {
+                        return Err(CoreError::InvalidConfigValue {
+                            key: key.to_string(),
+                            value: value.to_string(),
+                        });
+                    }
+                };
+                self.classify.cache = Some(b);
+            }
+            "classify.labels" => {
+                self.classify.labels = value
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+            _ => {
+                return Err(CoreError::UnknownConfigKey {
+                    key: key.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Revert a dotted config key to its unset/default state.
+    pub fn unset_key(&mut self, key: &str) -> Result<(), CoreError> {
+        match key {
+            "classify.prompt" => self.classify.prompt = None,
+            "classify.parallel" => self.classify.parallel = None,
+            "classify.cache" => self.classify.cache = None,
+            "classify.labels" => self.classify.labels.clear(),
+            _ => {
+                return Err(CoreError::UnknownConfigKey {
+                    key: key.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Every settable config key, for `pidge config show`/help.
+    pub const KNOWN_KEYS: &'static [&'static str] = &[
+        "classify.prompt",
+        "classify.parallel",
+        "classify.cache",
+        "classify.labels",
+    ];
 }
 
 #[cfg(test)]
@@ -276,5 +377,53 @@ mod tests {
         let yaml = "accounts: []\ndefaults: {}\n";
         let c: Config = serde_yaml::from_str(yaml).unwrap();
         assert!(c.trusted_senders.is_empty());
+    }
+
+    #[test]
+    fn classify_config_defaults_are_empty() {
+        let c = Config::default();
+        assert!(c.classify.prompt.is_none());
+        assert!(c.classify.parallel.is_none());
+        assert!(c.classify.cache.is_none());
+        assert!(c.classify.labels.is_empty());
+    }
+
+    #[test]
+    fn classify_config_roundtrips_through_yaml() {
+        let mut c = Config::default();
+        c.classify.prompt = Some("Classify it".into());
+        c.classify.parallel = Some(8);
+        c.classify.cache = Some(true);
+        c.classify.labels = vec!["invoice".into(), "receipt".into()];
+        let yaml = serde_yaml::to_string(&c).unwrap();
+        let back: Config = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.classify.prompt.as_deref(), Some("Classify it"));
+        assert_eq!(back.classify.parallel, Some(8));
+        assert_eq!(back.classify.labels, vec!["invoice", "receipt"]);
+    }
+
+    #[test]
+    fn config_set_get_unset_roundtrip() {
+        let mut c = Config::default();
+        c.set_key("classify.parallel", "8").unwrap();
+        assert_eq!(c.get_key("classify.parallel"), Some("8".to_string()));
+        c.set_key("classify.labels", "invoice,receipt,ticket")
+            .unwrap();
+        assert_eq!(
+            c.get_key("classify.labels"),
+            Some("invoice,receipt,ticket".to_string())
+        );
+        c.set_key("classify.cache", "true").unwrap();
+        assert_eq!(c.get_key("classify.cache"), Some("true".to_string()));
+        c.unset_key("classify.parallel").unwrap();
+        assert_eq!(c.get_key("classify.parallel"), None);
+    }
+
+    #[test]
+    fn config_set_rejects_unknown_key_and_bad_value() {
+        let mut c = Config::default();
+        assert!(c.set_key("classify.nope", "x").is_err());
+        assert!(c.set_key("classify.parallel", "notanumber").is_err());
+        assert!(c.set_key("classify.cache", "maybe").is_err());
     }
 }

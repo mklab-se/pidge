@@ -15,4 +15,10 @@ pub enum CoreError {
 
     #[error("config directory unavailable on this platform")]
     NoConfigDir,
+
+    #[error("unknown config key '{key}'")]
+    UnknownConfigKey { key: String },
+
+    #[error("invalid value '{value}' for config key '{key}'")]
+    InvalidConfigValue { key: String, value: String },
 }
