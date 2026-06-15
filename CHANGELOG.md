@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-06-15
+
+### Added
+
+- **Custom folders: move, list, and create.** New `pidge mail move <hash> --to <folder>` files a message into a folder, creating the folder at the top level if it doesn't exist (matched case-insensitively against existing folders). Bulk mode mirrors `mail archive`/`mail delete` — `--from <sender>` (sweeps every folder via Graph `$search`) and `--older-than <spec>` (walks the Inbox by date), both gated on `-y`, with the same 4-in-flight + exponential-backoff throttling. `pidge mail folders` lists every account's folders with total/unread counts (`--json` for scripting), and `pidge mail mkdir <name>` creates a folder per account idempotently — handy for setting up a consistent set of folders before sorting mail into them. Backed by new Graph endpoints (`GET`/`POST /me/mailFolders`) on the client.
+
 ## [0.4.5] - 2026-06-03
 
 ### Added

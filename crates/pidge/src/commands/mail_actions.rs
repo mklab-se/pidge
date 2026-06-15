@@ -160,12 +160,16 @@ async fn archive_bulk(
         let count = if from_set.is_empty() {
             // Date-only mode: walk the Inbox sorted by date and stop once
             // we've passed the cutoff.
-            archive_bulk_inbox_for_account(&graph, email, cutoff, PAGE_SIZE, MAX_PAGES).await?
+            move_bulk_inbox_for_account(
+                &graph, email, "archive", "archive", cutoff, PAGE_SIZE, MAX_PAGES,
+            )
+            .await?
         } else {
             // Sender-filter mode: run one Graph search per sender so we
             // sweep ALL folders (marketing senders frequently land in
             // Junk, not Inbox), then archive everything that came back.
-            archive_bulk_by_sender_for_account(&graph, email, &from_set, cutoff).await?
+            move_bulk_by_sender_for_account(&graph, email, "archive", "archive", &from_set, cutoff)
+                .await?
         };
         total += count;
         println!(
@@ -179,7 +183,7 @@ async fn archive_bulk(
     Ok(())
 }
 
-fn describe_filter(
+pub(crate) fn describe_filter(
     from: &HashSet<String>,
     cutoff: Option<&DateTime<Utc>>,
     older_than_spec: Option<&str>,
@@ -201,11 +205,16 @@ fn describe_filter(
 }
 
 /// Date-only bulk: walk the Inbox newest-first and stop once we cross
-/// the cutoff. Mirrors `delete_bulk_for_account` — see that function's
-/// comments for the rationale on PAGE_SIZE / MAX_PAGES / sort-and-stop.
-async fn archive_bulk_inbox_for_account(
+/// the cutoff, moving matched messages to `destination`. Mirrors
+/// `delete_bulk_for_account` — see that function's comments for the
+/// rationale on PAGE_SIZE / MAX_PAGES / sort-and-stop. Shared by
+/// `mail archive` (destination `"archive"`) and `mail move`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn move_bulk_inbox_for_account(
     graph: &GraphClient,
     account: &str,
+    destination: &str,
+    verb: &str,
     cutoff: Option<DateTime<Utc>>,
     page_size: usize,
     max_pages: usize,
@@ -216,7 +225,7 @@ async fn archive_bulk_inbox_for_account(
         let result = graph
             .list_inbox(account, page_size, skip, false)
             .await
-            .context("listing inbox for bulk archive")?;
+            .context("listing inbox for bulk move")?;
         if result.messages.is_empty() {
             break;
         }
@@ -227,7 +236,7 @@ async fn archive_bulk_inbox_for_account(
             .filter(|m| cutoff.is_none_or(|c| m.received_at < c))
             .collect();
         let matched_now = to_archive.len();
-        archived += move_to_archive(graph, account, &to_archive).await;
+        archived += move_many(graph, account, &to_archive, destination, verb).await;
 
         // Advance skip past kept items (the matched ones got moved out of
         // the Inbox, so the same skip now points at fresh messages).
@@ -256,12 +265,15 @@ async fn archive_bulk_inbox_for_account(
 }
 
 /// Sender-filter bulk: search the entire mailbox (all folders) for each
-/// sender. Marketing senders frequently get auto-classified into the
-/// Junk Email folder, so an Inbox-only sweep would miss them. We use
-/// Graph's `$search` because that endpoint is folder-agnostic.
-async fn archive_bulk_by_sender_for_account(
+/// sender, moving matches to `destination`. Marketing senders frequently
+/// get auto-classified into the Junk Email folder, so an Inbox-only sweep
+/// would miss them. We use Graph's `$search` because that endpoint is
+/// folder-agnostic. Shared by `mail archive` and `mail move`.
+pub(crate) async fn move_bulk_by_sender_for_account(
     graph: &GraphClient,
     account: &str,
+    destination: &str,
+    verb: &str,
     from_set: &HashSet<String>,
     cutoff: Option<DateTime<Utc>>,
 ) -> Result<usize> {
@@ -290,23 +302,28 @@ async fn archive_bulk_by_sender_for_account(
                     && cutoff.is_none_or(|c| m.received_at < c)
             })
             .collect();
-        archived += move_to_archive(graph, account, &matches).await;
+        archived += move_many(graph, account, &matches, destination, verb).await;
     }
     Ok(archived)
 }
 
-/// Concurrently move a batch of messages to the Archive folder and
-/// report how many succeeded. Cache entries are purged for archived
-/// messages so the next list refresh sees the new state.
+/// Concurrently move a batch of messages to `destination` (a Graph folder ID
+/// or well-known name) and report how many succeeded. Cache entries are
+/// purged for moved messages so the next list refresh sees the new state.
+///
+/// `verb` is only used to phrase the per-failure error line ("failed to
+/// archive …" vs "failed to move …").
 ///
 /// Concurrency is capped at `MAX_INFLIGHT` because Graph's per-mailbox
 /// move endpoint trips an `ApplicationThrottled` (HTTP 429) on aggressive
 /// parallelism — we saw it as low as ~8 inflight moves. On 429 we retry
 /// with exponential backoff up to `MAX_RETRIES` times.
-async fn move_to_archive(
+pub(crate) async fn move_many(
     graph: &GraphClient,
     account: &str,
     messages: &[&pidge_core::Message],
+    destination: &str,
+    verb: &str,
 ) -> usize {
     const MAX_INFLIGHT: usize = 4;
     let mut ok = 0usize;
@@ -314,7 +331,7 @@ async fn move_to_archive(
         let id = m.id.clone();
         let short = pidge_core::short_hash(&m.id);
         async move {
-            let res = move_with_retry(graph, account, &id).await;
+            let res = move_with_retry(graph, account, &id, destination).await;
             (short, res)
         }
     });
@@ -327,25 +344,26 @@ async fn move_to_archive(
             }
             Err(ClientError::Graph { status: 404, .. }) => { /* already gone */ }
             Err(e) => {
-                eprintln!("  {} failed to archive {}: {e}", "!".red(), short.dimmed());
+                eprintln!("  {} failed to {verb} {}: {e}", "!".red(), short.dimmed());
             }
         }
     }
     ok
 }
 
-/// Move a single message to the Archive folder, retrying with exponential
+/// Move a single message to `destination`, retrying with exponential
 /// backoff on `429 ApplicationThrottled` since Graph's per-mailbox move
 /// limit is hit easily on bulk operations.
-async fn move_with_retry(
+pub(crate) async fn move_with_retry(
     graph: &GraphClient,
     account: &str,
     message_id: &str,
+    destination: &str,
 ) -> Result<(), ClientError> {
     const MAX_RETRIES: u32 = 5;
     let mut delay_ms = 500u64;
     for attempt in 0..=MAX_RETRIES {
-        match graph.move_message(account, message_id, "archive").await {
+        match graph.move_message(account, message_id, destination).await {
             Ok(()) => return Ok(()),
             Err(ClientError::Graph { status: 429, .. }) if attempt < MAX_RETRIES => {
                 sleep(Duration::from_millis(delay_ms)).await;

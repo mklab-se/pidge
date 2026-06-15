@@ -1097,6 +1097,91 @@ pub async fn move_message(
     Ok(())
 }
 
+/// A mail folder as returned by Graph's `/me/mailFolders` endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MailFolder {
+    pub id: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    /// Total message count, present when selected. `None` if Graph omitted it.
+    #[serde(rename = "totalItemCount", default)]
+    pub total_item_count: Option<u64>,
+    /// Unread message count, present when selected.
+    #[serde(rename = "unreadItemCount", default)]
+    pub unread_item_count: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphFolderList {
+    value: Vec<MailFolder>,
+    #[serde(rename = "@odata.nextLink", default)]
+    next_link: Option<String>,
+}
+
+/// GET /me/mailFolders — list the top-level mail folders (id, displayName,
+/// counts). Pages through `@odata.nextLink` so mailboxes with many folders
+/// are fully enumerated rather than silently truncated at one page.
+pub async fn list_mail_folders(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+) -> Result<Vec<MailFolder>, ClientError> {
+    let mut url = format!(
+        "{base_url}/me/mailFolders?$select=id,displayName,totalItemCount,unreadItemCount&$top=100"
+    );
+    let mut folders: Vec<MailFolder> = Vec::new();
+    loop {
+        let resp = http.get(&url).bearer_auth(access_token).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(ClientError::Graph {
+                status: status.as_u16(),
+                message: text,
+            });
+        }
+        let list: GraphFolderList = resp.json().await?;
+        folders.extend(list.value);
+        // `@odata.nextLink` is an absolute URL that already carries the
+        // `$select`/`$top` query — follow it verbatim.
+        match list.next_link {
+            Some(next) => url = next,
+            None => break,
+        }
+    }
+    Ok(folders)
+}
+
+/// POST /me/mailFolders — create a new top-level folder, returning it.
+///
+/// Graph rejects a duplicate `displayName` with 409; callers that want
+/// "create if missing" semantics should list first and only call this when
+/// no case-insensitive match exists.
+pub async fn create_mail_folder(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    display_name: &str,
+) -> Result<MailFolder, ClientError> {
+    let url = format!("{base_url}/me/mailFolders");
+    let resp = http
+        .post(&url)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "displayName": display_name }))
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let folder: MailFolder = resp.json().await?;
+    Ok(folder)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1381,6 +1466,65 @@ mod tests {
         let html = "<html><BODY class=\"x\">content</BODY></html>";
         let pos = find_body_tag_end(html).unwrap();
         assert_eq!(&html[pos..pos + 7], "content");
+    }
+
+    #[tokio::test]
+    async fn list_mail_folders_parses_and_pages() {
+        let server = MockServer::start().await;
+        // First page advertises a next link; second page closes it out.
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders"))
+            .and(query_param("$top", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [
+                    { "id": "F1", "displayName": "Biljetter", "totalItemCount": 3, "unreadItemCount": 0 }
+                ],
+                "@odata.nextLink": format!("{}/me/mailFolders?page=2", server.uri())
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [
+                    { "id": "F2", "displayName": "Kvitton", "totalItemCount": 7, "unreadItemCount": 2 }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let folders = list_mail_folders(&http, &server.uri(), "AT").await.unwrap();
+        assert_eq!(folders.len(), 2);
+        assert_eq!(folders[0].display_name, "Biljetter");
+        assert_eq!(folders[0].total_item_count, Some(3));
+        assert_eq!(folders[1].display_name, "Kvitton");
+        assert_eq!(folders[1].unread_item_count, Some(2));
+    }
+
+    #[tokio::test]
+    async fn create_mail_folder_posts_display_name() {
+        use wiremock::matchers::body_partial_json;
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/me/mailFolders"))
+            .and(body_partial_json(
+                serde_json::json!({ "displayName": "Biljetter" }),
+            ))
+            .respond_with(
+                ResponseTemplate::new(201)
+                    .set_body_json(serde_json::json!({ "id": "NEWF", "displayName": "Biljetter" })),
+            )
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let folder = create_mail_folder(&http, &server.uri(), "AT", "Biljetter")
+            .await
+            .unwrap();
+        assert_eq!(folder.id, "NEWF");
+        assert_eq!(folder.display_name, "Biljetter");
     }
 
     #[tokio::test]

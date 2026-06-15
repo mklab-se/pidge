@@ -11,11 +11,12 @@ pub use events::{
     list_calendar_view, move_event_to_calendar, move_time, rsvp_event, update_event,
 };
 pub use mail::{
-    InboxPage, Outgoing, add_attachment, create_draft, create_forward_draft,
-    create_reply_all_draft, create_reply_draft, delete_attachment, delete_message,
-    fetch_message_headers, forward_message, get_attachment_bytes, get_message, list_attachments,
-    list_drafts, list_inbox, mark_read, mark_unread, move_message, reply_all_message,
-    reply_message, search_messages, send_draft, send_mail, set_flag, update_draft,
+    InboxPage, MailFolder, Outgoing, add_attachment, create_draft, create_forward_draft,
+    create_mail_folder, create_reply_all_draft, create_reply_draft, delete_attachment,
+    delete_message, fetch_message_headers, forward_message, get_attachment_bytes, get_message,
+    list_attachments, list_drafts, list_inbox, list_mail_folders, mark_read, mark_unread,
+    move_message, reply_all_message, reply_message, search_messages, send_draft, send_mail,
+    set_flag, update_draft,
 };
 pub use me::{Me, get_me};
 
@@ -118,6 +119,22 @@ impl GraphClient {
     ) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::move_message(&self.http, &self.base_url, &token, message_id, destination).await
+    }
+
+    /// GET /me/mailFolders — list the account's top-level folders.
+    pub async fn list_mail_folders(&self, account: &str) -> Result<Vec<MailFolder>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::list_mail_folders(&self.http, &self.base_url, &token).await
+    }
+
+    /// POST /me/mailFolders — create a top-level folder, returning it.
+    pub async fn create_mail_folder(
+        &self,
+        account: &str,
+        display_name: &str,
+    ) -> Result<MailFolder, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::create_mail_folder(&self.http, &self.base_url, &token, display_name).await
     }
 
     /// POST /me/sendMail — compose-and-send a new message.

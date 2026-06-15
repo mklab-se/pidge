@@ -322,6 +322,58 @@ pub enum MailCommands {
         yes: bool,
     },
 
+    /// Move a message into a folder, creating the folder if needed. Single or bulk.
+    Move {
+        /// Fragment of a single message's 8-char short hash. Omit when using
+        /// a bulk-mode flag like `--from` or `--older-than`.
+        fragment: Option<String>,
+
+        /// Destination folder's display name. Matched case-insensitively
+        /// against existing folders; created at the top level if absent.
+        #[arg(long)]
+        to: String,
+
+        /// BULK: move every message from this sender address across all
+        /// folders (repeatable). Combine with `--older-than` to also
+        /// constrain by date. Requires `-y`.
+        #[arg(long, conflicts_with = "fragment")]
+        from: Vec<String>,
+
+        /// BULK: move every Inbox message older than this date or duration
+        /// (e.g. `2026-01-01`, `30d`, `6m`, `1y`). Requires `-y`.
+        #[arg(long, conflicts_with = "fragment")]
+        older_than: Option<String>,
+
+        /// Filter bulk move to a specific account (repeatable). Ignored for
+        /// single-fragment moves.
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Grant required consent for bulk moves. Has no effect on
+        /// single-fragment moves (they don't prompt anyway).
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// List the mail folders in each account (name + message counts).
+    Folders {
+        /// Filter to a specific account (repeatable for a subset)
+        #[arg(long)]
+        account: Vec<String>,
+    },
+
+    /// Create a folder (idempotent) in each account. Useful for setting up a
+    /// consistent folder per account before sorting mail into it.
+    Mkdir {
+        /// Display name of the folder to create.
+        name: String,
+
+        /// Create only in a specific account (repeatable). Defaults to all
+        /// signed-in accounts.
+        #[arg(long)]
+        account: Vec<String>,
+    },
+
     /// Delete a message (moves to Deleted Items folder). Single or bulk.
     Delete {
         /// Fragment of a single message's 8-char short hash. Omit when using
@@ -572,6 +624,9 @@ pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
     "flag",
     "unflag",
     "archive",
+    "move",
+    "folders",
+    "mkdir",
     "new",
     "reply",
     "reply-all",

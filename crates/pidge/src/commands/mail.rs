@@ -68,6 +68,20 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             )
             .await
         }
+        MailCommands::Move {
+            fragment,
+            to,
+            from,
+            older_than,
+            account,
+            yes,
+        } => crate::commands::mail_move::run(fragment, from, older_than, account, to, yes).await,
+        MailCommands::Folders { account } => {
+            crate::commands::mail_folders::run(account, json).await
+        }
+        MailCommands::Mkdir { name, account } => {
+            crate::commands::mail_folders::mkdir(name, account).await
+        }
         MailCommands::New(args) => crate::commands::mail_compose::send(args).await,
         MailCommands::Reply { fragment, compose } => {
             crate::commands::mail_compose::reply(fragment, compose, false).await
