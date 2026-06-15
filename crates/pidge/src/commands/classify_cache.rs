@@ -1,9 +1,6 @@
 //! Best-effort cache of classifications keyed by message graph-id + prompt
 //! hash. A corrupt or missing cache is ignored, never fatal.
 
-// Items are pub and will be used by later tasks; suppress dead_code for now.
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::path::PathBuf;
 
