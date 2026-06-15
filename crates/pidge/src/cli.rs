@@ -84,6 +84,13 @@ pub enum Commands {
         shell: Shell,
     },
 
+    /// Read or write pidge's own settings (distinct from `pidge ai config`,
+    /// which configures the AI provider).
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
+
     /// Show version information
     Version,
 }
@@ -785,6 +792,26 @@ pub enum TrustCommands {
     },
 }
 
+#[derive(clap::Subcommand, Debug)]
+pub enum ConfigCommands {
+    /// Print all settable keys and their effective values
+    Show,
+    /// Print one config value
+    Get { key: String },
+    /// Set a config value. For multi-line values (e.g. classify.prompt) use
+    /// `--file <path>` or `-` (stdin) instead of an inline value.
+    Set {
+        key: String,
+        /// Inline value (omit when using --file or stdin)
+        value: Option<String>,
+        /// Read the value from a file (`-` = stdin)
+        #[arg(long)]
+        file: Option<String>,
+    },
+    /// Revert a key to its built-in default
+    Unset { key: String },
+}
+
 #[derive(Clone, clap::ValueEnum)]
 pub enum Shell {
     Bash,
@@ -1101,6 +1128,7 @@ impl Cli {
                 crate::commands::completion::generate_completions(shell);
                 Ok(())
             }
+            Some(Commands::Config { command }) => crate::commands::config_cmd::run(command),
             Some(Commands::Version) => {
                 crate::banner::print_banner_with_version();
                 Ok(())

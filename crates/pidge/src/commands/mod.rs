@@ -28,6 +28,7 @@ pub mod classify_model;
 pub mod classify_parse;
 pub mod completion;
 pub mod compose_form;
+pub mod config_cmd;
 pub mod contacts;
 pub mod contacts_find;
 pub mod contacts_refresh;
