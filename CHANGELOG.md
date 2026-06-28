@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.9] - 2026-06-28
+
+### Fixed
+
+- **Calendar events were stored two hours off (timezone double-conversion).** `calendar new` formatted the event's UTC clock but labelled it with the local zone (e.g. `Europe/Stockholm`), so Microsoft Graph re-interpreted the time as local and shifted it again — a 10:00 Stockholm booking was stored as `06:00Z` (08:00 local) instead of `08:00Z` (10:00 local). The outgoing `start`/`end` payload now labels its UTC clock as `"UTC"`. `calendar edit` and `move-time` were unaffected in practice (they reuse the event's stored `"UTC"` zone) but are covered by the same hardening. Guarded by a regression test.
+
 ## [0.4.8] - 2026-06-15
 
 ### Added
