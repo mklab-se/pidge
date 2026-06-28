@@ -159,16 +159,22 @@ pub struct NewEvent {
 
 impl NewEvent {
     pub(crate) fn to_graph_json(&self) -> serde_json::Value {
+        // `format_graph_dt` emits the *UTC* clock for `start`/`end`, so the
+        // accompanying `timeZone` MUST be "UTC". Labelling a UTC clock with a
+        // local zone (e.g. self.tz = "Europe/Stockholm") makes Graph
+        // re-interpret it as local time and shift it again — a double
+        // conversion that stored events hours off. `self.tz` records the
+        // zone the event was scheduled in but must not relabel the clock.
         let mut v = serde_json::json!({
             "subject": self.subject,
             "isAllDay": self.all_day,
             "start": {
                 "dateTime": format_graph_dt(self.start),
-                "timeZone": self.tz,
+                "timeZone": "UTC",
             },
             "end": {
                 "dateTime": format_graph_dt(self.end),
-                "timeZone": self.tz,
+                "timeZone": "UTC",
             },
         });
         if let Some(loc) = &self.location {
@@ -654,6 +660,40 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_partial_json, header, method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn sample_event(tz: &str) -> NewEvent {
+        NewEvent {
+            subject: "Course".into(),
+            start: DateTime::parse_from_rfc3339("2026-07-01T08:00:00Z")
+                .unwrap()
+                .to_utc(),
+            end: DateTime::parse_from_rfc3339("2026-07-01T09:15:00Z")
+                .unwrap()
+                .to_utc(),
+            tz: tz.into(),
+            all_day: false,
+            location: None,
+            body_text: None,
+            required_attendees: vec![],
+            optional_attendees: vec![],
+            recurrence: None,
+            online_meeting: false,
+        }
+    }
+
+    #[test]
+    fn to_graph_json_labels_utc_clock_as_utc_not_local_zone() {
+        // Regression: a 10:00 Europe/Stockholm booking parses to 08:00Z.
+        // `format_graph_dt` emits the UTC clock ("08:00:00"), so the payload
+        // MUST label it "UTC". Labelling it "Europe/Stockholm" makes Graph
+        // re-interpret 08:00 as local time = 06:00Z — a double conversion
+        // that stored the Fotografiska course two hours early.
+        let v = sample_event("Europe/Stockholm").to_graph_json();
+        assert_eq!(v["start"]["dateTime"], "2026-07-01T08:00:00");
+        assert_eq!(v["start"]["timeZone"], "UTC");
+        assert_eq!(v["end"]["dateTime"], "2026-07-01T09:15:00");
+        assert_eq!(v["end"]["timeZone"], "UTC");
+    }
 
     #[tokio::test]
     async fn list_calendar_view_passes_window_and_orderby() {
