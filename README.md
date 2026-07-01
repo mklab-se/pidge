@@ -20,6 +20,24 @@
 
 **Early days.** pidge can sign in to one or more Microsoft 365 / personal Microsoft accounts, browse / search / send / reply to e-mail, manage drafts + attachments, and **manage calendars** — create / edit / search / reschedule / cancel / duplicate events, move between calendars, RSVP, and create recurring meetings.
 
+## Quick Start
+
+```bash
+# 1. Install (macOS / Linux)
+brew install mklab-se/tap/pidge
+# ...or via cargo: cargo install pidge
+# ...other options (pre-built binaries, cargo binstall): see INSTALL.md
+
+# 2. Sign in (interactive device code flow)
+pidge account add
+
+# 3. Try it
+pidge mail
+pidge calendar
+```
+
+See [INSTALL.md](INSTALL.md) for all installation methods and shell completions.
+
 ## Built for AI agents
 
 pidge is designed to be operated by AI coding agents — Claude Code, Codex, Copilot, etc. — on your behalf. You can run it directly too, but the primary surface is your agent.
@@ -115,30 +133,16 @@ pidge calendar rsvp 4cabda75 --accept
 pidge calendar --json --week | jq '.[] | .subject'
 ```
 
-## Quick Start
-
-```bash
-# Install (macOS / Linux)
-brew install mklab-se/tap/pidge
-
-# Or via cargo
-cargo install pidge
-
-# Configure your AI provider (uses ailloy)
-pidge ai config
-
-# Check status
-pidge ai status
-
-# See what's available today
-pidge --help
-```
-
-See [INSTALL.md](INSTALL.md) for all installation methods and shell completions.
-
 ## AI Integration
 
-pidge delegates AI configuration to [ailloy](https://github.com/mklab-se/ailloy), a unified AI provider library shared by the MKLab CLI suite (`rigg`, `mdeck`, `cosq`, `pidge`). Configure your provider once with `pidge ai config` and it's available to every ailloy-based tool.
+pidge delegates AI configuration to [ailloy](https://github.com/mklab-se/ailloy), a unified AI provider library shared by the MKLab CLI suite (`rigg`, `mdeck`, `cosq`, `pidge`). Configure your provider once:
+
+```bash
+pidge ai config    # configure your AI provider
+pidge ai status    # check status
+```
+
+and it's available to every ailloy-based tool.
 
 ## Development
 

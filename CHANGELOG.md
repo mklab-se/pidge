@@ -2,7 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.4.10] - 2026-07-01
+
+### Changed
+
+- **README reorganized for first-time installs.** Install instructions were buried after several usage sections that already assumed `pidge` was on `PATH`. A condensed install → sign-in → try-it Quick Start now leads the README right after Status.
 
 ## [0.4.9] - 2026-06-28
 
