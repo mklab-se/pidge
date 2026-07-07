@@ -9,6 +9,14 @@ use pidge_core::Config;
 use crate::commands::calendar_fragment;
 
 pub async fn run(fragment: &str, yes: bool, series: bool, json: bool) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Delete,
+        &format!("delete event {fragment}"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+
     let (hash, r) = calendar_fragment::resolve(fragment)?;
     let _config = Config::load()?;
     let auth = AuthClient::from_env()?;

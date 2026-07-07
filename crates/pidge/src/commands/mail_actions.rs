@@ -108,6 +108,14 @@ async fn archive_bulk(
     account_filter: Vec<String>,
     yes: bool,
 ) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Bulk,
+        "bulk archive of matching messages",
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+
     if !yes {
         return Err(anyhow!(
             "Bulk archive requires explicit `-y` confirmation — there is no \

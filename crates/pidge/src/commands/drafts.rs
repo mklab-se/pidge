@@ -246,6 +246,17 @@ async fn edit(fragment: String) -> Result<()> {
                 )
                 .await?;
             }
+            let gate = crate::guardrail::gate(
+                crate::guardrail::GuardrailAction::Send,
+                &format!(
+                    "send draft {} from {}",
+                    pidge_core::short_hash(&msg.graph_id),
+                    msg.account
+                ),
+            )?;
+            if gate == crate::guardrail::Gate::DryRun {
+                return Ok(());
+            }
             graph
                 .send_draft(&msg.account, &msg.graph_id)
                 .await
@@ -307,6 +318,13 @@ async fn send(fragment: String, yes: bool) -> Result<()> {
         }
     }
 
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Send,
+        &format!("send draft {} from {}", short, msg.account),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
     let graph = GraphClient::new(AuthClient::from_env()?)?;
     graph
         .send_draft(&msg.account, &msg.graph_id)

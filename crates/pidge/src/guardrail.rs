@@ -65,6 +65,55 @@ pub fn mode_for(config: &Config, action: GuardrailAction) -> GuardrailMode {
     }
 }
 
+static DRY_RUN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Called once from main when --dry-run is passed.
+pub fn set_dry_run() {
+    DRY_RUN.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn dry_run_active() -> bool {
+    DRY_RUN.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Outcome of gating an action: proceed, or stop because this is a dry run.
+#[must_use]
+#[derive(Debug, PartialEq, Eq)]
+pub enum Gate {
+    Proceed,
+    DryRun,
+}
+
+/// The one call every mutating command makes before acting:
+/// evaluates guardrails (unless this is a dry run — dry-run reveals policy
+/// instead of failing on it) and reports the dry-run decision.
+///
+/// On `Gate::DryRun` the caller prints nothing else and returns — this
+/// helper already printed the "would ..." report (human or JSON).
+pub fn gate(action: GuardrailAction, description: &str) -> anyhow::Result<Gate> {
+    let config = Config::load().unwrap_or_default();
+    if dry_run_active() {
+        let mode = mode_for(&config, action);
+        let policy = match mode {
+            GuardrailMode::Allow => "allow",
+            GuardrailMode::Confirm => "confirm",
+            GuardrailMode::Deny => "deny (would be blocked)",
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "dry_run": true,
+                "action": action.key(),
+                "detail": description,
+                "guardrail": policy,
+            })
+        );
+        return Ok(Gate::DryRun);
+    }
+    enforce(&config, action, description)?;
+    Ok(Gate::Proceed)
+}
+
 /// Enforce guardrails for an action about to run. `description` is shown in
 /// the confirmation prompt (e.g. "send e-mail to 2 recipients").
 ///

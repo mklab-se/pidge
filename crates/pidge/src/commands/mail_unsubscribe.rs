@@ -13,6 +13,14 @@ use pidge_client::{AuthClient, GraphClient, Outgoing, UnsubscribeMethod, parse_u
 use crate::commands::mail_fragment::resolve;
 
 pub async fn run(fragment: String, yes: bool) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Unsubscribe,
+        &format!("unsubscribe from sender of message {fragment}"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+
     let (short, msg) = resolve(&fragment)?;
     let graph = GraphClient::new(AuthClient::from_env()?)?;
 

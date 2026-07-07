@@ -24,6 +24,13 @@ pub async fn run(
         _ => anyhow::bail!("Exactly one of --accept, --tentative, --decline is required."),
     };
     let (_hash, r) = calendar_fragment::resolve(fragment)?;
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Rsvp,
+        &format!("RSVP {kind:?} to event {fragment}"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
     let _config = Config::load()?;
     let auth = AuthClient::from_env()?;
     let graph = GraphClient::new(auth)?;

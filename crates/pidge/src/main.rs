@@ -114,6 +114,9 @@ async fn main() -> Result<()> {
     };
 
     let json_errors = cli.json;
+    if cli.dry_run {
+        crate::guardrail::set_dry_run();
+    }
     let result = cli.run().await;
 
     // The update check is best-effort. Bound the wait so a slow or hung

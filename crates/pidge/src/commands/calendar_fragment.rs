@@ -1,6 +1,6 @@
 //! Resolve a fragment of the 8-char short hash to a cached event.
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use colored::Colorize;
 use comfy_table::{ContentArrangement, Table};
 
@@ -9,12 +9,17 @@ use pidge_core::{CacheLookup, CachedEventRef, EventCache};
 pub fn resolve(fragment: &str) -> Result<(String, CachedEventRef)> {
     let cache = EventCache::load()?;
     match cache.find_by_fragment(fragment) {
-        CacheLookup::NotFound => Err(anyhow!(
-            "No event found for fragment '{fragment}'. Run `pidge calendar` to refresh the cache."
-        )),
+        CacheLookup::NotFound => Err(pidge_core::FragmentError::NotFound {
+            fragment: fragment.to_string(),
+        }
+        .into()),
         CacheLookup::Ambiguous(matches) => {
             print_ambiguous(&matches);
-            Err(anyhow!("Please provide more characters."))
+            Err(pidge_core::FragmentError::Ambiguous {
+                fragment: fragment.to_string(),
+                count: matches.len(),
+            }
+            .into())
         }
         CacheLookup::One(h, r) => Ok((h, r)),
     }

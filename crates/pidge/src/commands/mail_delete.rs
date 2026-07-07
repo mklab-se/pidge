@@ -43,6 +43,13 @@ pub async fn run(
 
 async fn delete_single(fragment: String, yes: bool) -> Result<()> {
     let (short, msg) = resolve(&fragment)?;
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Delete,
+        &format!("delete message {short} (moves to Deleted Items)"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
     if !yes {
         let confirmed = Confirm::new(&format!(
             "Delete message {} (moves to Deleted Items)?",
@@ -72,6 +79,14 @@ async fn delete_bulk(
     account_filter: Vec<String>,
     yes: bool,
 ) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Bulk,
+        &format!("bulk delete: from={from:?} older_than={older_than:?}"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+
     if !yes {
         return Err(anyhow!(
             "Bulk delete requires explicit `-y` confirmation — there is no \
