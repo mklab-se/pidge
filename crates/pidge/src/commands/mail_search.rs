@@ -13,6 +13,7 @@ use pidge_core::{Config, Message, MessageCache, short_hash};
 
 use crate::commands::mail::{MessageRow, account_labels, render};
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     query: String,
     account_filter: Vec<String>,
@@ -21,7 +22,13 @@ pub async fn run(
     table: bool,
     full: bool,
     json: bool,
+    cursor: Option<String>,
 ) -> Result<()> {
+    // Search continuation is plain nextLink paging — same flow as mail list.
+    if let Some(token) = cursor {
+        let cursor = pidge_client::Cursor::decode(&token, "mail")?;
+        return super::mail::list_at_cursor(cursor, compact, table, full, json).await;
+    }
     let config = Config::load()?;
     if config.accounts.is_empty() {
         return Err(anyhow!(
@@ -55,11 +62,14 @@ pub async fn run(
 
     let mut had_success = false;
     let mut messages: Vec<Message> = Vec::new();
+    let mut next_links: std::collections::BTreeMap<String, Option<String>> =
+        std::collections::BTreeMap::new();
     for (email, result) in join_all(futures).await {
         match result {
-            Ok(msgs) => {
+            Ok(page) => {
                 had_success = true;
-                messages.extend(msgs);
+                next_links.insert(email.clone(), page.next_link);
+                messages.extend(page.messages);
             }
             Err(ClientError::SessionExpired { email: e }) => {
                 eprintln!(
@@ -77,6 +87,7 @@ pub async fn run(
 
     // Graph search returns by relevance; trim to `limit` total across accounts
     // so a wide multi-account search doesn't flood the terminal.
+    messages.sort_by_key(|m| std::cmp::Reverse(m.received_at));
     messages.truncate(limit);
 
     // Cache the IDs so the user can `pidge mail show <fragment>` straight from
@@ -109,5 +120,14 @@ pub async fn run(
 
     let single_account = target_emails.len() == 1;
     let labels = account_labels(&target_emails);
+    if json {
+        let mut next_cursor = pidge_client::Cursor::new("mail");
+        for (email, link) in next_links {
+            next_cursor.per_account.insert(email, link);
+        }
+        if !next_cursor.exhausted() {
+            return super::mail::render_json_with_cursor(&rows, Some(next_cursor.encode()));
+        }
+    }
     render(&rows, single_account, &labels, compact, table, full, json)
 }

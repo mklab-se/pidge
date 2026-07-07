@@ -1,6 +1,8 @@
 //! Microsoft Graph API client.
 
+pub mod batch;
 mod calendars;
+pub mod delta;
 pub mod events;
 mod mail;
 mod me;
@@ -8,16 +10,17 @@ mod me;
 pub use calendars::list_calendars;
 pub use events::{
     EventsPage, NewEvent, RsvpKind, cancel_event, create_event, delete_event, get_event,
-    list_calendar_view, move_event_to_calendar, move_time, rsvp_event, update_event,
+    list_calendar_view, list_events_at, move_event_to_calendar, move_time, rsvp_event,
+    update_event,
 };
 pub use mail::{
     InboxPage, MailFolder, Outgoing, add_attachment, create_child_folder, create_draft,
     create_forward_draft, create_mail_folder, create_reply_all_draft, create_reply_draft,
     delete_attachment, delete_mail_folder, delete_message, fetch_message_headers, forward_message,
     get_attachment_bytes, get_categories, get_message, list_attachments, list_child_folders,
-    list_drafts, list_folder_messages, list_inbox, list_mail_folders, mark_read, mark_unread,
-    move_message, reply_all_message, reply_message, search_messages, send_draft, send_mail,
-    set_categories, set_flag, update_draft,
+    list_drafts, list_folder_messages, list_inbox, list_mail_folders, list_messages_at, mark_read,
+    mark_unread, move_message, reply_all_message, reply_message, search_messages, send_draft,
+    send_mail, set_categories, set_flag, update_draft,
 };
 pub use me::{Me, get_me};
 
@@ -25,6 +28,63 @@ use crate::auth::AuthClient;
 use crate::auth::config;
 use crate::error::ClientError;
 use pidge_core::Message;
+
+/// Maximum attempts for a single Graph request (1 initial + 3 retries).
+const MAX_ATTEMPTS: u32 = 4;
+
+/// Statuses worth retrying: throttling and transient gateway failures.
+fn is_transient(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 503 | 504)
+}
+
+/// Send a Graph request with retry/backoff.
+///
+/// Honors `Retry-After` (seconds) on 429/503/504; otherwise backs off
+/// exponentially (1s·2^attempt) with 0–250 ms jitter. After the attempts are
+/// exhausted a throttling status becomes [`ClientError::Throttled`] so
+/// callers (and agents, via exit code 5) can distinguish it. All other
+/// responses — success or error — are returned for the caller to interpret.
+///
+/// The request must be clonable (all pidge requests carry buffered JSON/text
+/// bodies); a non-clonable request is sent once without retry.
+pub(crate) async fn send_with_retry(
+    req: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ClientError> {
+    let mut attempt: u32 = 0;
+    loop {
+        let this_try = match req.try_clone() {
+            Some(clone) => clone,
+            None => return Ok(req.send().await?),
+        };
+        let resp = this_try.send().await?;
+        let status = resp.status();
+        if !is_transient(status) {
+            return Ok(resp);
+        }
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        attempt += 1;
+        if attempt >= MAX_ATTEMPTS {
+            return Err(ClientError::Throttled { retry_after });
+        }
+        let backoff = retry_after
+            .map(std::time::Duration::from_secs)
+            .unwrap_or_else(|| {
+                let jitter = std::time::Duration::from_millis(u64::from(attempt) * 83 % 250);
+                std::time::Duration::from_secs(1u64 << attempt.min(4)) / 2 + jitter
+            });
+        tracing::debug!(
+            status = status.as_u16(),
+            attempt,
+            ?backoff,
+            "retrying Graph request"
+        );
+        tokio::time::sleep(backoff).await;
+    }
+}
 
 /// Stateful Microsoft Graph client. Holds an AuthClient and a shared HTTP client.
 pub struct GraphClient {
@@ -107,12 +167,84 @@ impl GraphClient {
     }
 
     /// GET /me/messages with `$search="<query>"` for a given account.
+    /// Bootstrap a mail delta stream for a folder: (current messages, deltaLink).
+    pub async fn mail_delta_bootstrap(
+        &self,
+        account: &str,
+        folder: &str,
+    ) -> Result<(Vec<Message>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::mail_delta_bootstrap(&self.http, &self.base_url, &token, account, folder).await
+    }
+
+    /// Poll a mail deltaLink for changes.
+    pub async fn mail_delta(
+        &self,
+        account: &str,
+        delta_link: &str,
+    ) -> Result<(Vec<delta::MailDeltaEvent>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::mail_delta(&self.http, &token, account, delta_link).await
+    }
+
+    /// Bootstrap a calendar delta stream over a window: (current events, deltaLink).
+    pub async fn calendar_delta_bootstrap(
+        &self,
+        account: &str,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(Vec<pidge_core::Event>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::calendar_delta_bootstrap(&self.http, &self.base_url, &token, account, start, end)
+            .await
+    }
+
+    /// Poll a calendar deltaLink for changes.
+    pub async fn calendar_delta(
+        &self,
+        account: &str,
+        delta_link: &str,
+    ) -> Result<(Vec<delta::CalendarDeltaEvent>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::calendar_delta(&self.http, &token, account, delta_link).await
+    }
+
+    /// Run a set of batch sub-requests for one account.
+    pub async fn batch_all(
+        &self,
+        account: &str,
+        requests: Vec<batch::BatchRequest>,
+    ) -> Result<Vec<batch::BatchResponse>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        batch::batch_all(&self.http, &self.base_url, &token, requests).await
+    }
+
+    /// Fetch every message in a conversation (thread), oldest first.
+    pub async fn list_conversation(
+        &self,
+        account: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<Message>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::list_conversation(&self.http, &self.base_url, &token, account, conversation_id).await
+    }
+
+    /// Fetch a page of messages at an absolute Graph continuation URL.
+    pub async fn list_messages_at(
+        &self,
+        account: &str,
+        url: &str,
+    ) -> Result<InboxPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        list_messages_at(&self.http, &token, account, url).await
+    }
+
     pub async fn search_messages(
         &self,
         account: &str,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<Message>, ClientError> {
+    ) -> Result<InboxPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         search_messages(&self.http, &self.base_url, &token, account, query, limit).await
     }
@@ -462,6 +594,16 @@ impl GraphClient {
         .await
     }
 
+    /// Fetch a page of calendar events at an absolute Graph continuation URL.
+    pub async fn list_events_at(
+        &self,
+        account: &str,
+        url: &str,
+    ) -> Result<EventsPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        list_events_at(&self.http, &token, account, url).await
+    }
+
     /// GET /me/events/{id}.
     pub async fn get_event(
         &self,
@@ -562,5 +704,86 @@ impl GraphClient {
             destination_calendar_id,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    /// Responds 429 for the first N requests, then 200.
+    struct FlakyResponder {
+        failures: std::sync::atomic::AtomicU32,
+    }
+
+    impl Respond for FlakyResponder {
+        fn respond(&self, _req: &Request) -> ResponseTemplate {
+            let n = self
+                .failures
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if n > 0 {
+                ResponseTemplate::new(429).insert_header("Retry-After", "0")
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true}))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_transient_429_until_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thing"))
+            .respond_with(FlakyResponder {
+                failures: std::sync::atomic::AtomicU32::new(2),
+            })
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let resp = send_with_retry(http.get(format!("{}/thing", server.uri())))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn persistent_429_becomes_throttled_after_max_attempts() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thing"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+            .expect(4)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let err = send_with_retry(http.get(format!("{}/thing", server.uri())))
+            .await
+            .unwrap_err();
+        match err {
+            ClientError::Throttled { retry_after } => assert_eq!(retry_after, Some(0)),
+            other => panic!("expected Throttled, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_transient_errors_pass_through_without_retry() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thing"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let resp = send_with_retry(http.get(format!("{}/thing", server.uri())))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
     }
 }

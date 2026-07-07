@@ -100,6 +100,24 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
 /// create-draft (then either send or stop). Shared by the non-interactive
 /// path and the TUI's `Send` / `Draft` outcomes.
 async fn send_or_draft(from: &str, c: compose_form::Compose, save_as_draft: bool) -> Result<()> {
+    if !save_as_draft {
+        let gate = crate::guardrail::gate(
+            crate::guardrail::GuardrailAction::Send,
+            &format!(
+                "send '{}' from {from} to {} recipient(s){}",
+                c.subject,
+                c.to.len() + c.cc.len() + c.bcc.len(),
+                if c.attachments.is_empty() {
+                    String::new()
+                } else {
+                    format!(" with {} attachment(s)", c.attachments.len())
+                }
+            ),
+        )?;
+        if gate == crate::guardrail::Gate::DryRun {
+            return Ok(());
+        }
+    }
     let graph = GraphClient::new(AuthClient::from_env()?)?;
     let outgoing = Outgoing {
         subject: c.subject,
@@ -230,6 +248,19 @@ pub async fn reply(fragment: String, args: ReplyArgs, reply_all: bool) -> Result
     // because Graph's /reply takes a comment string only, not attachments.
     let need_draft = args.draft || !args.attach.is_empty();
 
+    if !args.draft {
+        let gate = crate::guardrail::gate(
+            crate::guardrail::GuardrailAction::Send,
+            &format!(
+                "reply{} to message {short} from {from}",
+                if reply_all { "-all" } else { "" }
+            ),
+        )?;
+        if gate == crate::guardrail::Gate::DryRun {
+            return Ok(());
+        }
+    }
+
     if !need_draft {
         if reply_all {
             graph
@@ -306,8 +337,17 @@ pub async fn forward(fragment: String, args: ForwardArgs) -> Result<()> {
     } else {
         "Send this forward?"
     };
-    if !confirm_send(args.yes, prompt)? {
+    if !crate::guardrail::dry_run_active() && !confirm_send(args.yes, prompt)? {
         return Ok(());
+    }
+    if !args.draft {
+        let gate = crate::guardrail::gate(
+            crate::guardrail::GuardrailAction::Send,
+            &format!("forward message {short} from {from} to {}", to.join(", ")),
+        )?;
+        if gate == crate::guardrail::Gate::DryRun {
+            return Ok(());
+        }
     }
 
     let graph = GraphClient::new(AuthClient::from_env()?)?;

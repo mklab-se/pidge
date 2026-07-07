@@ -7,6 +7,8 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 mod banner;
 mod cli;
 mod commands;
+mod exitcode;
+mod guardrail;
 mod output;
 mod update;
 
@@ -111,6 +113,11 @@ async fn main() -> Result<()> {
         None
     };
 
+    let json_errors = cli.json;
+    if cli.dry_run {
+        crate::guardrail::set_dry_run();
+    }
+    output::project::configure(cli.fields.clone(), cli.max_chars);
     let result = cli.run().await;
 
     // The update check is best-effort. Bound the wait so a slow or hung
@@ -120,7 +127,18 @@ async fn main() -> Result<()> {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
     }
 
-    result
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let (kind, envelope) = exitcode::classify(&err);
+            if json_errors {
+                eprintln!("{}", serde_json::json!({ "error": envelope }));
+            } else {
+                eprintln!("Error: {err:#}");
+            }
+            std::process::exit(kind as i32);
+        }
+    }
 }
 
 #[cfg(test)]

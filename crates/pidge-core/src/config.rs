@@ -17,6 +17,10 @@ pub struct Config {
     pub defaults: Defaults,
     pub trusted_senders: Vec<String>,
     pub classify: ClassifyConfig,
+    /// Guardrails: action class -> "allow" | "confirm" | "deny".
+    /// Classes: send, delete, cancel, rsvp, bulk, unsubscribe.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub guardrails: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,9 +180,18 @@ impl Config {
                     Some(self.classify.labels.join(","))
                 }
             }
-            _ => None,
+            _ => {
+                if let Some(class) = key.strip_prefix("guardrails.") {
+                    return self.guardrails.get(class).cloned();
+                }
+                None
+            }
         }
     }
+
+    /// Valid guardrail action classes.
+    pub const GUARDRAIL_CLASSES: [&'static str; 6] =
+        ["send", "delete", "cancel", "rsvp", "bulk", "unsubscribe"];
 
     /// Set a dotted config key from a string value. Errors on unknown key or
     /// unparseable value.
@@ -216,6 +229,22 @@ impl Config {
                     .collect();
             }
             _ => {
+                if let Some(class) = key.strip_prefix("guardrails.") {
+                    if !Self::GUARDRAIL_CLASSES.contains(&class) {
+                        return Err(CoreError::UnknownConfigKey {
+                            key: key.to_string(),
+                        });
+                    }
+                    if !["allow", "confirm", "deny"].contains(&value.trim()) {
+                        return Err(CoreError::InvalidConfigValue {
+                            key: key.to_string(),
+                            value: value.to_string(),
+                        });
+                    }
+                    self.guardrails
+                        .insert(class.to_string(), value.trim().to_string());
+                    return Ok(());
+                }
                 return Err(CoreError::UnknownConfigKey {
                     key: key.to_string(),
                 });
@@ -232,6 +261,15 @@ impl Config {
             "classify.cache" => self.classify.cache = None,
             "classify.labels" => self.classify.labels.clear(),
             _ => {
+                if let Some(class) = key.strip_prefix("guardrails.") {
+                    if !Self::GUARDRAIL_CLASSES.contains(&class) {
+                        return Err(CoreError::UnknownConfigKey {
+                            key: key.to_string(),
+                        });
+                    }
+                    self.guardrails.remove(class);
+                    return Ok(());
+                }
                 return Err(CoreError::UnknownConfigKey {
                     key: key.to_string(),
                 });

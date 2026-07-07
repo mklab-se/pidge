@@ -22,6 +22,8 @@ struct GraphMessage {
     body: Option<GraphBody>,
     #[serde(rename = "hasAttachments")]
     has_attachments: Option<bool>,
+    #[serde(rename = "conversationId", default)]
+    conversation_id: Option<String>,
     #[serde(default)]
     flag: Option<GraphFlag>,
 }
@@ -65,11 +67,15 @@ struct GraphList {
 pub struct InboxPage {
     pub messages: Vec<Message>,
     pub has_more: bool,
+    /// Graph continuation URL for the next page (`@odata.nextLink`).
+    pub next_link: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GraphFullMessage {
     id: String,
+    #[serde(rename = "conversationId", default)]
+    conversation_id: Option<String>,
     subject: Option<String>,
     from: Option<GraphFromWrapper>,
     #[serde(rename = "toRecipients", default)]
@@ -216,7 +222,7 @@ async fn list_folder(
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
             "$select",
-            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
+            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
         ),
         ("$orderby", "receivedDateTime desc"),
         ("$top", &limit.to_string()),
@@ -228,7 +234,7 @@ async fn list_folder(
         req = req.query(&[("$filter", "isRead eq false")]);
     }
 
-    let resp = req.send().await?;
+    let resp = super::send_with_retry(req).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -241,6 +247,7 @@ async fn list_folder(
     let list: GraphList = resp.json().await?;
     Ok(InboxPage {
         has_more: list.next_link.is_some(),
+        next_link: list.next_link,
         messages: list
             .value
             .into_iter()
@@ -259,31 +266,45 @@ async fn list_folder(
 /// - `from:alice@example.com`
 /// - `subject:"q4 review"`
 /// - `from:alice AND subject:budget`
-pub async fn search_messages(
+///
+/// Parse one raw delta item into a [`Message`] (None if the shape is not a
+/// message — e.g. a tombstone or a partial patch without required fields).
+pub(crate) fn message_from_delta_value(
+    value: serde_json::Value,
+    account: &str,
+) -> Option<pidge_core::Message> {
+    let g: GraphMessage = serde_json::from_value(value).ok()?;
+    Some(to_message(g, account))
+}
+
+/// Fetch every message in a conversation (thread), oldest first.
+pub async fn list_conversation(
     http: &reqwest::Client,
     base_url: &str,
     access_token: &str,
     account: &str,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<Message>, ClientError> {
-    // $search expects a quoted KQL string; the user passes the raw query.
-    let quoted = format!("\"{}\"", query.replace('"', "\\\""));
+    conversation_id: &str,
+) -> Result<Vec<pidge_core::Message>, ClientError> {
     let url = format!("{base_url}/me/messages");
-    let resp = http
+    let filter = format!(
+        "conversationId eq '{}'",
+        conversation_id.replace('\'', "''")
+    );
+    let req = http
         .get(&url)
         .bearer_auth(access_token)
         .header("Prefer", "outlook.body-content-type=\"text\"")
         .query(&[
             (
                 "$select",
-                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
+                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
             ),
-            ("$top", &limit.to_string()),
-            ("$search", &quoted),
-        ])
-        .send()
-        .await?;
+            // No $orderby: Graph rejects conversationId filters combined
+            // with a sort ("InefficientFilter") — we sort client-side.
+            ("$filter", filter.as_str()),
+            ("$top", "100"),
+        ]);
+    let resp = super::send_with_retry(req).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -293,11 +314,88 @@ pub async fn search_messages(
         });
     }
     let list: GraphList = resp.json().await?;
-    Ok(list
+    let mut messages: Vec<pidge_core::Message> = list
         .value
         .into_iter()
         .map(|g| to_message(g, account))
-        .collect())
+        .collect();
+    messages.sort_by_key(|m| m.received_at);
+    Ok(messages)
+}
+
+/// Fetch a page of messages at an absolute Graph URL (an `@odata.nextLink`
+/// carried in a pidge cursor). Continues any listing or search stream.
+pub async fn list_messages_at(
+    http: &reqwest::Client,
+    access_token: &str,
+    account: &str,
+    url: &str,
+) -> Result<InboxPage, ClientError> {
+    let req = http.get(url).bearer_auth(access_token);
+    let resp = super::send_with_retry(req).await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let list: GraphList = resp.json().await?;
+    Ok(InboxPage {
+        has_more: list.next_link.is_some(),
+        next_link: list.next_link,
+        messages: list
+            .value
+            .into_iter()
+            .map(|g| to_message(g, account))
+            .collect(),
+    })
+}
+
+pub async fn search_messages(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    query: &str,
+    limit: usize,
+) -> Result<InboxPage, ClientError> {
+    // $search expects a quoted KQL string; the user passes the raw query.
+    let quoted = format!("\"{}\"", query.replace('"', "\\\""));
+    let url = format!("{base_url}/me/messages");
+    let resp = super::send_with_retry(
+        http.get(&url)
+            .bearer_auth(access_token)
+            .header("Prefer", "outlook.body-content-type=\"text\"")
+            .query(&[
+                (
+                    "$select",
+                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+                ),
+                ("$top", &limit.to_string()),
+                ("$search", &quoted),
+            ]),
+    )
+    .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let list: GraphList = resp.json().await?;
+    Ok(InboxPage {
+        has_more: list.next_link.is_some(),
+        next_link: list.next_link,
+        messages: list
+            .value
+            .into_iter()
+            .map(|g| to_message(g, account))
+            .collect(),
+    })
 }
 
 fn to_message(g: GraphMessage, account: &str) -> Message {
@@ -315,6 +413,7 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
     Message {
         account: account.to_string(),
         id: g.id,
+        conversation_id: g.conversation_id.unwrap_or_default(),
         from: MessageFrom {
             name: g
                 .from
@@ -353,9 +452,9 @@ pub async fn get_message(
     let url = format!(
         "{base_url}/me/messages/{message_id}\
          ?$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,\
-receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag"
+receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
     );
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -384,6 +483,7 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag"
     Ok(pidge_core::FullMessage {
         account: account.to_string(),
         id: g.id,
+        conversation_id: g.conversation_id.unwrap_or_default(),
         from: g
             .from
             .map(|w| from(w.email_address))
@@ -415,7 +515,7 @@ pub async fn fetch_message_headers(
     message_id: &str,
 ) -> Result<Vec<(String, String)>, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}?$select=internetMessageHeaders");
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -463,7 +563,7 @@ pub async fn list_attachments(
         "{base_url}/me/messages/{message_id}/attachments\
          ?$select=id,name,contentType,size,isInline"
     );
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -506,7 +606,7 @@ pub async fn get_attachment_bytes(
     use base64::engine::general_purpose::STANDARD;
 
     let url = format!("{base_url}/me/messages/{message_id}/attachments/{attachment_id}");
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -593,7 +693,7 @@ pub async fn get_categories(
     message_id: &str,
 ) -> Result<Vec<String>, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}?$select=categories");
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -632,12 +732,8 @@ async fn patch_message(
     body: &serde_json::Value,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
-    let resp = http
-        .patch(&url)
-        .bearer_auth(access_token)
-        .json(body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(body)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -716,7 +812,7 @@ async fn prepend_html_to_draft(
     html_to_prepend: &str,
 ) -> Result<(), ClientError> {
     let get_url = format!("{base_url}/me/messages/{message_id}?$select=body");
-    let resp = http.get(&get_url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&get_url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -749,12 +845,12 @@ async fn prepend_html_to_draft(
             "content": new_content,
         }
     });
-    let resp = http
-        .patch(&patch_url)
-        .bearer_auth(access_token)
-        .json(&patch_body)
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.patch(&patch_url)
+            .bearer_auth(access_token)
+            .json(&patch_body),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -821,12 +917,7 @@ async fn post_no_body(
     access_token: &str,
     body: &serde_json::Value,
 ) -> Result<(), ClientError> {
-    let resp = http
-        .post(url)
-        .bearer_auth(access_token)
-        .json(body)
-        .send()
-        .await?;
+    let resp = super::send_with_retry(http.post(url).bearer_auth(access_token).json(body)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -848,12 +939,8 @@ pub async fn create_draft(
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages");
     let body = message.to_graph_json();
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     parse_id_from_response(resp).await
 }
 
@@ -871,12 +958,12 @@ pub async fn create_reply_draft(
     comment: &str,
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/createReply");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({}))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({})),
+    )
+    .await?;
     let draft_id = parse_id_from_response(resp).await?;
     if !comment.is_empty() {
         prepend_html_to_draft(
@@ -900,12 +987,12 @@ pub async fn create_reply_all_draft(
     comment: &str,
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/createReplyAll");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({}))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({})),
+    )
+    .await?;
     let draft_id = parse_id_from_response(resp).await?;
     if !comment.is_empty() {
         prepend_html_to_draft(
@@ -931,16 +1018,14 @@ pub async fn create_forward_draft(
     comment: &str,
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/createForward");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({
+    let resp = super::send_with_retry(http.post(&url).bearer_auth(access_token).json(
+        &serde_json::json!({
             "toRecipients": to.iter().map(|addr| serde_json::json!({
                 "emailAddress": { "address": addr }
             })).collect::<Vec<_>>(),
-        }))
-        .send()
-        .await?;
+        }),
+    ))
+    .await?;
     let draft_id = parse_id_from_response(resp).await?;
     if !comment.is_empty() {
         prepend_html_to_draft(
@@ -967,13 +1052,13 @@ pub async fn send_draft(
     // omits that header for body-less requests, so the Graph edge layer
     // responds with HTTP 411. Sending an explicit empty body forces the
     // header to land.
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .header(reqwest::header::CONTENT_LENGTH, 0)
-        .body(reqwest::Body::from(""))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .header(reqwest::header::CONTENT_LENGTH, 0)
+            .body(reqwest::Body::from("")),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -996,12 +1081,8 @@ pub async fn update_draft(
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
     let body = message.to_graph_json();
-    let resp = http
-        .patch(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(&body)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1023,7 +1104,7 @@ pub async fn delete_message(
     message_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
-    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.delete(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1059,12 +1140,8 @@ pub async fn add_attachment(
         "contentType": content_type,
         "contentBytes": STANDARD.encode(bytes),
     });
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     parse_id_from_response(resp).await
 }
 
@@ -1077,7 +1154,7 @@ pub async fn delete_attachment(
     attachment_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/attachments/{attachment_id}");
-    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.delete(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1152,12 +1229,12 @@ pub async fn move_message(
     destination: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/move");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({ "destinationId": destination }))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "destinationId": destination })),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1207,7 +1284,7 @@ async fn fetch_folder_pages(
 ) -> Result<Vec<MailFolder>, ClientError> {
     let mut folders: Vec<MailFolder> = Vec::new();
     loop {
-        let resp = http.get(&url).bearer_auth(access_token).send().await?;
+        let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -1260,12 +1337,12 @@ async fn post_folder(
     access_token: &str,
     display_name: &str,
 ) -> Result<MailFolder, ClientError> {
-    let resp = http
-        .post(url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({ "displayName": display_name }))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "displayName": display_name })),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1316,7 +1393,7 @@ pub async fn delete_mail_folder(
     folder_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/mailFolders/{folder_id}");
-    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.delete(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1436,7 +1513,8 @@ mod tests {
         let http = reqwest::Client::new();
         let msgs = search_messages(&http, &server.uri(), "AT", "u@e.com", "alice budget", 25)
             .await
-            .unwrap();
+            .unwrap()
+            .messages;
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].subject, "Q4 budget review");
     }
@@ -1926,5 +2004,60 @@ mod tests {
         assert_eq!(headers[0].0, "List-Unsubscribe");
         assert_eq!(headers[0].1, "<mailto:u@x>, <https://x/u>");
         assert_eq!(headers[1].0, "List-Unsubscribe-Post");
+    }
+}
+
+#[cfg(test)]
+mod cursor_paging_tests {
+    use super::*;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn msg(id: &str, received: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "subject": format!("s-{id}"),
+            "from": {"emailAddress": {"name": "N", "address": "n@x.se"}},
+            "receivedDateTime": received,
+            "isRead": true,
+            "bodyPreview": "p",
+            "hasAttachments": false
+        })
+    }
+
+    #[tokio::test]
+    async fn next_link_is_surfaced_and_followable() {
+        let server = MockServer::start().await;
+        let page2_url = format!("{}/me/mailFolders/inbox/messages?page=2", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/inbox/messages"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [msg("m3", "2026-07-01T10:00:00Z")]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/inbox/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [msg("m1", "2026-07-03T10:00:00Z"), msg("m2", "2026-07-02T10:00:00Z")],
+                "@odata.nextLink": page2_url
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let page1 = list_inbox(&http, &server.uri(), "tok", "a@b.se", 2, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(page1.messages.len(), 2);
+        let next = page1.next_link.expect("first page links onward");
+
+        let page2 = list_messages_at(&http, "tok", "a@b.se", &next)
+            .await
+            .unwrap();
+        assert_eq!(page2.messages.len(), 1);
+        assert_eq!(page2.messages[0].id, "m3");
+        assert!(page2.next_link.is_none(), "final page has no continuation");
     }
 }

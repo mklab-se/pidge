@@ -1,7 +1,7 @@
 //! Shared helpers for mail subcommands that take a fragment of the 8-char
 //! short hash (`pidge mail show 3515`, `pidge mail flag 3515`, …).
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use colored::Colorize;
 use comfy_table::{ContentArrangement, Table};
 
@@ -13,12 +13,17 @@ use pidge_core::{CacheLookup, CachedMessageRef, MessageCache};
 pub fn resolve(fragment: &str) -> Result<(String, CachedMessageRef)> {
     let cache = MessageCache::load()?;
     match cache.find_by_fragment(fragment) {
-        CacheLookup::NotFound => Err(anyhow!(
-            "No message found for fragment '{fragment}'. Run `pidge mail` to refresh the cache."
-        )),
+        CacheLookup::NotFound => Err(pidge_core::FragmentError::NotFound {
+            fragment: fragment.to_string(),
+        }
+        .into()),
         CacheLookup::Ambiguous(matches) => {
             print_ambiguous(&matches);
-            Err(anyhow!("Please provide more characters."))
+            Err(pidge_core::FragmentError::Ambiguous {
+                fragment: fragment.to_string(),
+                count: matches.len(),
+            }
+            .into())
         }
         CacheLookup::One(h, r) => Ok((h, r)),
     }

@@ -9,11 +9,7 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use futures::StreamExt;
-use futures::stream;
 use std::collections::HashSet;
-use std::time::Duration;
-use tokio::time::sleep;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
@@ -112,6 +108,14 @@ async fn archive_bulk(
     account_filter: Vec<String>,
     yes: bool,
 ) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Bulk,
+        "bulk archive of matching messages",
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+
     if !yes {
         return Err(anyhow!(
             "Bulk archive requires explicit `-y` confirmation — there is no \
@@ -287,7 +291,7 @@ pub(crate) async fn move_bulk_by_sender_for_account(
             .search_messages(account, &format!("from:{sender}"), SEARCH_LIMIT)
             .await
         {
-            Ok(m) => m,
+            Ok(page) => page.messages,
             Err(e) => {
                 eprintln!("  {} search failed for {}: {e}", "!".red(), sender.dimmed());
                 continue;
@@ -325,27 +329,39 @@ pub(crate) async fn move_many(
     destination: &str,
     verb: &str,
 ) -> usize {
-    const MAX_INFLIGHT: usize = 4;
-    let mut ok = 0usize;
-    let tasks = messages.iter().map(|m| {
-        let id = m.id.clone();
-        let short = pidge_core::short_hash(&m.id);
-        async move {
-            let res = move_with_retry(graph, account, &id, destination).await;
-            (short, res)
+    use pidge_client::graph::batch::BatchRequest;
+    let requests: Vec<BatchRequest> = messages
+        .iter()
+        .map(|m| {
+            BatchRequest::json(
+                pidge_core::short_hash(&m.id),
+                "POST",
+                format!("/me/messages/{}/move", m.id),
+                serde_json::json!({"destinationId": destination}),
+            )
+        })
+        .collect();
+    let responses = match graph.batch_all(account, requests).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  {} bulk {verb} failed: {e}", "!".red());
+            return 0;
         }
-    });
-    let mut stream = stream::iter(tasks).buffer_unordered(MAX_INFLIGHT);
-    while let Some((short, res)) = stream.next().await {
-        match res {
-            Ok(()) => {
-                ok += 1;
-                let _ = purge_from_cache(&short);
-            }
-            Err(ClientError::Graph { status: 404, .. }) => { /* already gone */ }
-            Err(e) => {
-                eprintln!("  {} failed to {verb} {}: {e}", "!".red(), short.dimmed());
-            }
+    };
+    let mut ok = 0usize;
+    for item in responses {
+        if item.is_success() {
+            ok += 1;
+            let _ = purge_from_cache(&item.id);
+        } else if item.status == 404 {
+            // already gone
+        } else {
+            eprintln!(
+                "  {} failed to {verb} {}: HTTP {}",
+                "!".red(),
+                item.id.dimmed(),
+                item.status
+            );
         }
     }
     ok
@@ -353,26 +369,15 @@ pub(crate) async fn move_many(
 
 /// Move a single message to `destination`, retrying with exponential
 /// backoff on `429 ApplicationThrottled` since Graph's per-mailbox move
-/// limit is hit easily on bulk operations.
+/// limit is hit easily on bulk operations. Retry/backoff now lives in the
+/// client's send_with_retry seam; this wrapper remains for call-site clarity.
 pub(crate) async fn move_with_retry(
     graph: &GraphClient,
     account: &str,
     message_id: &str,
     destination: &str,
 ) -> Result<(), ClientError> {
-    const MAX_RETRIES: u32 = 5;
-    let mut delay_ms = 500u64;
-    for attempt in 0..=MAX_RETRIES {
-        match graph.move_message(account, message_id, destination).await {
-            Ok(()) => return Ok(()),
-            Err(ClientError::Graph { status: 429, .. }) if attempt < MAX_RETRIES => {
-                sleep(Duration::from_millis(delay_ms)).await;
-                delay_ms = (delay_ms * 2).min(8_000);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    unreachable!("loop returns on Ok or after MAX_RETRIES exits")
+    graph.move_message(account, message_id, destination).await
 }
 
 /// Run an async closure with a configured GraphClient. On a 404 from Graph,

@@ -14,13 +14,9 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use colored::Colorize;
-use futures::StreamExt;
 use futures::future::join_all;
-use futures::stream;
 use inquire::Confirm;
 use std::collections::HashSet;
-use std::time::Duration as StdDuration;
-use tokio::time::sleep;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
@@ -47,6 +43,13 @@ pub async fn run(
 
 async fn delete_single(fragment: String, yes: bool) -> Result<()> {
     let (short, msg) = resolve(&fragment)?;
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Delete,
+        &format!("delete message {short} (moves to Deleted Items)"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
     if !yes {
         let confirmed = Confirm::new(&format!(
             "Delete message {} (moves to Deleted Items)?",
@@ -76,6 +79,14 @@ async fn delete_bulk(
     account_filter: Vec<String>,
     yes: bool,
 ) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Bulk,
+        &format!("bulk delete: from={from:?} older_than={older_than:?}"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+
     if !yes {
         return Err(anyhow!(
             "Bulk delete requires explicit `-y` confirmation — there is no \
@@ -188,7 +199,7 @@ async fn delete_bulk_by_sender_for_account(
             .search_messages(account, &format!("from:{sender}"), SEARCH_LIMIT)
             .await
         {
-            Ok(m) => m,
+            Ok(page) => page.messages,
             Err(e) => {
                 eprintln!("  {} search failed for {}: {e}", "!".red(), sender.dimmed());
                 continue;
@@ -213,50 +224,41 @@ async fn delete_messages(
     account: &str,
     messages: &[&pidge_core::Message],
 ) -> usize {
-    const MAX_INFLIGHT: usize = 4;
-    let mut ok = 0usize;
-    let tasks = messages.iter().map(|m| {
-        let id = m.id.clone();
-        let short = pidge_core::short_hash(&m.id);
-        async move {
-            let res = delete_with_retry(graph, account, &id).await;
-            (short, res)
+    use pidge_client::graph::batch::BatchRequest;
+    let requests: Vec<BatchRequest> = messages
+        .iter()
+        .map(|m| {
+            BatchRequest::bare(
+                pidge_core::short_hash(&m.id),
+                "DELETE",
+                format!("/me/messages/{}", m.id),
+            )
+        })
+        .collect();
+    let responses = match graph.batch_all(account, requests).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  {} bulk delete failed: {e}", "!".red());
+            return 0;
         }
-    });
-    let mut stream = stream::iter(tasks).buffer_unordered(MAX_INFLIGHT);
-    while let Some((short, res)) = stream.next().await {
-        match res {
-            Ok(()) => {
-                ok += 1;
-                let _ = purge_from_cache(&short);
-            }
-            Err(ClientError::Graph { status: 404, .. }) => { /* already gone */ }
-            Err(e) => {
-                eprintln!("  {} failed to delete {}: {e}", "!".red(), short.dimmed());
-            }
+    };
+    let mut ok = 0usize;
+    for item in responses {
+        if item.is_success() {
+            ok += 1;
+            let _ = purge_from_cache(&item.id);
+        } else if item.status == 404 {
+            // already gone
+        } else {
+            eprintln!(
+                "  {} failed to delete {}: HTTP {}",
+                "!".red(),
+                item.id.dimmed(),
+                item.status
+            );
         }
     }
     ok
-}
-
-async fn delete_with_retry(
-    graph: &GraphClient,
-    account: &str,
-    message_id: &str,
-) -> Result<(), ClientError> {
-    const MAX_RETRIES: u32 = 5;
-    let mut delay_ms = 500u64;
-    for attempt in 0..=MAX_RETRIES {
-        match graph.delete_message(account, message_id).await {
-            Ok(()) => return Ok(()),
-            Err(ClientError::Graph { status: 429, .. }) if attempt < MAX_RETRIES => {
-                sleep(StdDuration::from_millis(delay_ms)).await;
-                delay_ms = (delay_ms * 2).min(8_000);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    unreachable!("loop returns on Ok or after MAX_RETRIES exits")
 }
 
 async fn delete_bulk_for_account(

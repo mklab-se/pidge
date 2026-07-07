@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/pidge", "crates/pidge-core", "crates/pidge-client"]
 
 [workspace.package]
-version = "0.4.11"
+version = "1.0.0"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -34,7 +34,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Terminal
-colored = "2.1"
+colored = "3"
 
 # Versioning & time
 semver = "1.0"
@@ -55,7 +55,7 @@ keyring = "3"
 base64 = "0.22"
 
 # Cryptographic random for PKCE verifier and OAuth state
-rand = "0.8"
+rand = "0.9"
 
 # YAML for config files
 serde_yaml = "0.9"
@@ -97,5 +97,5 @@ url = "2"
 tempfile = "3.10"
 
 # Internal crates
-pidge-core = { version = "0.4.10", path = "crates/pidge-core" }
-pidge-client = { version = "0.4.10", path = "crates/pidge-client" }
+pidge-core = { version = "1.0.0", path = "crates/pidge-core" }
+pidge-client = { version = "1.0.0", path = "crates/pidge-client" }

@@ -88,6 +88,14 @@ async fn move_bulk(
     to: &str,
     yes: bool,
 ) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Bulk,
+        &format!("bulk move of matching messages to {to}"),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+
     if !yes {
         return Err(anyhow!(
             "Bulk move requires explicit `-y` confirmation — there is no \

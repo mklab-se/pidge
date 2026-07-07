@@ -87,6 +87,7 @@ pub async fn run_default(json: bool) -> Result<()> {
         false,
         false,
         json,
+        None,
     )
     .await
 }
@@ -105,7 +106,30 @@ pub async fn run(
     compact: bool,
     table: bool,
     json: bool,
+    cursor: Option<String>,
 ) -> Result<()> {
+    // Continuation: pull the next page per non-exhausted account.
+    if let Some(token) = cursor {
+        let cursor = pidge_client::Cursor::decode(&token, "cal")?;
+        let graph = GraphClient::new(AuthClient::from_env()?)?;
+        let tz = resolve_tz(None);
+        let mut all: Vec<Event> = Vec::new();
+        let mut next = pidge_client::Cursor::new("cal");
+        for (email, link) in &cursor.per_account {
+            let Some(link) = link else { continue };
+            let page = graph.list_events_at(email, link).await?;
+            next.per_account.insert(email.clone(), page.next_link);
+            all.extend(page.events);
+        }
+        all.sort_by_key(|e| e.start.at);
+        refresh_cache(&all)?;
+        if json {
+            return print_json_with_cursor(&all, (!next.exhausted()).then(|| next.encode()));
+        }
+        print_compact(&all, &tz);
+        return Ok(());
+    }
+
     let config = Config::load()?;
     let accounts = select_accounts(&config, &accounts_filter)?;
     if accounts.is_empty() {
@@ -128,6 +152,7 @@ pub async fn run(
     let graph = GraphClient::new(auth)?;
 
     let mut all: Vec<Event> = Vec::new();
+    let mut next = pidge_client::Cursor::new("cal");
     for acct in &accounts {
         let cal_id = resolve_calendar(&graph, &acct.email, calendar.as_deref()).await?;
         let page = graph
@@ -139,13 +164,14 @@ pub async fn run(
                 limit,
             )
             .await?;
+        next.per_account.insert(acct.email.clone(), page.next_link);
         all.extend(page.events);
     }
     all.sort_by_key(|e| e.start.at);
     refresh_cache(&all)?;
 
     if json {
-        print_json(&all)?;
+        print_json_with_cursor(&all, (!next.exhausted()).then(|| next.encode()))?;
     } else if table {
         print_table(&all, &tz);
     } else if compact {
@@ -199,6 +225,23 @@ fn refresh_cache(events: &[Event]) -> Result<()> {
     cache.insert_many(&refs);
     cache.save()?;
     Ok(())
+}
+
+fn print_json_with_cursor(events: &[Event], next_cursor: Option<String>) -> Result<()> {
+    match next_cursor {
+        Some(cursor) => {
+            let items: serde_json::Value = serde_json::from_str(&events_to_json(events)?)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "items": items,
+                    "next_cursor": cursor,
+                }))?
+            );
+            Ok(())
+        }
+        None => print_json(events),
+    }
 }
 
 fn print_json(events: &[Event]) -> Result<()> {
@@ -342,7 +385,7 @@ mod tests {
     fn json_output_includes_short_hash_per_event() {
         let event = sample_event();
         let expected_hash = short_id_for(&event);
-        let json = events_to_json(&[event.clone()]).unwrap();
+        let json = events_to_json(std::slice::from_ref(&event)).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let arr = v.as_array().expect("top level is an array");
         assert_eq!(arr.len(), 1);

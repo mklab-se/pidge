@@ -15,6 +15,17 @@ pub struct CachedMessageRef {
     pub cached_at: DateTime<Utc>,
 }
 
+/// Typed fragment-resolution failure, used for exit-code classification
+/// (agents get exit 4 + a machine-readable code instead of prose-only).
+#[derive(Debug, thiserror::Error)]
+pub enum FragmentError {
+    #[error("no match found for fragment '{fragment}'")]
+    NotFound { fragment: String },
+
+    #[error("fragment '{fragment}' matches {count} entries — provide more characters")]
+    Ambiguous { fragment: String, count: usize },
+}
+
 /// Result of looking up a fragment against the cache.
 ///
 /// Generic over the cached entry type so the same enum serves both

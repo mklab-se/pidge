@@ -2,6 +2,42 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] - 2026-07-07
+
+The agent-grade release: pidge now *enforces* reliability, control, and
+token-efficiency instead of hoping agents behave.
+
+### Added
+
+- **Reliability**: every Graph call retries 429/503/504 honoring
+  `Retry-After` (typed `Throttled` after exhaustion); bulk move/archive/
+  delete use Graph `$batch` (20 per round-trip, per-item re-batching);
+  exact multi-account **cursor pagination** (`--cursor` / `next_cursor` on
+  mail list/search + calendar list); differentiated **exit codes**
+  (0/1/2/3/4/5/6) and a machine-readable error envelope on stderr with
+  `--json`.
+- **Delta + watch**: `pidge mail delta` / `pidge calendar delta` return
+  only what changed since the cursor; `pidge watch` streams JSONL events
+  (mail + calendar) on an interval, auto-re-bootstraps expired delta
+  streams, and resumes from `--state-file`.
+- **Guardrails**: per-action-class policy (`guardrails.send|delete|cancel|
+  rsvp|bulk|unsubscribe` = allow|confirm|deny) enforced by pidge itself —
+  `confirm` requires an interactive human even with `-y`. Global
+  `--dry-run` prints what would happen (with the guardrail verdict).
+- **Threads**: `pidge mail thread <hash>` (whole conversation, oldest
+  first), `mail list --threads` grouping; `conversation_id` in JSON.
+- **Token-thrift**: global `--fields` projection and `--max-chars`
+  truncation for all agent JSON output.
+- Typed fragment errors (`not_found` / `ambiguous`, exit 4).
+
+### Changed
+
+- Search results are now sorted by received time (desc).
+- README/skill corrected: sign-in is browser auth-code+PKCE (not device
+  code); the emitted SKILL.md covers cursors, delta/watch, exit codes,
+  guardrails, threads, and token-thrift.
+- Deps: colored 3, rand 0.9.
+
 ## [0.4.11] - 2026-07-07
 
 ### Changed

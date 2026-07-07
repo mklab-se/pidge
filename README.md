@@ -28,7 +28,7 @@ brew install mklab-se/tap/pidge
 # ...or via cargo: cargo install pidge
 # ...other options (pre-built binaries, cargo binstall): see INSTALL.md
 
-# 2. Sign in (interactive device code flow)
+# 2. Sign in (opens your browser)
 pidge account add
 
 # 3. Try it
@@ -55,7 +55,7 @@ The emitted skill is deliberately small: it teaches the agent the concept plus a
 ## Account setup
 
 ```bash
-# Add an account (interactive device code flow)
+# Add an account (opens your browser — auth code + PKCE)
 pidge account add
 
 # List signed-in accounts and which one is default for e-mail / calendar

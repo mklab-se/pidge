@@ -28,12 +28,51 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Show what would happen without doing it (mutating commands)
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+
+    /// With --json: keep only these top-level fields (comma-separated)
+    #[arg(long, global = true, value_delimiter = ',')]
+    pub fields: Vec<String>,
+
+    /// With --json: truncate body_text/preview to N characters
+    #[arg(long, global = true)]
+    pub max_chars: Option<usize>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
 
 #[derive(clap::Subcommand)]
 pub enum Commands {
+    /// Stream mail/calendar changes as JSONL events (for long-running agents)
+    Watch {
+        /// Watch mail only
+        #[arg(long)]
+        mail: bool,
+
+        /// Watch calendar only
+        #[arg(long)]
+        calendar: bool,
+
+        /// Poll interval in seconds
+        #[arg(long, default_value = "60")]
+        interval: u64,
+
+        /// Filter to specific accounts (repeatable)
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Mail folder to track
+        #[arg(long, default_value = "inbox")]
+        folder: String,
+
+        /// Persist cursors here so a restarted watch resumes
+        #[arg(long)]
+        state_file: Option<std::path::PathBuf>,
+    },
+
     /// Manage AI features (shows status when run without a subcommand)
     Ai {
         #[command(subcommand)]
@@ -270,6 +309,15 @@ pub enum MailCommands {
         #[arg(short = 'p', long, default_value = "1")]
         page: usize,
 
+        /// Continue from a previous response's next_cursor (agents; exact
+        /// multi-account continuation, preferred over --page)
+        #[arg(long)]
+        cursor: Option<String>,
+
+        /// Group the page by conversation (latest message + count per thread)
+        #[arg(long)]
+        threads: bool,
+
         /// Show only unread messages
         #[arg(long)]
         unread: bool,
@@ -307,6 +355,31 @@ pub enum MailCommands {
     },
 
     /// Search e-mails using Graph's KQL `$search` syntax (e.g. `from:alice subject:budget`)
+    /// Show the whole conversation (thread) a message belongs to
+    Thread {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
+    /// Change feed: what's new/changed since the cursor (agents; JSON only)
+    Delta {
+        /// Folder to track (delta is per-folder)
+        #[arg(long, default_value = "inbox")]
+        folder: String,
+
+        /// Cursor from a previous delta call; omit to bootstrap
+        #[arg(long)]
+        cursor: Option<String>,
+
+        /// Filter to specific accounts (repeatable)
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// On bootstrap, also emit the current messages as created events
+        #[arg(long)]
+        full: bool,
+    },
+
     Search {
         /// Search query (KQL syntax — `from:alice`, `subject:"q4 review"`, etc.)
         query: String,
@@ -318,6 +391,10 @@ pub enum MailCommands {
         /// Maximum number of results
         #[arg(short = 'n', long, default_value = "25")]
         limit: usize,
+
+        /// Continue from a previous response's next_cursor
+        #[arg(long)]
+        cursor: Option<String>,
 
         /// Card layout with a single-line preview per message
         #[arg(short = 'c', long, conflicts_with_all = ["table", "full"])]
@@ -722,6 +799,8 @@ pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
     "list",
     "show",
     "search",
+    "delta",
+    "thread",
     "mark-read",
     "mark-unread",
     "flag",
@@ -921,6 +1000,25 @@ pub enum CalendarCommands {
         compact: bool,
         #[arg(short = 't', long)]
         table: bool,
+
+        /// Continue from a previous response's next_cursor
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+
+    /// Change feed for a rolling window (agents; JSON only)
+    Delta {
+        /// Cursor from a previous delta call; omit to bootstrap
+        #[arg(long)]
+        cursor: Option<String>,
+
+        /// Filter to specific accounts (repeatable)
+        #[arg(long)]
+        account: Vec<String>,
+
+        /// Rolling window size in days (baked into the cursor)
+        #[arg(long, default_value = "14")]
+        days: i64,
     },
 
     /// Display a single event identified by a fragment of its short hash
@@ -1161,6 +1259,7 @@ pub const CALENDAR_SUBCOMMAND_NAMES: &[&str] = &[
     "list",
     "show",
     "search",
+    "delta",
     "calendars",
     "new",
     "edit",
@@ -1176,6 +1275,24 @@ pub const CALENDAR_SUBCOMMAND_NAMES: &[&str] = &[
 impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.command {
+            Some(Commands::Watch {
+                mail,
+                calendar,
+                interval,
+                account,
+                folder,
+                state_file,
+            }) => {
+                crate::commands::watch::run(crate::commands::watch::WatchArgs {
+                    mail,
+                    calendar,
+                    interval,
+                    account,
+                    folder,
+                    state_file,
+                })
+                .await
+            }
             Some(Commands::Ai { command }) => crate::commands::ai::run(command, self.json).await,
             Some(Commands::Account { command }) => {
                 crate::commands::account::run(command, self.json).await

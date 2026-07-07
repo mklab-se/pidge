@@ -2,6 +2,7 @@
 
 pub mod hyperlink;
 pub mod linkify;
+pub mod project;
 
 pub use linkify::linkify_text;
 

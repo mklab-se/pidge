@@ -42,8 +42,8 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use rand::RngCore;
-use rand::distributions::Alphanumeric;
-use rand::{Rng, thread_rng};
+use rand::distr::Alphanumeric;
+use rand::{Rng, rng};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -293,7 +293,7 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; text-align: center; }}
 /// characters and a maximum length of 128 characters." 64 alphanumerics is
 /// comfortably inside the spec and gives ~380 bits of entropy.
 fn make_code_verifier() -> String {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     (0..64).map(|_| rng.sample(Alphanumeric) as char).collect()
 }
 
@@ -308,7 +308,7 @@ fn make_code_challenge(verifier: &str) -> String {
 /// 32 bytes of OS random → URL-safe base64. Used for the `state` CSRF nonce.
 fn make_random(byte_len: usize) -> String {
     let mut buf = vec![0u8; byte_len];
-    thread_rng().fill_bytes(&mut buf);
+    rng().fill_bytes(&mut buf);
     URL_SAFE_NO_PAD.encode(&buf)
 }
 
