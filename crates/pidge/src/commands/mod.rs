@@ -46,6 +46,7 @@ pub mod mail_fragment;
 pub mod mail_move;
 pub mod mail_search;
 pub mod mail_show;
+pub mod mail_thread;
 pub mod mail_unsubscribe;
 pub mod name_resolve;
 pub mod skill;

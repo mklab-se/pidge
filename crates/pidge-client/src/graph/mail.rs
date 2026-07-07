@@ -22,6 +22,8 @@ struct GraphMessage {
     body: Option<GraphBody>,
     #[serde(rename = "hasAttachments")]
     has_attachments: Option<bool>,
+    #[serde(rename = "conversationId", default)]
+    conversation_id: Option<String>,
     #[serde(default)]
     flag: Option<GraphFlag>,
 }
@@ -72,6 +74,8 @@ pub struct InboxPage {
 #[derive(Debug, Deserialize)]
 struct GraphFullMessage {
     id: String,
+    #[serde(rename = "conversationId", default)]
+    conversation_id: Option<String>,
     subject: Option<String>,
     from: Option<GraphFromWrapper>,
     #[serde(rename = "toRecipients", default)]
@@ -218,7 +222,7 @@ async fn list_folder(
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
             "$select",
-            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
+            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
         ),
         ("$orderby", "receivedDateTime desc"),
         ("$top", &limit.to_string()),
@@ -273,6 +277,49 @@ pub(crate) fn message_from_delta_value(
     Some(to_message(g, account))
 }
 
+/// Fetch every message in a conversation (thread), oldest first.
+pub async fn list_conversation(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    conversation_id: &str,
+) -> Result<Vec<pidge_core::Message>, ClientError> {
+    let url = format!("{base_url}/me/messages");
+    let filter = format!(
+        "conversationId eq '{}'",
+        conversation_id.replace('\'', "''")
+    );
+    let req = http
+        .get(&url)
+        .bearer_auth(access_token)
+        .header("Prefer", "outlook.body-content-type=\"text\"")
+        .query(&[
+            (
+                "$select",
+                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+            ),
+            ("$filter", filter.as_str()),
+            ("$orderby", "receivedDateTime asc"),
+            ("$top", "100"),
+        ]);
+    let resp = super::send_with_retry(req).await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let list: GraphList = resp.json().await?;
+    Ok(list
+        .value
+        .into_iter()
+        .map(|g| to_message(g, account))
+        .collect())
+}
+
 /// Fetch a page of messages at an absolute Graph URL (an `@odata.nextLink`
 /// carried in a pidge cursor). Continues any listing or search stream.
 pub async fn list_messages_at(
@@ -321,7 +368,7 @@ pub async fn search_messages(
             .query(&[
                 (
                     "$select",
-                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
+                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
                 ),
                 ("$top", &limit.to_string()),
                 ("$search", &quoted),
@@ -363,6 +410,7 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
     Message {
         account: account.to_string(),
         id: g.id,
+        conversation_id: g.conversation_id.unwrap_or_default(),
         from: MessageFrom {
             name: g
                 .from
@@ -401,7 +449,7 @@ pub async fn get_message(
     let url = format!(
         "{base_url}/me/messages/{message_id}\
          ?$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,\
-receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag"
+receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
     );
     let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
@@ -432,6 +480,7 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag"
     Ok(pidge_core::FullMessage {
         account: account.to_string(),
         id: g.id,
+        conversation_id: g.conversation_id.unwrap_or_default(),
         from: g
             .from
             .map(|w| from(w.email_address))

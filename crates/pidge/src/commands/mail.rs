@@ -26,13 +26,14 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             limit,
             page,
             cursor,
+            threads,
             unread,
             compact,
             table,
             full,
         } => {
             list(
-                account, folder, limit, page, unread, compact, table, full, json, cursor,
+                account, folder, limit, page, unread, compact, table, full, json, cursor, threads,
             )
             .await
         }
@@ -43,6 +44,9 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             raw_html,
         } => {
             crate::commands::mail_show::run(fragment, mark_read, show_images, raw_html, json).await
+        }
+        MailCommands::Thread { fragment } => {
+            crate::commands::mail_thread::run(fragment, json).await
         }
         MailCommands::Delta {
             folder,
@@ -147,6 +151,7 @@ async fn list(
     full: bool,
     json: bool,
     cursor: Option<String>,
+    threads: bool,
 ) -> Result<()> {
     // Continuation: fetch each account's next page at its stored URL.
     if let Some(token) = cursor {
@@ -262,12 +267,69 @@ async fn list(
     let single_account = target_emails.len() == 1;
     let labels = account_labels(&target_emails);
 
+    if threads {
+        update_cache(&rows)?;
+        return render_threads(&rows, json);
+    }
     // Agents get a continuation token whenever more pages exist.
     if json && !next_cursor.exhausted() {
         update_cache(&rows)?;
         return render_json_with_cursor(&rows, Some(next_cursor.encode()));
     }
     render(&rows, single_account, &labels, compact, table, full, json)
+}
+
+/// Group a page of messages by conversation: latest message + count each.
+fn render_threads(rows: &[MessageRow], json: bool) -> Result<()> {
+    let mut groups: Vec<(String, Vec<&MessageRow>)> = Vec::new();
+    for row in rows {
+        let key = if row.message.conversation_id.is_empty() {
+            row.message.id.clone()
+        } else {
+            row.message.conversation_id.clone()
+        };
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, members)) => members.push(row),
+            None => groups.push((key, vec![row])),
+        }
+    }
+    if json {
+        let out: Vec<serde_json::Value> = groups
+            .iter()
+            .map(|(key, members)| {
+                let latest = members[0];
+                serde_json::json!({
+                    "conversation_id": key,
+                    "count": members.len(),
+                    "latest": {
+                        "id": latest.short_hash,
+                        "account": latest.message.account,
+                        "from": latest.message.from,
+                        "subject": latest.message.subject,
+                        "received_at": latest.message.received_at,
+                        "is_read": latest.message.is_read,
+                        "preview": latest.message.preview,
+                    }
+                })
+            })
+            .collect();
+        return crate::output::project::emit_json(serde_json::Value::Array(out));
+    }
+    for (_, members) in &groups {
+        let latest = members[0];
+        println!(
+            "{}  {}  {} {}",
+            latest.short_hash.dimmed(),
+            latest.message.from.address,
+            latest.message.subject.bold(),
+            if members.len() > 1 {
+                format!("({} msgs)", members.len()).dimmed().to_string()
+            } else {
+                String::new()
+            }
+        );
+    }
+    Ok(())
 }
 
 /// Continue a cursor: pull one page per non-exhausted account, merge by
@@ -970,14 +1032,11 @@ pub(crate) fn render_json_with_cursor(
         .collect();
     match next_cursor {
         // Cursor flows use an object envelope so agents can continue paging.
-        Some(cursor) => println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "items": out,
-                "next_cursor": cursor,
-            }))?
-        ),
-        None => println!("{}", serde_json::to_string_pretty(&out)?),
+        Some(cursor) => crate::output::project::emit_json(serde_json::json!({
+            "items": serde_json::to_value(&out)?,
+            "next_cursor": cursor,
+        }))?,
+        None => crate::output::project::emit_json(serde_json::to_value(&out)?)?,
     }
     Ok(())
 }
@@ -999,7 +1058,7 @@ fn render_json(rows: &[MessageRow]) -> Result<()> {
             has_attachments: r.message.has_attachments,
         })
         .collect();
-    println!("{}", serde_json::to_string_pretty(&out)?);
+    crate::output::project::emit_json(serde_json::to_value(&out)?)?;
     Ok(())
 }
 

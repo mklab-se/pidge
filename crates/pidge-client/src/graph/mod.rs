@@ -219,6 +219,16 @@ impl GraphClient {
         batch::batch_all(&self.http, &self.base_url, &token, requests).await
     }
 
+    /// Fetch every message in a conversation (thread), oldest first.
+    pub async fn list_conversation(
+        &self,
+        account: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<Message>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::list_conversation(&self.http, &self.base_url, &token, account, conversation_id).await
+    }
+
     /// Fetch a page of messages at an absolute Graph continuation URL.
     pub async fn list_messages_at(
         &self,

@@ -32,6 +32,14 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub dry_run: bool,
 
+    /// With --json: keep only these top-level fields (comma-separated)
+    #[arg(long, global = true, value_delimiter = ',')]
+    pub fields: Vec<String>,
+
+    /// With --json: truncate body_text/preview to N characters
+    #[arg(long, global = true)]
+    pub max_chars: Option<usize>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -306,6 +314,10 @@ pub enum MailCommands {
         #[arg(long)]
         cursor: Option<String>,
 
+        /// Group the page by conversation (latest message + count per thread)
+        #[arg(long)]
+        threads: bool,
+
         /// Show only unread messages
         #[arg(long)]
         unread: bool,
@@ -343,6 +355,12 @@ pub enum MailCommands {
     },
 
     /// Search e-mails using Graph's KQL `$search` syntax (e.g. `from:alice subject:budget`)
+    /// Show the whole conversation (thread) a message belongs to
+    Thread {
+        /// Fragment of the 8-char short hash
+        fragment: String,
+    },
+
     /// Change feed: what's new/changed since the cursor (agents; JSON only)
     Delta {
         /// Folder to track (delta is per-folder)

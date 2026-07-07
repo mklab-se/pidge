@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub struct Message {
     pub account: String,
     pub id: String,
+    /// Graph conversation (thread) id; empty for old cache entries.
+    #[serde(default)]
+    pub conversation_id: String,
     pub from: MessageFrom,
     pub subject: String,
     pub received_at: DateTime<Utc>,
@@ -62,6 +65,9 @@ pub struct MessageFrom {
 pub struct FullMessage {
     pub account: String,
     pub id: String,
+    /// Graph conversation (thread) id; empty when not requested.
+    #[serde(default)]
+    pub conversation_id: String,
     pub from: MessageFrom,
     pub to: Vec<MessageFrom>,
     pub cc: Vec<MessageFrom>,
@@ -105,6 +111,7 @@ mod tests {
     #[test]
     fn message_roundtrips_through_json() {
         let m = Message {
+            conversation_id: String::new(),
             account: "a@b.com".into(),
             id: "id-1".into(),
             from: MessageFrom {
@@ -130,6 +137,7 @@ mod tests {
     #[test]
     fn full_message_roundtrips_through_json() {
         let m = FullMessage {
+            conversation_id: String::new(),
             account: "u@e.com".into(),
             id: "graph-id".into(),
             from: MessageFrom {

@@ -117,6 +117,7 @@ async fn main() -> Result<()> {
     if cli.dry_run {
         crate::guardrail::set_dry_run();
     }
+    output::project::configure(cli.fields.clone(), cli.max_chars);
     let result = cli.run().await;
 
     // The update check is best-effort. Bound the wait so a slow or hung
