@@ -13,7 +13,8 @@ mod message;
 
 pub use account::{Account, TokenStorage};
 pub use cache::{
-    CacheLookup, CachedEventRef, CachedMessageRef, EventCache, MessageCache, short_hash,
+    CacheLookup, CachedEventRef, CachedMessageRef, EventCache, FragmentError, MessageCache,
+    short_hash,
 };
 pub use config::{Config, Defaults};
 pub use contacts::{Contact, ContactSource, ContactsCache};
