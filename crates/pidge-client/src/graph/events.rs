@@ -139,6 +139,8 @@ struct GraphRecurrenceRange {
 pub struct EventsPage {
     pub events: Vec<Event>,
     pub has_more: bool,
+    /// Graph continuation URL for the next page (`@odata.nextLink`).
+    pub next_link: Option<String>,
 }
 
 /// What the caller is sending — pre-Graph-serialization shape for create/update.
@@ -319,10 +321,45 @@ pub async fn list_calendar_view(
     let list: GraphEventList = resp.json().await?;
     Ok(EventsPage {
         has_more: list.next_link.is_some(),
+        next_link: list.next_link,
         events: list
             .value
             .into_iter()
             .map(|g| to_event(g, account, calendar_id))
+            .collect(),
+    })
+}
+
+/// Fetch a page of calendar-view events at an absolute Graph URL (an
+/// `@odata.nextLink` carried in a pidge cursor).
+pub async fn list_events_at(
+    http: &reqwest::Client,
+    access_token: &str,
+    account: &str,
+    url: &str,
+) -> Result<EventsPage, ClientError> {
+    let resp = super::send_with_retry(
+        http.get(url)
+            .bearer_auth(access_token)
+            .header("Prefer", PREFER_UTC),
+    )
+    .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let list: GraphEventList = resp.json().await?;
+    Ok(EventsPage {
+        has_more: list.next_link.is_some(),
+        next_link: list.next_link,
+        events: list
+            .value
+            .into_iter()
+            .map(|g| to_event(g, account, None))
             .collect(),
     })
 }

@@ -8,23 +8,23 @@ mod me;
 pub use calendars::list_calendars;
 pub use events::{
     EventsPage, NewEvent, RsvpKind, cancel_event, create_event, delete_event, get_event,
-    list_calendar_view, move_event_to_calendar, move_time, rsvp_event, update_event,
+    list_calendar_view, list_events_at, move_event_to_calendar, move_time, rsvp_event,
+    update_event,
 };
 pub use mail::{
     InboxPage, MailFolder, Outgoing, add_attachment, create_child_folder, create_draft,
     create_forward_draft, create_mail_folder, create_reply_all_draft, create_reply_draft,
     delete_attachment, delete_mail_folder, delete_message, fetch_message_headers, forward_message,
     get_attachment_bytes, get_categories, get_message, list_attachments, list_child_folders,
-    list_drafts, list_folder_messages, list_inbox, list_mail_folders, mark_read, mark_unread,
-    move_message, reply_all_message, reply_message, search_messages, send_draft, send_mail,
-    set_categories, set_flag, update_draft,
+    list_drafts, list_folder_messages, list_inbox, list_mail_folders, list_messages_at, mark_read,
+    mark_unread, move_message, reply_all_message, reply_message, search_messages, send_draft,
+    send_mail, set_categories, set_flag, update_draft,
 };
 pub use me::{Me, get_me};
 
 use crate::auth::AuthClient;
 use crate::auth::config;
 use crate::error::ClientError;
-use pidge_core::Message;
 
 /// Maximum attempts for a single Graph request (1 initial + 3 retries).
 const MAX_ATTEMPTS: u32 = 4;
@@ -164,12 +164,22 @@ impl GraphClient {
     }
 
     /// GET /me/messages with `$search="<query>"` for a given account.
+    /// Fetch a page of messages at an absolute Graph continuation URL.
+    pub async fn list_messages_at(
+        &self,
+        account: &str,
+        url: &str,
+    ) -> Result<InboxPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        list_messages_at(&self.http, &token, account, url).await
+    }
+
     pub async fn search_messages(
         &self,
         account: &str,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<Message>, ClientError> {
+    ) -> Result<InboxPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         search_messages(&self.http, &self.base_url, &token, account, query, limit).await
     }
@@ -517,6 +527,16 @@ impl GraphClient {
             limit,
         )
         .await
+    }
+
+    /// Fetch a page of calendar events at an absolute Graph continuation URL.
+    pub async fn list_events_at(
+        &self,
+        account: &str,
+        url: &str,
+    ) -> Result<EventsPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        list_events_at(&self.http, &token, account, url).await
     }
 
     /// GET /me/events/{id}.

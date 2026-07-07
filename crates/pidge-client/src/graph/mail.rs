@@ -65,6 +65,8 @@ struct GraphList {
 pub struct InboxPage {
     pub messages: Vec<Message>,
     pub has_more: bool,
+    /// Graph continuation URL for the next page (`@odata.nextLink`).
+    pub next_link: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +243,7 @@ async fn list_folder(
     let list: GraphList = resp.json().await?;
     Ok(InboxPage {
         has_more: list.next_link.is_some(),
+        next_link: list.next_link,
         messages: list
             .value
             .into_iter()
@@ -259,6 +262,37 @@ async fn list_folder(
 /// - `from:alice@example.com`
 /// - `subject:"q4 review"`
 /// - `from:alice AND subject:budget`
+///
+/// Fetch a page of messages at an absolute Graph URL (an `@odata.nextLink`
+/// carried in a pidge cursor). Continues any listing or search stream.
+pub async fn list_messages_at(
+    http: &reqwest::Client,
+    access_token: &str,
+    account: &str,
+    url: &str,
+) -> Result<InboxPage, ClientError> {
+    let req = http.get(url).bearer_auth(access_token);
+    let resp = super::send_with_retry(req).await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    let list: GraphList = resp.json().await?;
+    Ok(InboxPage {
+        has_more: list.next_link.is_some(),
+        next_link: list.next_link,
+        messages: list
+            .value
+            .into_iter()
+            .map(|g| to_message(g, account))
+            .collect(),
+    })
+}
+
 pub async fn search_messages(
     http: &reqwest::Client,
     base_url: &str,
@@ -266,7 +300,7 @@ pub async fn search_messages(
     account: &str,
     query: &str,
     limit: usize,
-) -> Result<Vec<Message>, ClientError> {
+) -> Result<InboxPage, ClientError> {
     // $search expects a quoted KQL string; the user passes the raw query.
     let quoted = format!("\"{}\"", query.replace('"', "\\\""));
     let url = format!("{base_url}/me/messages");
@@ -293,11 +327,15 @@ pub async fn search_messages(
         });
     }
     let list: GraphList = resp.json().await?;
-    Ok(list
-        .value
-        .into_iter()
-        .map(|g| to_message(g, account))
-        .collect())
+    Ok(InboxPage {
+        has_more: list.next_link.is_some(),
+        next_link: list.next_link,
+        messages: list
+            .value
+            .into_iter()
+            .map(|g| to_message(g, account))
+            .collect(),
+    })
 }
 
 fn to_message(g: GraphMessage, account: &str) -> Message {
@@ -1413,7 +1451,8 @@ mod tests {
         let http = reqwest::Client::new();
         let msgs = search_messages(&http, &server.uri(), "AT", "u@e.com", "alice budget", 25)
             .await
-            .unwrap();
+            .unwrap()
+            .messages;
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].subject, "Q4 budget review");
     }
@@ -1903,5 +1942,60 @@ mod tests {
         assert_eq!(headers[0].0, "List-Unsubscribe");
         assert_eq!(headers[0].1, "<mailto:u@x>, <https://x/u>");
         assert_eq!(headers[1].0, "List-Unsubscribe-Post");
+    }
+}
+
+#[cfg(test)]
+mod cursor_paging_tests {
+    use super::*;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn msg(id: &str, received: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "subject": format!("s-{id}"),
+            "from": {"emailAddress": {"name": "N", "address": "n@x.se"}},
+            "receivedDateTime": received,
+            "isRead": true,
+            "bodyPreview": "p",
+            "hasAttachments": false
+        })
+    }
+
+    #[tokio::test]
+    async fn next_link_is_surfaced_and_followable() {
+        let server = MockServer::start().await;
+        let page2_url = format!("{}/me/mailFolders/inbox/messages?page=2", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/inbox/messages"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [msg("m3", "2026-07-01T10:00:00Z")]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/inbox/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [msg("m1", "2026-07-03T10:00:00Z"), msg("m2", "2026-07-02T10:00:00Z")],
+                "@odata.nextLink": page2_url
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let page1 = list_inbox(&http, &server.uri(), "tok", "a@b.se", 2, 0, false)
+            .await
+            .unwrap();
+        assert_eq!(page1.messages.len(), 2);
+        let next = page1.next_link.expect("first page links onward");
+
+        let page2 = list_messages_at(&http, "tok", "a@b.se", &next)
+            .await
+            .unwrap();
+        assert_eq!(page2.messages.len(), 1);
+        assert_eq!(page2.messages[0].id, "m3");
+        assert!(page2.next_link.is_none(), "final page has no continuation");
     }
 }

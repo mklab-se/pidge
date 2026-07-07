@@ -270,6 +270,11 @@ pub enum MailCommands {
         #[arg(short = 'p', long, default_value = "1")]
         page: usize,
 
+        /// Continue from a previous response's next_cursor (agents; exact
+        /// multi-account continuation, preferred over --page)
+        #[arg(long)]
+        cursor: Option<String>,
+
         /// Show only unread messages
         #[arg(long)]
         unread: bool,
@@ -318,6 +323,10 @@ pub enum MailCommands {
         /// Maximum number of results
         #[arg(short = 'n', long, default_value = "25")]
         limit: usize,
+
+        /// Continue from a previous response's next_cursor
+        #[arg(long)]
+        cursor: Option<String>,
 
         /// Card layout with a single-line preview per message
         #[arg(short = 'c', long, conflicts_with_all = ["table", "full"])]
@@ -921,6 +930,10 @@ pub enum CalendarCommands {
         compact: bool,
         #[arg(short = 't', long)]
         table: bool,
+
+        /// Continue from a previous response's next_cursor
+        #[arg(long)]
+        cursor: Option<String>,
     },
 
     /// Display a single event identified by a fragment of its short hash

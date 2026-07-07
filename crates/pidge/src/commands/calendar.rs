@@ -19,10 +19,11 @@ pub async fn run(command: Option<CalendarCommands>, json: bool) -> Result<()> {
             limit,
             compact,
             table,
+            cursor,
         }) => {
             crate::commands::calendar_list::run(
                 account, from, to, today, tomorrow, week, month, calendar, limit, compact, table,
-                json,
+                json, cursor,
             )
             .await
         }

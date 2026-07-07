@@ -186,7 +186,7 @@ async fn delete_bulk_by_sender_for_account(
             .search_messages(account, &format!("from:{sender}"), SEARCH_LIMIT)
             .await
         {
-            Ok(m) => m,
+            Ok(page) => page.messages,
             Err(e) => {
                 eprintln!("  {} search failed for {}: {e}", "!".red(), sender.dimmed());
                 continue;

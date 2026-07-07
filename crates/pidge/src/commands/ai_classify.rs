@@ -248,6 +248,7 @@ async fn select_messages(
                 let found = g
                     .search_messages(email, &format!("from:{sender}"), 1000)
                     .await
+                    .map(|p| p.messages)
                     .unwrap_or_default();
                 let s = sender.to_ascii_lowercase();
                 v.extend(
