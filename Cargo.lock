@@ -19,9 +19,9 @@ dependencies = [
 
 [[package]]
 name = "ailloy"
-version = "0.7.3"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49fb7b9f172077a71967ca5de9ccb55789d65baf68de9162eb42d50f7648e325"
+checksum = "64c1c3c9ea384c70be74485d7f82780569f923eb0b876f38aa9c97d3a595a932"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1713,7 +1713,7 @@ dependencies = [
 
 [[package]]
 name = "pidge"
-version = "0.4.10"
+version = "0.4.11"
 dependencies = [
  "ailloy",
  "anyhow",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-client"
-version = "0.4.10"
+version = "0.4.11"
 dependencies = [
  "anyhow",
  "base64",
@@ -1773,7 +1773,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-core"
-version = "0.4.10"
+version = "0.4.11"
 dependencies = [
  "chrono",
  "chrono-tz",
