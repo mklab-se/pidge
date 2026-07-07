@@ -296,18 +296,18 @@ pub async fn list_calendar_view(
         Some(id) => format!("{base_url}/me/calendars/{id}/calendarView"),
         None => format!("{base_url}/me/calendarView"),
     };
-    let resp = http
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("Prefer", PREFER_UTC)
-        .query(&[
-            ("startDateTime", start.to_rfc3339()),
-            ("endDateTime", end.to_rfc3339()),
-            ("$orderby", "start/dateTime".into()),
-            ("$top", limit.to_string()),
-        ])
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.get(&url)
+            .bearer_auth(access_token)
+            .header("Prefer", PREFER_UTC)
+            .query(&[
+                ("startDateTime", start.to_rfc3339()),
+                ("endDateTime", end.to_rfc3339()),
+                ("$orderby", "start/dateTime".into()),
+                ("$top", limit.to_string()),
+            ]),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -336,12 +336,12 @@ pub async fn get_event(
     event_id: &str,
 ) -> Result<Event, ClientError> {
     let url = format!("{base_url}/me/events/{event_id}");
-    let resp = http
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("Prefer", PREFER_UTC)
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.get(&url)
+            .bearer_auth(access_token)
+            .header("Prefer", PREFER_UTC),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -367,12 +367,12 @@ pub async fn create_event(
         Some(id) => format!("{base_url}/me/calendars/{id}/events"),
         None => format!("{base_url}/me/calendar/events"),
     };
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&event.to_graph_json())
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .json(&event.to_graph_json()),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -400,12 +400,12 @@ pub async fn update_event(
     event: &NewEvent,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/events/{event_id}");
-    let resp = http
-        .patch(&url)
-        .bearer_auth(access_token)
-        .json(&event.to_graph_json())
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.patch(&url)
+            .bearer_auth(access_token)
+            .json(&event.to_graph_json()),
+    )
+    .await?;
     bubble_no_body(resp).await
 }
 
@@ -424,12 +424,8 @@ pub async fn move_time(
         "start": { "dateTime": format_graph_dt(start), "timeZone": tz },
         "end":   { "dateTime": format_graph_dt(end),   "timeZone": tz },
     });
-    let resp = http
-        .patch(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(&body)).await?;
     bubble_no_body(resp).await
 }
 
@@ -441,7 +437,7 @@ pub async fn delete_event(
     event_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/events/{event_id}");
-    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.delete(&url).bearer_auth(access_token)).await?;
     bubble_no_body(resp).await
 }
 
@@ -455,12 +451,8 @@ pub async fn cancel_event(
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/events/{event_id}/cancel");
     let body = serde_json::json!({ "Comment": comment });
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     bubble_no_body(resp).await
 }
 
@@ -481,12 +473,8 @@ pub async fn rsvp_event(
     };
     let url = format!("{base_url}/me/events/{event_id}/{verb}");
     let body = serde_json::json!({ "Comment": comment, "SendResponse": send_response });
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     bubble_no_body(resp).await
 }
 
@@ -502,12 +490,8 @@ pub async fn move_event_to_calendar(
     let url = format!("{base_url}/me/events/{event_id}");
     let bind = format!("{base_url}/me/calendars/{destination_calendar_id}");
     let body = serde_json::json!({ "calendar@odata.bind": bind });
-    let resp = http
-        .patch(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(&body)).await?;
     bubble_no_body(resp).await
 }
 

@@ -12,8 +12,6 @@ use colored::Colorize;
 use futures::StreamExt;
 use futures::stream;
 use std::collections::HashSet;
-use std::time::Duration;
-use tokio::time::sleep;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
@@ -353,26 +351,15 @@ pub(crate) async fn move_many(
 
 /// Move a single message to `destination`, retrying with exponential
 /// backoff on `429 ApplicationThrottled` since Graph's per-mailbox move
-/// limit is hit easily on bulk operations.
+/// limit is hit easily on bulk operations. Retry/backoff now lives in the
+/// client's send_with_retry seam; this wrapper remains for call-site clarity.
 pub(crate) async fn move_with_retry(
     graph: &GraphClient,
     account: &str,
     message_id: &str,
     destination: &str,
 ) -> Result<(), ClientError> {
-    const MAX_RETRIES: u32 = 5;
-    let mut delay_ms = 500u64;
-    for attempt in 0..=MAX_RETRIES {
-        match graph.move_message(account, message_id, destination).await {
-            Ok(()) => return Ok(()),
-            Err(ClientError::Graph { status: 429, .. }) if attempt < MAX_RETRIES => {
-                sleep(Duration::from_millis(delay_ms)).await;
-                delay_ms = (delay_ms * 2).min(8_000);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    unreachable!("loop returns on Ok or after MAX_RETRIES exits")
+    graph.move_message(account, message_id, destination).await
 }
 
 /// Run an async closure with a configured GraphClient. On a 404 from Graph,

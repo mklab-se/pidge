@@ -19,8 +19,6 @@ use futures::future::join_all;
 use futures::stream;
 use inquire::Confirm;
 use std::collections::HashSet;
-use std::time::Duration as StdDuration;
-use tokio::time::sleep;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
@@ -244,19 +242,8 @@ async fn delete_with_retry(
     account: &str,
     message_id: &str,
 ) -> Result<(), ClientError> {
-    const MAX_RETRIES: u32 = 5;
-    let mut delay_ms = 500u64;
-    for attempt in 0..=MAX_RETRIES {
-        match graph.delete_message(account, message_id).await {
-            Ok(()) => return Ok(()),
-            Err(ClientError::Graph { status: 429, .. }) if attempt < MAX_RETRIES => {
-                sleep(StdDuration::from_millis(delay_ms)).await;
-                delay_ms = (delay_ms * 2).min(8_000);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    unreachable!("loop returns on Ok or after MAX_RETRIES exits")
+    // Retry/backoff lives in the client's send_with_retry seam.
+    graph.delete_message(account, message_id).await
 }
 
 async fn delete_bulk_for_account(

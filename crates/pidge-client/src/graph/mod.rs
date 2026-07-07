@@ -26,6 +26,63 @@ use crate::auth::config;
 use crate::error::ClientError;
 use pidge_core::Message;
 
+/// Maximum attempts for a single Graph request (1 initial + 3 retries).
+const MAX_ATTEMPTS: u32 = 4;
+
+/// Statuses worth retrying: throttling and transient gateway failures.
+fn is_transient(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 503 | 504)
+}
+
+/// Send a Graph request with retry/backoff.
+///
+/// Honors `Retry-After` (seconds) on 429/503/504; otherwise backs off
+/// exponentially (1s·2^attempt) with 0–250 ms jitter. After the attempts are
+/// exhausted a throttling status becomes [`ClientError::Throttled`] so
+/// callers (and agents, via exit code 5) can distinguish it. All other
+/// responses — success or error — are returned for the caller to interpret.
+///
+/// The request must be clonable (all pidge requests carry buffered JSON/text
+/// bodies); a non-clonable request is sent once without retry.
+pub(crate) async fn send_with_retry(
+    req: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ClientError> {
+    let mut attempt: u32 = 0;
+    loop {
+        let this_try = match req.try_clone() {
+            Some(clone) => clone,
+            None => return Ok(req.send().await?),
+        };
+        let resp = this_try.send().await?;
+        let status = resp.status();
+        if !is_transient(status) {
+            return Ok(resp);
+        }
+        let retry_after = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        attempt += 1;
+        if attempt >= MAX_ATTEMPTS {
+            return Err(ClientError::Throttled { retry_after });
+        }
+        let backoff = retry_after
+            .map(std::time::Duration::from_secs)
+            .unwrap_or_else(|| {
+                let jitter = std::time::Duration::from_millis(u64::from(attempt) * 83 % 250);
+                std::time::Duration::from_secs(1u64 << attempt.min(4)) / 2 + jitter
+            });
+        tracing::debug!(
+            status = status.as_u16(),
+            attempt,
+            ?backoff,
+            "retrying Graph request"
+        );
+        tokio::time::sleep(backoff).await;
+    }
+}
+
 /// Stateful Microsoft Graph client. Holds an AuthClient and a shared HTTP client.
 pub struct GraphClient {
     auth: AuthClient,
@@ -562,5 +619,86 @@ impl GraphClient {
             destination_calendar_id,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    /// Responds 429 for the first N requests, then 200.
+    struct FlakyResponder {
+        failures: std::sync::atomic::AtomicU32,
+    }
+
+    impl Respond for FlakyResponder {
+        fn respond(&self, _req: &Request) -> ResponseTemplate {
+            let n = self
+                .failures
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if n > 0 {
+                ResponseTemplate::new(429).insert_header("Retry-After", "0")
+            } else {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true}))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn retries_transient_429_until_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thing"))
+            .respond_with(FlakyResponder {
+                failures: std::sync::atomic::AtomicU32::new(2),
+            })
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let resp = send_with_retry(http.get(format!("{}/thing", server.uri())))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn persistent_429_becomes_throttled_after_max_attempts() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thing"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "0"))
+            .expect(4)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let err = send_with_retry(http.get(format!("{}/thing", server.uri())))
+            .await
+            .unwrap_err();
+        match err {
+            ClientError::Throttled { retry_after } => assert_eq!(retry_after, Some(0)),
+            other => panic!("expected Throttled, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_transient_errors_pass_through_without_retry() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thing"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let resp = send_with_retry(http.get(format!("{}/thing", server.uri())))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400);
     }
 }

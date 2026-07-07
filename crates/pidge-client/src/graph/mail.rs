@@ -228,7 +228,7 @@ async fn list_folder(
         req = req.query(&[("$filter", "isRead eq false")]);
     }
 
-    let resp = req.send().await?;
+    let resp = super::send_with_retry(req).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -270,20 +270,20 @@ pub async fn search_messages(
     // $search expects a quoted KQL string; the user passes the raw query.
     let quoted = format!("\"{}\"", query.replace('"', "\\\""));
     let url = format!("{base_url}/me/messages");
-    let resp = http
-        .get(&url)
-        .bearer_auth(access_token)
-        .header("Prefer", "outlook.body-content-type=\"text\"")
-        .query(&[
-            (
-                "$select",
-                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
-            ),
-            ("$top", &limit.to_string()),
-            ("$search", &quoted),
-        ])
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.get(&url)
+            .bearer_auth(access_token)
+            .header("Prefer", "outlook.body-content-type=\"text\"")
+            .query(&[
+                (
+                    "$select",
+                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag",
+                ),
+                ("$top", &limit.to_string()),
+                ("$search", &quoted),
+            ]),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -355,7 +355,7 @@ pub async fn get_message(
          ?$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,\
 receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag"
     );
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -415,7 +415,7 @@ pub async fn fetch_message_headers(
     message_id: &str,
 ) -> Result<Vec<(String, String)>, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}?$select=internetMessageHeaders");
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -463,7 +463,7 @@ pub async fn list_attachments(
         "{base_url}/me/messages/{message_id}/attachments\
          ?$select=id,name,contentType,size,isInline"
     );
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -506,7 +506,7 @@ pub async fn get_attachment_bytes(
     use base64::engine::general_purpose::STANDARD;
 
     let url = format!("{base_url}/me/messages/{message_id}/attachments/{attachment_id}");
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -593,7 +593,7 @@ pub async fn get_categories(
     message_id: &str,
 ) -> Result<Vec<String>, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}?$select=categories");
-    let resp = http.get(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -632,12 +632,8 @@ async fn patch_message(
     body: &serde_json::Value,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
-    let resp = http
-        .patch(&url)
-        .bearer_auth(access_token)
-        .json(body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(body)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -716,7 +712,7 @@ async fn prepend_html_to_draft(
     html_to_prepend: &str,
 ) -> Result<(), ClientError> {
     let get_url = format!("{base_url}/me/messages/{message_id}?$select=body");
-    let resp = http.get(&get_url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.get(&get_url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -749,12 +745,12 @@ async fn prepend_html_to_draft(
             "content": new_content,
         }
     });
-    let resp = http
-        .patch(&patch_url)
-        .bearer_auth(access_token)
-        .json(&patch_body)
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.patch(&patch_url)
+            .bearer_auth(access_token)
+            .json(&patch_body),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -821,12 +817,7 @@ async fn post_no_body(
     access_token: &str,
     body: &serde_json::Value,
 ) -> Result<(), ClientError> {
-    let resp = http
-        .post(url)
-        .bearer_auth(access_token)
-        .json(body)
-        .send()
-        .await?;
+    let resp = super::send_with_retry(http.post(url).bearer_auth(access_token).json(body)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -848,12 +839,8 @@ pub async fn create_draft(
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages");
     let body = message.to_graph_json();
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     parse_id_from_response(resp).await
 }
 
@@ -871,12 +858,12 @@ pub async fn create_reply_draft(
     comment: &str,
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/createReply");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({}))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({})),
+    )
+    .await?;
     let draft_id = parse_id_from_response(resp).await?;
     if !comment.is_empty() {
         prepend_html_to_draft(
@@ -900,12 +887,12 @@ pub async fn create_reply_all_draft(
     comment: &str,
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/createReplyAll");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({}))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({})),
+    )
+    .await?;
     let draft_id = parse_id_from_response(resp).await?;
     if !comment.is_empty() {
         prepend_html_to_draft(
@@ -931,16 +918,14 @@ pub async fn create_forward_draft(
     comment: &str,
 ) -> Result<String, ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/createForward");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({
+    let resp = super::send_with_retry(http.post(&url).bearer_auth(access_token).json(
+        &serde_json::json!({
             "toRecipients": to.iter().map(|addr| serde_json::json!({
                 "emailAddress": { "address": addr }
             })).collect::<Vec<_>>(),
-        }))
-        .send()
-        .await?;
+        }),
+    ))
+    .await?;
     let draft_id = parse_id_from_response(resp).await?;
     if !comment.is_empty() {
         prepend_html_to_draft(
@@ -967,13 +952,13 @@ pub async fn send_draft(
     // omits that header for body-less requests, so the Graph edge layer
     // responds with HTTP 411. Sending an explicit empty body forces the
     // header to land.
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .header(reqwest::header::CONTENT_LENGTH, 0)
-        .body(reqwest::Body::from(""))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .header(reqwest::header::CONTENT_LENGTH, 0)
+            .body(reqwest::Body::from("")),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -996,12 +981,8 @@ pub async fn update_draft(
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
     let body = message.to_graph_json();
-    let resp = http
-        .patch(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(&body)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1023,7 +1004,7 @@ pub async fn delete_message(
     message_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
-    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.delete(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1059,12 +1040,8 @@ pub async fn add_attachment(
         "contentType": content_type,
         "contentBytes": STANDARD.encode(bytes),
     });
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&body)
-        .send()
-        .await?;
+    let resp =
+        super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     parse_id_from_response(resp).await
 }
 
@@ -1077,7 +1054,7 @@ pub async fn delete_attachment(
     attachment_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/attachments/{attachment_id}");
-    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.delete(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1152,12 +1129,12 @@ pub async fn move_message(
     destination: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}/move");
-    let resp = http
-        .post(&url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({ "destinationId": destination }))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(&url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "destinationId": destination })),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1207,7 +1184,7 @@ async fn fetch_folder_pages(
 ) -> Result<Vec<MailFolder>, ClientError> {
     let mut folders: Vec<MailFolder> = Vec::new();
     loop {
-        let resp = http.get(&url).bearer_auth(access_token).send().await?;
+        let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
@@ -1260,12 +1237,12 @@ async fn post_folder(
     access_token: &str,
     display_name: &str,
 ) -> Result<MailFolder, ClientError> {
-    let resp = http
-        .post(url)
-        .bearer_auth(access_token)
-        .json(&serde_json::json!({ "displayName": display_name }))
-        .send()
-        .await?;
+    let resp = super::send_with_retry(
+        http.post(url)
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "displayName": display_name })),
+    )
+    .await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -1316,7 +1293,7 @@ pub async fn delete_mail_folder(
     folder_id: &str,
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/mailFolders/{folder_id}");
-    let resp = http.delete(&url).bearer_auth(access_token).send().await?;
+    let resp = super::send_with_retry(http.delete(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();

@@ -342,7 +342,7 @@ mod tests {
     fn json_output_includes_short_hash_per_event() {
         let event = sample_event();
         let expected_hash = short_id_for(&event);
-        let json = events_to_json(&[event.clone()]).unwrap();
+        let json = events_to_json(std::slice::from_ref(&event)).unwrap();
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let arr = v.as_array().expect("top level is an array");
         assert_eq!(arr.len(), 1);

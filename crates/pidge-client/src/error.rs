@@ -42,6 +42,12 @@ pub enum ClientError {
     #[error("Microsoft Graph: {status} {message}")]
     Graph { status: u16, message: String },
 
+    #[error(
+        "Microsoft Graph is throttling requests{}. Try again later.",
+        retry_after.map(|s| format!(" (retry after {s}s)")).unwrap_or_default()
+    )]
+    Throttled { retry_after: Option<u64> },
+
     #[error("core: {0}")]
     Core(#[from] pidge_core::CoreError),
 
