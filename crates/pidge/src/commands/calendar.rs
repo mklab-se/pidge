@@ -6,6 +6,18 @@ use crate::cli::{CalendarCommands, CalendarsCommands};
 
 pub async fn run(command: Option<CalendarCommands>, json: bool) -> Result<()> {
     match command {
+        Some(CalendarCommands::Delta {
+            cursor,
+            account,
+            days,
+        }) => {
+            crate::commands::delta_cmd::calendar(crate::commands::delta_cmd::CalendarDeltaArgs {
+                cursor,
+                account,
+                days,
+            })
+            .await
+        }
         None => crate::commands::calendar_list::run_default(json).await,
         Some(CalendarCommands::List {
             account,

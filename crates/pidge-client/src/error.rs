@@ -48,6 +48,9 @@ pub enum ClientError {
     )]
     Throttled { retry_after: Option<u64> },
 
+    #[error("the delta cursor has expired — re-bootstrap without --cursor")]
+    DeltaExpired,
+
     #[error("core: {0}")]
     Core(#[from] pidge_core::CoreError),
 

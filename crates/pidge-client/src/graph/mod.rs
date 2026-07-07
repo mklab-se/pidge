@@ -2,6 +2,7 @@
 
 pub mod batch;
 mod calendars;
+pub mod delta;
 pub mod events;
 mod mail;
 mod me;
@@ -26,6 +27,7 @@ pub use me::{Me, get_me};
 use crate::auth::AuthClient;
 use crate::auth::config;
 use crate::error::ClientError;
+use pidge_core::Message;
 
 /// Maximum attempts for a single Graph request (1 initial + 3 retries).
 const MAX_ATTEMPTS: u32 = 4;
@@ -165,6 +167,48 @@ impl GraphClient {
     }
 
     /// GET /me/messages with `$search="<query>"` for a given account.
+    /// Bootstrap a mail delta stream for a folder: (current messages, deltaLink).
+    pub async fn mail_delta_bootstrap(
+        &self,
+        account: &str,
+        folder: &str,
+    ) -> Result<(Vec<Message>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::mail_delta_bootstrap(&self.http, &self.base_url, &token, account, folder).await
+    }
+
+    /// Poll a mail deltaLink for changes.
+    pub async fn mail_delta(
+        &self,
+        account: &str,
+        delta_link: &str,
+    ) -> Result<(Vec<delta::MailDeltaEvent>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::mail_delta(&self.http, &token, account, delta_link).await
+    }
+
+    /// Bootstrap a calendar delta stream over a window: (current events, deltaLink).
+    pub async fn calendar_delta_bootstrap(
+        &self,
+        account: &str,
+        start: chrono::DateTime<chrono::Utc>,
+        end: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(Vec<pidge_core::Event>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::calendar_delta_bootstrap(&self.http, &self.base_url, &token, account, start, end)
+            .await
+    }
+
+    /// Poll a calendar deltaLink for changes.
+    pub async fn calendar_delta(
+        &self,
+        account: &str,
+        delta_link: &str,
+    ) -> Result<(Vec<delta::CalendarDeltaEvent>, String), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        delta::calendar_delta(&self.http, &token, account, delta_link).await
+    }
+
     /// Run a set of batch sub-requests for one account.
     pub async fn batch_all(
         &self,

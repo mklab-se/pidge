@@ -330,6 +330,15 @@ pub async fn list_calendar_view(
     })
 }
 
+/// Parse one raw delta item into an [`Event`].
+pub(crate) fn event_from_delta_value(
+    value: serde_json::Value,
+    account: &str,
+) -> Option<pidge_core::Event> {
+    let g: GraphEvent = serde_json::from_value(value).ok()?;
+    Some(to_event(g, account, None))
+}
+
 /// Fetch a page of calendar-view events at an absolute Graph URL (an
 /// `@odata.nextLink` carried in a pidge cursor).
 pub async fn list_events_at(

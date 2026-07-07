@@ -263,6 +263,16 @@ async fn list_folder(
 /// - `subject:"q4 review"`
 /// - `from:alice AND subject:budget`
 ///
+/// Parse one raw delta item into a [`Message`] (None if the shape is not a
+/// message — e.g. a tombstone or a partial patch without required fields).
+pub(crate) fn message_from_delta_value(
+    value: serde_json::Value,
+    account: &str,
+) -> Option<pidge_core::Message> {
+    let g: GraphMessage = serde_json::from_value(value).ok()?;
+    Some(to_message(g, account))
+}
+
 /// Fetch a page of messages at an absolute Graph URL (an `@odata.nextLink`
 /// carried in a pidge cursor). Continues any listing or search stream.
 pub async fn list_messages_at(

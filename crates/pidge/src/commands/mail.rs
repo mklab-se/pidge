@@ -44,6 +44,20 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
         } => {
             crate::commands::mail_show::run(fragment, mark_read, show_images, raw_html, json).await
         }
+        MailCommands::Delta {
+            folder,
+            cursor,
+            account,
+            full,
+        } => {
+            crate::commands::delta_cmd::mail(crate::commands::delta_cmd::MailDeltaArgs {
+                folder,
+                cursor,
+                account,
+                full,
+            })
+            .await
+        }
         MailCommands::Search {
             query,
             account,
