@@ -12,10 +12,30 @@ use serde_json::Value;
 
 use crate::error::ClientError;
 
+/// A delta change carries only the properties that changed (plus id) —
+/// everything except `graph_id` is optional.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DeltaMessage {
+    #[serde(rename = "id")]
+    pub graph_id: String,
+    pub subject: Option<String>,
+    #[serde(rename = "isRead")]
+    pub is_read: Option<bool>,
+    #[serde(rename = "receivedDateTime")]
+    pub received_at: Option<DateTime<Utc>>,
+    #[serde(rename = "bodyPreview")]
+    pub preview: Option<String>,
+    #[serde(rename = "hasAttachments")]
+    pub has_attachments: Option<bool>,
+    #[serde(rename = "conversationId")]
+    pub conversation_id: Option<String>,
+    #[serde(rename = "from")]
+    pub from: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Clone)]
 pub enum MailDeltaEvent {
-    Created(Message),
-    Updated(Message),
+    Changed(Box<DeltaMessage>),
     Deleted { graph_id: String },
 }
 
@@ -111,13 +131,13 @@ pub async fn mail_delta(
                         graph_id: id.to_string(),
                     });
             }
-            // Graph delta doesn't distinguish created vs updated reliably;
-            // a freshly received message is reported the same way as a flag
-            // change. Callers treat both as "changed"; we classify by
-            // isRead=false && recent as a heuristic-free "created" only when
-            // the message is new to the caller's own state. Here: everything
-            // non-removed is Updated; the CLI layer decides presentation.
-            super::mail::message_from_delta_value(v, account).map(MailDeltaEvent::Updated)
+            // Graph delta change items carry only the properties that
+            // changed (plus id) — parse leniently and let consumers fetch
+            // details on demand.
+            let _ = account;
+            serde_json::from_value::<DeltaMessage>(v)
+                .ok()
+                .map(|m| MailDeltaEvent::Changed(Box::new(m)))
         })
         .collect();
     Ok((events, next_link))
@@ -249,7 +269,7 @@ mod tests {
         let url = format!("{}/delta-poll?token=prev", server.uri());
         let (events, new_link) = mail_delta(&http, "tok", "a@b.se", &url).await.unwrap();
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[0], MailDeltaEvent::Updated(m) if m.id == "m9"));
+        assert!(matches!(&events[0], MailDeltaEvent::Changed(m) if m.graph_id == "m9"));
         assert!(matches!(&events[1], MailDeltaEvent::Deleted { graph_id } if graph_id == "gone-1"));
         assert!(new_link.contains("token=next"));
     }

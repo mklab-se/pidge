@@ -28,8 +28,12 @@ struct WatchState {
 }
 
 fn emit(value: serde_json::Value) {
-    // One event per line — agents parse JSONL.
-    println!("{value}");
+    // One event per line — agents parse JSONL. Explicit flush: watch runs
+    // under pipes where stdout is block-buffered and events must not lag.
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{value}");
+    let _ = out.flush();
 }
 
 fn now() -> String {
@@ -139,11 +143,11 @@ async fn poll_mail(graph: &GraphClient, cursor: Option<&str>) -> Result<Option<S
         next.per_account.insert(email.clone(), Some(new_link));
         for change in changes {
             match change {
-                MailDeltaEvent::Created(m) | MailDeltaEvent::Updated(m) => emit(json!({
+                MailDeltaEvent::Changed(m) => emit(json!({
                     "stream": "mail", "type": "changed", "at": now(),
                     "message": {
-                        "id": pidge_core::short_hash(&m.id),
-                        "account": m.account,
+                        "id": pidge_core::short_hash(&m.graph_id),
+                        "account": email,
                         "from": m.from,
                         "subject": m.subject,
                         "received_at": m.received_at,

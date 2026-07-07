@@ -107,8 +107,32 @@ pub async fn mail(args: MailDeltaArgs) -> Result<()> {
                 next.per_account.insert(email.clone(), Some(new_link));
                 for change in changes {
                     events.push(match change {
-                        MailDeltaEvent::Created(m) | MailDeltaEvent::Updated(m) => {
-                            json!({"type": "changed", "message": message_json(&m)})
+                        MailDeltaEvent::Changed(m) => {
+                            let mut obj = json!({
+                                "id": pidge_core::short_hash(&m.graph_id),
+                                "graph_id": m.graph_id,
+                                "account": email,
+                            });
+                            let fields = obj.as_object_mut().expect("object");
+                            if let Some(v) = &m.subject {
+                                fields.insert("subject".into(), json!(v));
+                            }
+                            if let Some(v) = m.is_read {
+                                fields.insert("is_read".into(), json!(v));
+                            }
+                            if let Some(v) = &m.received_at {
+                                fields.insert("received_at".into(), json!(v));
+                            }
+                            if let Some(v) = &m.preview {
+                                fields.insert("preview".into(), json!(v));
+                            }
+                            if let Some(v) = &m.from {
+                                fields.insert("from".into(), v.clone());
+                            }
+                            if let Some(v) = &m.conversation_id {
+                                fields.insert("conversation_id".into(), json!(v));
+                            }
+                            json!({"type": "changed", "message": obj})
                         }
                         MailDeltaEvent::Deleted { graph_id } => json!({
                             "type": "deleted",

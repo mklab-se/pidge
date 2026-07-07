@@ -299,8 +299,9 @@ pub async fn list_conversation(
                 "$select",
                 "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
             ),
+            // No $orderby: Graph rejects conversationId filters combined
+            // with a sort ("InefficientFilter") — we sort client-side.
             ("$filter", filter.as_str()),
-            ("$orderby", "receivedDateTime asc"),
             ("$top", "100"),
         ]);
     let resp = super::send_with_retry(req).await?;
@@ -313,11 +314,13 @@ pub async fn list_conversation(
         });
     }
     let list: GraphList = resp.json().await?;
-    Ok(list
+    let mut messages: Vec<pidge_core::Message> = list
         .value
         .into_iter()
         .map(|g| to_message(g, account))
-        .collect())
+        .collect();
+    messages.sort_by_key(|m| m.received_at);
+    Ok(messages)
 }
 
 /// Fetch a page of messages at an absolute Graph URL (an `@odata.nextLink`
