@@ -136,7 +136,7 @@ fn print_guide() {
 pidge AI Skill Setup
 ====================
 
-pidge is a CLI for e-mail (and, soon, calendar) operating against Microsoft
+pidge is a CLI for e-mail and calendar operating against Microsoft
 365 / Outlook mailboxes via the Graph API. It is **designed to be operated
 by AI coding agents** — Claude Code, Codex, Copilot, etc. — on the user's
 behalf. A human can use it directly, but the primary surface is your agent.
@@ -235,6 +235,64 @@ field, drive a follow-up command). Example:
 
 The JSON shapes are stable. The default human card layout (with ANSI
 colors and 8-line previews) is for the user's screen; don't parse it.
+
+## Paging with cursors
+
+`mail list/search --json` and `calendar list --json` return an object
+`{{\"items\": [...], \"next_cursor\": \"...\"}}` whenever more pages exist.
+Pass the cursor back to continue exactly where you left off (works across
+multiple accounts, unlike --page):
+
+```
+{invoke} mail --json -n 25
+{invoke} mail --json --cursor <next_cursor from previous call>
+```
+
+## Exit codes and structured errors
+
+pidge exits with a taxonomy you can branch on: 0 ok · 1 unexpected ·
+2 usage/bad cursor · 3 auth expired (tell the user to run
+`{invoke} account add`) · 4 not found / ambiguous hash · 5 throttled
+(wait, then retry) · 6 denied by the user's guardrails. With `--json`,
+errors also print one machine-readable line to stderr:
+`{{\"error\": {{\"code\": \"...\", \"message\": \"...\", \"hint\": \"...\"}}}}`.
+When you receive `guardrail_confirm_required`, STOP and tell the user —
+they have configured pidge to require an interactive human confirmation
+for that action class; do not try to work around it.
+
+## Guardrails and --dry-run
+
+The user may configure per-action-class policy (`{invoke} config set
+guardrails.send confirm`; classes: send, delete, cancel, rsvp, bulk,
+unsubscribe; modes: allow, confirm, deny). pidge enforces these itself —
+even with `-y`. Every mutating command also accepts `--dry-run`, which
+prints what would happen (and its guardrail verdict) without doing it.
+Prefer a `--dry-run` first when composing risky or bulk operations.
+
+## Watching for changes (delta + watch)
+
+For \"what's new since last time\", never re-list and diff — use delta:
+
+```
+{invoke} mail delta --json                     # bootstrap, returns next_cursor
+{invoke} mail delta --cursor <c> --json        # only what changed + new cursor
+{invoke} calendar delta --json                 # same for events (14-day window)
+{invoke} watch --interval 60                   # continuous JSONL event stream
+```
+
+`watch` prints one JSON object per line (streams: mail/calendar; types:
+changed/deleted/ready/reset/error) and resumes from `--state-file` if you
+persist one.
+
+## Threads and token-thrift
+
+`{invoke} mail thread <hash> --json` returns the whole conversation the
+message belongs to, oldest first — use it to summarize a discussion
+instead of fetching messages one by one. `{invoke} mail --threads` groups
+a listing by conversation. To keep responses small, add
+`--fields id,subject,from,received_at` (top-level projection) and/or
+`--max-chars 500` (bodies truncated with an explicit marker) to any
+--json command.
 
 ## Identifying messages
 

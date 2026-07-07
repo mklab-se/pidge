@@ -28,8 +28,8 @@ crates/
   pidge-core/           # Provider-agnostic types: Account, Config, Message
   pidge-client/         # Microsoft Graph client, OAuth flows, keychain token storage
     src/
-      auth/             # Device code flow, refresh, JWT, keychain
-      graph/            # Graph API endpoints (currently /me, inbox)
+      auth/             # Browser auth-code+PKCE flow, refresh, JWT, keychain
+      graph/            # Full mail+calendar Graph surface, $batch, delta, retry seam
 ```
 
 - Workspace root `Cargo.toml` defines shared dependencies and version
@@ -43,6 +43,9 @@ crates/
 - Logging: `tracing` + `tracing-subscriber` with `-v`/`-vv` verbosity levels
 - Colored output via `colored` crate (respects `--no-color`)
 - Error handling: `anyhow` (CLI), `thiserror` (library crates: `pidge-core`, `pidge-client`)
+- Exit codes: 0 ok · 1 unexpected · 2 usage · 3 auth expired · 4 not found/ambiguous · 5 throttled · 6 guardrail denied; `--json` errors emit an envelope on stderr (`exitcode.rs`)
+- Every Graph call goes through `send_with_retry` (429/503/504 with Retry-After); bulk ops use `$batch`; agents page with opaque `--cursor` tokens and track changes with `mail/calendar delta` + `pidge watch`
+- Guardrails: user policy per action class in config (`guardrails.send: confirm` etc.), enforced by `guardrail::gate()` in mutating handlers; global `--dry-run`
 - AI integration: delegates entirely to `ailloy::config_tui` with tool name `"pidge"` and capability slice `&["chat"]`. Config lives at `~/.config/ailloy/config.yaml`, shared with `rigg`, `mdeck`, `cosq`.
 - Update checker: background task, cached at `~/.cache/pidge/`, skip with `PIDGE_NO_UPDATE_CHECK=1`
 

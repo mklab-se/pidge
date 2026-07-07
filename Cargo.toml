@@ -34,7 +34,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Terminal
-colored = "2.1"
+colored = "3"
 
 # Versioning & time
 semver = "1.0"
@@ -55,7 +55,7 @@ keyring = "3"
 base64 = "0.22"
 
 # Cryptographic random for PKCE verifier and OAuth state
-rand = "0.8"
+rand = "0.9"
 
 # YAML for config files
 serde_yaml = "0.9"
