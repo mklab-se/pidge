@@ -14,9 +14,7 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use colored::Colorize;
-use futures::StreamExt;
 use futures::future::join_all;
-use futures::stream;
 use inquire::Confirm;
 use std::collections::HashSet;
 
@@ -211,39 +209,41 @@ async fn delete_messages(
     account: &str,
     messages: &[&pidge_core::Message],
 ) -> usize {
-    const MAX_INFLIGHT: usize = 4;
-    let mut ok = 0usize;
-    let tasks = messages.iter().map(|m| {
-        let id = m.id.clone();
-        let short = pidge_core::short_hash(&m.id);
-        async move {
-            let res = delete_with_retry(graph, account, &id).await;
-            (short, res)
+    use pidge_client::graph::batch::BatchRequest;
+    let requests: Vec<BatchRequest> = messages
+        .iter()
+        .map(|m| {
+            BatchRequest::bare(
+                pidge_core::short_hash(&m.id),
+                "DELETE",
+                format!("/me/messages/{}", m.id),
+            )
+        })
+        .collect();
+    let responses = match graph.batch_all(account, requests).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  {} bulk delete failed: {e}", "!".red());
+            return 0;
         }
-    });
-    let mut stream = stream::iter(tasks).buffer_unordered(MAX_INFLIGHT);
-    while let Some((short, res)) = stream.next().await {
-        match res {
-            Ok(()) => {
-                ok += 1;
-                let _ = purge_from_cache(&short);
-            }
-            Err(ClientError::Graph { status: 404, .. }) => { /* already gone */ }
-            Err(e) => {
-                eprintln!("  {} failed to delete {}: {e}", "!".red(), short.dimmed());
-            }
+    };
+    let mut ok = 0usize;
+    for item in responses {
+        if item.is_success() {
+            ok += 1;
+            let _ = purge_from_cache(&item.id);
+        } else if item.status == 404 {
+            // already gone
+        } else {
+            eprintln!(
+                "  {} failed to delete {}: HTTP {}",
+                "!".red(),
+                item.id.dimmed(),
+                item.status
+            );
         }
     }
     ok
-}
-
-async fn delete_with_retry(
-    graph: &GraphClient,
-    account: &str,
-    message_id: &str,
-) -> Result<(), ClientError> {
-    // Retry/backoff lives in the client's send_with_retry seam.
-    graph.delete_message(account, message_id).await
 }
 
 async fn delete_bulk_for_account(

@@ -9,8 +9,6 @@
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use futures::StreamExt;
-use futures::stream;
 use std::collections::HashSet;
 
 use pidge_client::{AuthClient, ClientError, GraphClient};
@@ -323,27 +321,39 @@ pub(crate) async fn move_many(
     destination: &str,
     verb: &str,
 ) -> usize {
-    const MAX_INFLIGHT: usize = 4;
-    let mut ok = 0usize;
-    let tasks = messages.iter().map(|m| {
-        let id = m.id.clone();
-        let short = pidge_core::short_hash(&m.id);
-        async move {
-            let res = move_with_retry(graph, account, &id, destination).await;
-            (short, res)
+    use pidge_client::graph::batch::BatchRequest;
+    let requests: Vec<BatchRequest> = messages
+        .iter()
+        .map(|m| {
+            BatchRequest::json(
+                pidge_core::short_hash(&m.id),
+                "POST",
+                format!("/me/messages/{}/move", m.id),
+                serde_json::json!({"destinationId": destination}),
+            )
+        })
+        .collect();
+    let responses = match graph.batch_all(account, requests).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("  {} bulk {verb} failed: {e}", "!".red());
+            return 0;
         }
-    });
-    let mut stream = stream::iter(tasks).buffer_unordered(MAX_INFLIGHT);
-    while let Some((short, res)) = stream.next().await {
-        match res {
-            Ok(()) => {
-                ok += 1;
-                let _ = purge_from_cache(&short);
-            }
-            Err(ClientError::Graph { status: 404, .. }) => { /* already gone */ }
-            Err(e) => {
-                eprintln!("  {} failed to {verb} {}: {e}", "!".red(), short.dimmed());
-            }
+    };
+    let mut ok = 0usize;
+    for item in responses {
+        if item.is_success() {
+            ok += 1;
+            let _ = purge_from_cache(&item.id);
+        } else if item.status == 404 {
+            // already gone
+        } else {
+            eprintln!(
+                "  {} failed to {verb} {}: HTTP {}",
+                "!".red(),
+                item.id.dimmed(),
+                item.status
+            );
         }
     }
     ok

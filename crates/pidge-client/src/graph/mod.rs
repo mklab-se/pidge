@@ -1,5 +1,6 @@
 //! Microsoft Graph API client.
 
+pub mod batch;
 mod calendars;
 pub mod events;
 mod mail;
@@ -164,6 +165,16 @@ impl GraphClient {
     }
 
     /// GET /me/messages with `$search="<query>"` for a given account.
+    /// Run a set of batch sub-requests for one account.
+    pub async fn batch_all(
+        &self,
+        account: &str,
+        requests: Vec<batch::BatchRequest>,
+    ) -> Result<Vec<batch::BatchResponse>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        batch::batch_all(&self.http, &self.base_url, &token, requests).await
+    }
+
     /// Fetch a page of messages at an absolute Graph continuation URL.
     pub async fn list_messages_at(
         &self,
