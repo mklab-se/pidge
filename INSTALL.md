@@ -25,9 +25,29 @@ tar xzf pidge-v*-*.tar.gz
 sudo mv pidge /usr/local/bin/
 ```
 
+## Software bill of materials (SBOM)
+
+Every release asset above has a matching CycloneDX 1.5 SBOM listing the exact crate versions
+compiled into that platform's binary:
+
+```
+pidge-vX.Y.Z-<target>.cdx.json
+```
+
+The binaries are also built with [`cargo auditable`](https://github.com/rust-secure-code/cargo-auditable),
+so the dependency list travels inside the executable itself. Check a downloaded binary against the
+RustSec advisory database with:
+
+```sh
+cargo install cargo-audit --features=fix
+cargo audit bin ./pidge
+```
+
+`syft` and `trivy` also understand this format.
+
 ## cargo install
 
-Compile from source via crates.io (requires Rust 1.85+):
+Compile from source via crates.io (requires Rust 1.88+):
 
 ```bash
 cargo install pidge
@@ -41,7 +61,7 @@ cd pidge
 cargo build --release
 ```
 
-The binary is at `target/release/pidge`. Requires Rust 1.85 or later.
+The binary is at `target/release/pidge`. Requires Rust 1.88 or later.
 
 ## cargo binstall
 

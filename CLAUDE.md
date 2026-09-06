@@ -55,7 +55,7 @@ Use the `/release` slash command (see `.claude/commands/release.md`):
 
 1. `/release patch` (or `minor`/`major`)
 2. Skill bumps version, updates CHANGELOG, runs pre-flight checks, tags, pushes
-3. Release workflow builds binaries (Linux, macOS Intel+ARM, Windows), creates GitHub Release, updates Homebrew tap (`mklab-se/homebrew-tap`), publishes to crates.io
+3. Release workflow builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries (Linux, macOS Intel+ARM, Windows) with a CycloneDX SBOM per target, creates GitHub Release, updates Homebrew tap (`mklab-se/homebrew-tap`), publishes `pidge-core` → `pidge-client` → `pidge` to crates.io
 
 **Required GitHub secrets:**
 - `CARGO_REGISTRY_TOKEN` (in `crates-io` environment)
@@ -63,13 +63,13 @@ Use the `/release` slash command (see `.claude/commands/release.md`):
 
 ## Code Style
 
-- Edition 2024, MSRV 1.85
+- Edition 2024, MSRV 1.88 (floor set by Ailloy 2.1 / ratatui 0.30 / keyring 4)
 - `cargo clippy` with `-D warnings` (zero warnings policy)
 - `cargo fmt` enforced in CI
 
 ## Token storage
 
-- Tokens default to the OS keychain (`Keychain` variant). New sign-ins can opt into a plaintext file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix) with `pidge account add --store=file`. Useful when keychain prompts are friction during development.
+- Tokens default to the OS keychain (`Keychain` variant; `keyring` 4 in `v1` mode: macOS Keychain, Windows Credential Manager, Secret Service on Linux). New sign-ins can opt into a plaintext file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix) with `pidge account add --store=file`. Useful when keychain prompts are friction during development.
 - `pidge account migrate-storage <email> --to <keychain|file>` moves an existing account's tokens between backends without forcing a re-login.
 - The chosen backend is recorded on the account in `config.yaml` (`storage:` field); `AuthClient::get_valid_token` reads it on every call so callers don't need to know which backend was used.
 - **Never commit token files.** `.gitignore` has belt-and-suspenders entries for `**/tokens/*.json` and `crates/pidge/tests/fixtures/raw/`.

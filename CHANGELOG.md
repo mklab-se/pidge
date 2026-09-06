@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Supply-chain transparency for release builds: binaries are built with `cargo auditable`
+  (dependency list embedded in the executable, readable with `cargo audit bin` or `syft`), and
+  a per-target CycloneDX 1.5 SBOM (`pidge-vX.Y.Z-<target>.cdx.json`) is attached to every
+  GitHub release. See the SBOM section in `INSTALL.md`.
+
+### Changed
+
+- Dependencies upgraded to current majors: Ailloy 1.0 → 2.1, `keyring` 3 → 4, `html2text`
+  0.12 → 0.17, `comfy-table` 7 → 8, `ratatui` 0.29 → 0.30, `crossterm` 0.28 → 0.29,
+  `inquire` 0.7 → 0.9, `viuer` 0.9 → 0.11, `rand` 0.9 → 0.10, `base64` 0.22 → 0.23,
+  `sha2` 0.10 → 0.11, `linkify` 0.10 → 0.11, `dirs` 6 → 7, `colored` 3 → 3.1, `clap` 4.5 → 4.6,
+  `tokio` 1.40 → 1.53, plus `cargo update` across the lockfile. `reqwest` stays on 0.12 to share
+  a single TLS stack with Ailloy.
+- The compose form's text-area widget moved from `tui-textarea` (stuck on ratatui 0.29) to
+  `ratatui-textarea`, the ratatui project's successor crate, so a single ratatui/crossterm pair is
+  linked. No behaviour change.
+- Keychain backend on Linux: `keyring` 4 stores tokens in the Secret Service (D-Bus, persistent)
+  instead of the kernel keyutils session keyring. macOS Keychain and Windows Credential Manager
+  entries are unchanged, so existing sign-ins keep working there; Linux users sign in again once.
+- HTML e-mail rendering (`mail show`, list previews) now uses `html2text` 0.17. Non-breaking
+  spaces are folded to plain spaces so padded layout cells still collapse; minor inline-whitespace
+  differences around separators are possible.
+- Minimum supported Rust version raised from 1.85 to 1.88 (required by Ailloy 2.1, ratatui 0.30
+  and keyring 4).
+- CI/release workflows moved to the Node 24 action majors (`actions/checkout@v7`).
+
 ## [1.0.0] - 2026-07-07
 
 The agent-grade release: pidge now *enforces* reliability, control, and
