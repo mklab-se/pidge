@@ -535,12 +535,12 @@ mod tests {
             for start in 0..h.len() - 1 {
                 let frag = &h[start..start + 2];
                 let count = hashes.iter().filter(|other| other.contains(frag)).count();
-                if count >= 2 {
-                    if let CacheLookup::Ambiguous(matches) = cache.find_by_fragment(frag) {
-                        assert!(matches.len() >= 2);
-                        found_ambiguous = true;
-                        break 'outer;
-                    }
+                if count >= 2
+                    && let CacheLookup::Ambiguous(matches) = cache.find_by_fragment(frag)
+                {
+                    assert!(matches.len() >= 2);
+                    found_ambiguous = true;
+                    break 'outer;
                 }
             }
         }

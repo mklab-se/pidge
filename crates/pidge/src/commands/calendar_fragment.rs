@@ -35,7 +35,7 @@ pub fn purge_from_cache(short_hash: &str) -> Result<()> {
 fn print_ambiguous(matches: &[(String, CachedEventRef)]) {
     eprintln!("Fragment matches multiple events:");
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec!["ID", "ACCOUNT", "EVENT ID"]);
     for (hash, r) in matches {

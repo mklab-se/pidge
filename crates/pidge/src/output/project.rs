@@ -48,15 +48,15 @@ pub fn project_fields(value: &mut Value, fields: &[String]) -> Result<(), Unknow
         },
         _ => return Ok(()),
     };
-    if let Some(first) = items.first() {
-        if let Some(obj) = first.as_object() {
-            for field in fields {
-                if !obj.contains_key(field) {
-                    return Err(UnknownField {
-                        field: field.clone(),
-                        valid: obj.keys().cloned().collect::<Vec<_>>().join(", "),
-                    });
-                }
+    if let Some(first) = items.first()
+        && let Some(obj) = first.as_object()
+    {
+        for field in fields {
+            if !obj.contains_key(field) {
+                return Err(UnknownField {
+                    field: field.clone(),
+                    valid: obj.keys().cloned().collect::<Vec<_>>().join(", "),
+                });
             }
         }
     }

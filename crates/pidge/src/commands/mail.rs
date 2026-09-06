@@ -643,7 +643,7 @@ fn render_preview_lines(message: &Message, width: usize, max_lines: usize) -> Ve
 /// anchor text. Image alt text and `<img>` URLs are skipped entirely
 /// (the user has no use for `[Logo]` markers or clickable tracking pixels).
 fn render_html_preview(html: &str, width: usize, max_lines: usize) -> Vec<String> {
-    use html2text::render::text_renderer::{RichAnnotation, TaggedLineElement};
+    use html2text::render::{RichAnnotation, TaggedLineElement};
 
     let no_color = crate::output::no_color();
     let raw_lines = match html2text::config::rich()
@@ -677,11 +677,13 @@ fn render_html_preview(html: &str, width: usize, max_lines: usize) -> Vec<String
             }
             // Strip the same tracking-padding chars `mail show` does, so
             // marketing previews don't waste lines on invisible joiners.
+            // (html2text >= 0.13 preserves U+00A0; fold it to a plain space.)
             let cleaned: String =
                 ts.s.chars()
                     .filter(|c| !matches!(c, '\u{200C}' | '\u{200B}' | '\u{200A}' | '\u{034F}'))
+                    .map(|c| if c == '\u{00A0}' { ' ' } else { c })
                     .collect();
-            if cleaned.is_empty() {
+            if cleaned.trim().is_empty() {
                 continue;
             }
             pieces.push(TaggedLinePiece {
@@ -710,13 +712,11 @@ fn render_html_preview(html: &str, width: usize, max_lines: usize) -> Vec<String
         .into_iter()
         .map(|pieces| style_html_line(pieces, no_color))
         .collect();
-    if truncated {
-        if let Some(last) = out.last_mut() {
-            if no_color {
-                last.push('…');
-            } else {
-                last.push_str(&"…".dimmed().to_string());
-            }
+    if truncated && let Some(last) = out.last_mut() {
+        if no_color {
+            last.push('…');
+        } else {
+            last.push_str(&"…".dimmed().to_string());
         }
     }
     out
@@ -942,7 +942,7 @@ fn render_table(
     use comfy_table::{ContentArrangement, Table};
 
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
 
     let mut header = vec!["ID", "ACCOUNT", "FROM", "SUBJECT", "RECEIVED"];
@@ -1077,7 +1077,7 @@ fn body_as_plain_text(m: &Message) -> String {
             // 100 cols is a reasonable target width for downstream consumers;
             // they can re-wrap if they want. We don't care about styling
             // here — just structured plain text.
-            html2text::from_read(m.body.as_bytes(), 100)
+            html2text::from_read(m.body.as_bytes(), 100).unwrap_or_else(|_| m.body.clone())
         }
     }
 }

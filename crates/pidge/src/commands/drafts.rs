@@ -142,7 +142,7 @@ fn print_drafts_table(messages: &[Message], hide_account: bool, compact: bool) -
     }
 
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
 
     let mut header = vec!["ID", "ACCOUNT", "SUBJECT", "MODIFIED"];
@@ -385,7 +385,7 @@ async fn attachments_list(fragment: String, json: bool) -> Result<()> {
     }
 
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec!["NAME", "TYPE", "SIZE"]);
     for a in &attachments {

@@ -97,13 +97,11 @@ pub async fn run(
     }
 
     // Optional: mark as read.
-    if mark_read {
-        if let Err(e) = graph.mark_read(&message_ref.account, &full.id).await {
-            eprintln!(
-                "{} could not mark message as read: {e}",
-                "WARNING:".yellow().bold()
-            );
-        }
+    if mark_read && let Err(e) = graph.mark_read(&message_ref.account, &full.id).await {
+        eprintln!(
+            "{} could not mark message as read: {e}",
+            "WARNING:".yellow().bold()
+        );
     }
 
     Ok(())
@@ -119,7 +117,7 @@ fn purge_from_cache(short_hash: &str) -> Result<()> {
 fn print_ambiguous(matches: &[(String, pidge_core::CachedMessageRef)]) {
     println!("Fragment matches multiple messages:");
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec!["ID", "ACCOUNT", "GRAPH ID"]);
     for (hash, r) in matches {
@@ -189,7 +187,7 @@ fn render_attachments_block(attachments: &[Attachment]) -> Result<()> {
     println!();
     println!("{}", "Attachments:".bold());
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::NOTHING);
+    table.load_style(comfy_table::presets::NOTHING);
     table.set_content_arrangement(ContentArrangement::Dynamic);
     for att in visible_attachments {
         table.add_row(vec![
@@ -279,7 +277,7 @@ fn render_body(full: &FullMessage) -> String {
 /// - Suppresses `<img>` alt-text entirely (no `[[Logo]]` noise from email
 ///   tracking pixels and logo images).
 fn render_html_body(html: &str, width: usize) -> String {
-    use html2text::render::text_renderer::{RichAnnotation, TaggedLineElement};
+    use html2text::render::{RichAnnotation, TaggedLineElement};
 
     let lines = match html2text::config::rich()
         .raw_mode(true)
@@ -307,6 +305,9 @@ fn render_html_body(html: &str, width: usize) -> String {
             if is_image {
                 continue;
             }
+            // html2text >= 0.13 preserves U+00A0; fold it to a plain space so
+            // NBSP-padded table cells collapse like ordinary blank runs.
+            let text = ts.s.replace('\u{00A0}', " ");
             if let Some(u) = url {
                 // OSC 8 makes terminals like Ghostty / iTerm2 recognize the span as
                 // a hyperlink, but the modifier-click affordance is only obvious when
@@ -314,14 +315,14 @@ fn render_html_body(html: &str, width: usize) -> String {
                 // with underline + cyan so it's identifiable at a glance without
                 // hovering. `colored` respects `--no-color` / NO_COLOR, so plain
                 // pipelines stay clean.
-                let styled = ts.s.cyan().underline().to_string();
+                let styled = text.cyan().underline().to_string();
                 out.push_str("\x1b]8;;");
                 out.push_str(u);
                 out.push_str("\x1b\\");
                 out.push_str(&styled);
                 out.push_str("\x1b]8;;\x1b\\");
             } else {
-                out.push_str(&ts.s);
+                out.push_str(&text);
             }
         }
         out.push('\n');
@@ -361,12 +362,11 @@ fn collapse_blank_runs(text: &str) -> String {
 
 fn terminal_width() -> usize {
     use std::process::Command;
-    if let Ok(out) = Command::new("tput").arg("cols").output() {
-        if let Ok(s) = std::str::from_utf8(&out.stdout) {
-            if let Ok(n) = s.trim().parse::<usize>() {
-                return n;
-            }
-        }
+    if let Ok(out) = Command::new("tput").arg("cols").output()
+        && let Ok(s) = std::str::from_utf8(&out.stdout)
+        && let Ok(n) = s.trim().parse::<usize>()
+    {
+        return n;
     }
     80
 }

@@ -58,7 +58,7 @@ async fn list(fragment: String, include_inline: bool, json: bool) -> Result<()> 
     }
 
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table.set_content_arrangement(ContentArrangement::Dynamic);
     table.set_header(vec!["NAME", "SIZE", "TYPE"]);
     for a in shown {

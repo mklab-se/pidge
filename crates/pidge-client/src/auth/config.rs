@@ -36,10 +36,10 @@ pub const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
 
 /// Resolved client_id: env var wins, otherwise the compile-time constant (if non-empty).
 pub fn client_id() -> Option<String> {
-    if let Ok(v) = std::env::var("PIDGE_CLIENT_ID") {
-        if !v.is_empty() {
-            return Some(v);
-        }
+    if let Ok(v) = std::env::var("PIDGE_CLIENT_ID")
+        && !v.is_empty()
+    {
+        return Some(v);
     }
     if APP_CLIENT_ID.is_empty() {
         None

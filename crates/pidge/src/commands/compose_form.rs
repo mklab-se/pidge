@@ -52,7 +52,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
-use tui_textarea::{Input, Key, TextArea};
+use ratatui_textarea::{Input, Key, TextArea};
 
 // --- public types ----------------------------------------------------------
 
@@ -435,14 +435,12 @@ fn try_submit(
 ) -> Option<Outcome> {
     match state.validate() {
         Ok(compose) => {
-            if warn_on_empty {
-                if let Some((warning, focus_on_cancel)) = soft_warnings(&compose) {
-                    state.mode = Mode::ConfirmingSend {
-                        warning,
-                        focus_on_cancel,
-                    };
-                    return None;
-                }
+            if warn_on_empty && let Some((warning, focus_on_cancel)) = soft_warnings(&compose) {
+                state.mode = Mode::ConfirmingSend {
+                    warning,
+                    focus_on_cancel,
+                };
+                return None;
             }
             Some(make_outcome(compose))
         }

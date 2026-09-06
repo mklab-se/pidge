@@ -31,10 +31,8 @@ pub async fn run(fragment: &str, comment: &str, yes: bool, series: bool, json: b
             cur.subject
         );
     }
-    if series {
-        if let Some(m) = &cur.series_master_id {
-            event_id = m.clone();
-        }
+    if series && let Some(m) = &cur.series_master_id {
+        event_id = m.clone();
     }
     if !yes {
         print!(

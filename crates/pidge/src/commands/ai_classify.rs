@@ -149,10 +149,11 @@ pub(crate) async fn run_batch(
                         }
                     },
                 };
-                if set_category && worth_categorizing(&labels) {
-                    if let Err(e) = g.set_categories(&account, &id, &labels).await {
-                        eprintln!("  ! {short}: set-category failed: {e}");
-                    }
+                if set_category
+                    && worth_categorizing(&labels)
+                    && let Err(e) = g.set_categories(&account, &id, &labels).await
+                {
+                    eprintln!("  ! {short}: set-category failed: {e}");
                 }
                 (short, from, key, labels, fresh)
             }
@@ -278,10 +279,10 @@ async fn select_messages(
         };
 
         for m in msgs {
-            if let Some(c) = cutoff {
-                if m.received_at >= c {
-                    continue;
-                }
+            if let Some(c) = cutoff
+                && m.received_at >= c
+            {
+                continue;
             }
             out.push((
                 email.clone(),
@@ -302,7 +303,8 @@ pub(crate) fn body_text(m: &pidge_core::FullMessage) -> String {
     use pidge_core::BodyContentType;
     match m.body_content_type {
         BodyContentType::Text => m.body_content.clone(),
-        BodyContentType::Html => html2text::from_read(m.body_content.as_bytes(), 100),
+        BodyContentType::Html => html2text::from_read(m.body_content.as_bytes(), 100)
+            .unwrap_or_else(|_| m.body_content.clone()),
     }
 }
 

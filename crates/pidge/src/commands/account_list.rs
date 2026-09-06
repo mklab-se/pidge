@@ -25,7 +25,7 @@ pub fn run(json: bool) -> Result<()> {
     }
 
     let mut table = Table::new();
-    table.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    table.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     table
         .set_header(vec!["ACCOUNT", "TYPE", "TENANT", "STORAGE", "ADDED", ""])
         .set_content_arrangement(ContentArrangement::Dynamic);

@@ -50,7 +50,6 @@ Lorem ipsum dolör sit amet consectetur adipiscing elit, sed do eiusmod tempor i
 50% dolor sit Loremium e-ipsum hela ditt första year!
 
 Cum Loremium:
-
 * Lorem ipsum dolor sit amet: Consectetur adipiscing elit sed do eiusmod tempor.
 * Lorem dolör ingår: Personalia consectetur ingår alltid.
 * Lorem ipsum: Proba gratuito in 30 dagar sine vinculo.

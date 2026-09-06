@@ -26,10 +26,8 @@ pub async fn run(
     let cur = graph.get_event(&r.account, &r.event_id).await?;
 
     let mut event_id = r.event_id.clone();
-    if series {
-        if let Some(m) = &cur.series_master_id {
-            event_id = m.clone();
-        }
+    if series && let Some(m) = &cur.series_master_id {
+        event_id = m.clone();
     }
     let tz = input_tz(None);
     let new_start = parse_when(start_s, &tz, Utc::now(), None)?;

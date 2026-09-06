@@ -19,10 +19,10 @@ pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<(
     let cur = graph.get_event(&r.account, &r.event_id).await?;
 
     let mut event_id = r.event_id.clone();
-    if args.series {
-        if let Some(master) = &cur.series_master_id {
-            event_id = master.clone();
-        }
+    if args.series
+        && let Some(master) = &cur.series_master_id
+    {
+        event_id = master.clone();
     }
 
     // Two distinct timezones:

@@ -10,7 +10,7 @@ pub fn cache_key(graph_id: &str, prompt: &str) -> String {
     let mut h = Sha256::new();
     h.update(prompt.as_bytes());
     let digest = h.finalize();
-    let hex = format!("{:x}", digest);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
     format!("{graph_id}:{}", &hex[..16])
 }
 

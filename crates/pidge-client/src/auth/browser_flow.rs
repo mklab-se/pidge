@@ -41,9 +41,8 @@ use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use rand::RngCore;
 use rand::distr::Alphanumeric;
-use rand::{Rng, rng};
+use rand::{Rng, RngExt, rng};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

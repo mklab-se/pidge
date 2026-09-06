@@ -284,7 +284,7 @@ fn print_compact(events: &[Event], tz: &Tz) {
 fn print_table(events: &[Event], tz: &Tz) {
     use comfy_table::{ContentArrangement, Table};
     let mut t = Table::new();
-    t.load_preset(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
+    t.load_style(comfy_table::presets::UTF8_HORIZONTAL_ONLY);
     t.set_content_arrangement(ContentArrangement::Dynamic);
     t.set_header(vec!["ID", "WHEN", "TITLE", "LOCATION"]);
     for e in events {

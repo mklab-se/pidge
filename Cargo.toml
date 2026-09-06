@@ -8,15 +8,15 @@ edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
 repository = "https://github.com/mklab-se/pidge"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # CLI
-clap = { version = "4.5", features = ["derive", "env", "wrap_help"] }
-clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
+clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 
 # Async
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.53", features = ["full"] }
 
 # HTTP (for update checker)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
@@ -34,7 +34,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Terminal
-colored = "3"
+colored = "3.1"
 
 # Versioning & time
 semver = "1.0"
@@ -43,19 +43,20 @@ chrono-tz = "0.10"
 iana-time-zone = "0.1"
 
 # Directories
-dirs = "6.0"
+dirs = "7.0"
 
 # AI integration
-ailloy = { version = "1.0", default-features = false, features = ["config-tui"] }
+ailloy = { version = "2.1", default-features = false, features = ["config-tui"] }
 
 # Keychain
-keyring = "3"
+# keyring 4 `v1` mode: macOS Keychain, Windows Credential Manager, Secret Service on Linux
+keyring = "4.2"
 
 # Base64 (for JWT decoding and PKCE code-challenge)
-base64 = "0.22"
+base64 = "0.23"
 
 # Cryptographic random for PKCE verifier and OAuth state
-rand = "0.9"
+rand = "0.10"
 
 # YAML for config files
 serde_yaml = "0.9"
@@ -64,28 +65,29 @@ serde_yaml = "0.9"
 wiremock = "0.6"
 
 # Table output
-comfy-table = { version = "7", features = ["custom_styling"] }
-linkify = "0.10"
-sha2 = "0.10"
+comfy-table = { version = "8", features = ["custom_styling"] }
+linkify = "0.11"
+sha2 = "0.11"
 
 # Inbox show: HTML rendering, image display, formatting
-html2text = "0.12"
-viuer = "0.9"
+html2text = "0.17"
+viuer = "0.11"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 humansize = "2"
 
 # Interactive prompts (`editor` feature enables `Editor` prompt that opens $EDITOR)
-inquire = { version = "0.7", features = ["editor"] }
+inquire = { version = "0.9", features = ["editor"] }
 
 # Low-level terminal control. Match the version inquire pulls in to avoid
 # duplicate crates in the binary.
-crossterm = "0.28"
+crossterm = "0.29"
 
 # TUI framework + multi-line text-area widget for the in-pidge body editor.
-# ratatui pairs with crossterm; both versions are kept in sync so we don't
-# bloat the build with two crossterm copies.
-ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
-tui-textarea = { version = "0.7", default-features = false, features = ["crossterm"] }
+# ratatui pairs with crossterm (and ailloy's config-tui pulls the same pair);
+# versions are kept in sync so we don't bloat the build with two copies.
+# ratatui-textarea is the ratatui org's successor to tui-textarea (ratatui 0.30+).
+ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
+ratatui-textarea = { version = "0.9", default-features = false, features = ["crossterm"] }
 
 # Future combinators (for join_all in multi-account fetch)
 futures = "0.3"
@@ -94,7 +96,7 @@ futures = "0.3"
 url = "2"
 
 # Testing
-tempfile = "3.10"
+tempfile = "3.27"
 
 # Internal crates
 pidge-core = { version = "1.0.0", path = "crates/pidge-core" }

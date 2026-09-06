@@ -196,9 +196,9 @@ async fn poll_calendar(graph: &GraphClient, cursor: Option<&str>) -> Result<Opti
 }
 
 fn persist(path: &Option<std::path::PathBuf>, state: &WatchState) {
-    if let Some(path) = path {
-        if let Ok(text) = serde_json::to_string_pretty(state) {
-            let _ = std::fs::write(path, text);
-        }
+    if let Some(path) = path
+        && let Ok(text) = serde_json::to_string_pretty(state)
+    {
+        let _ = std::fs::write(path, text);
     }
 }

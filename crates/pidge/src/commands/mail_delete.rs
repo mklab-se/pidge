@@ -343,26 +343,26 @@ pub fn parse_older_than(spec: &str) -> Result<DateTime<Utc>> {
         return Ok(DateTime::from_naive_utc_and_offset(dt, Utc));
     }
     // Relative duration?
-    if let Some(unit_pos) = trimmed.find(|c: char| !c.is_ascii_digit()) {
-        if unit_pos > 0 {
-            let n: i64 = trimmed[..unit_pos]
-                .parse()
-                .map_err(|_| anyhow!("'{spec}' is not a valid duration"))?;
-            let unit = &trimmed[unit_pos..];
-            let now = Utc::now();
-            let cutoff = match unit {
-                "d" => now - Duration::days(n),
-                "w" => now - Duration::weeks(n),
-                "m" => subtract_months(now, n)?,
-                "y" => subtract_months(now, n * 12)?,
-                other => {
-                    return Err(anyhow!(
-                        "unknown duration unit '{other}' in '{spec}'. Use d/w/m/y."
-                    ));
-                }
-            };
-            return Ok(cutoff);
-        }
+    if let Some(unit_pos) = trimmed.find(|c: char| !c.is_ascii_digit())
+        && unit_pos > 0
+    {
+        let n: i64 = trimmed[..unit_pos]
+            .parse()
+            .map_err(|_| anyhow!("'{spec}' is not a valid duration"))?;
+        let unit = &trimmed[unit_pos..];
+        let now = Utc::now();
+        let cutoff = match unit {
+            "d" => now - Duration::days(n),
+            "w" => now - Duration::weeks(n),
+            "m" => subtract_months(now, n)?,
+            "y" => subtract_months(now, n * 12)?,
+            other => {
+                return Err(anyhow!(
+                    "unknown duration unit '{other}' in '{spec}'. Use d/w/m/y."
+                ));
+            }
+        };
+        return Ok(cutoff);
     }
     Err(anyhow!(
         "'{spec}' is not a date (YYYY-MM-DD) or duration (e.g. 30d, 6m, 1y)."
