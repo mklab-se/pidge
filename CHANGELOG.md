@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Dependencies: Ailloy 2.1.0 → 2.1.1 (lockfile-only upstream patch, no API change) plus
+  `cargo update` across the lockfile (clap 4.6.7, clap_complete 4.6.11, rustls 0.23.45, quinn
+  0.11.12, among others). No manifest requirement changed; `reqwest` stays on 0.12 to share a
+  single TLS stack with Ailloy, and `serde_yaml` stays on 0.9. MSRV unchanged at 1.88.
+- CI and release workflows lint with `cargo clippy --workspace --all-targets`, so tests, examples
+  and benches are held to the same zero-warning bar as the library and binary code (matching
+  the `rusty-tmpl` template). The `/release` command runs the same gate and refreshes the stable
+  toolchain first.
+- README gains a "Releasing" section describing the release pipeline and its required secrets.
+
 ## [1.1.0] - 2026-09-06
 
 ### Added
