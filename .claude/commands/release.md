@@ -21,14 +21,16 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
   - `major`: 0.1.0 -> 1.0.0
 - Show the user: "Releasing pidge v{OLD} -> v{NEW}"
 
-### 2. Update dependencies
+### 2. Update toolchain and dependencies
 
+- Run `rustup update stable` — CI runs the latest stable Rust, and newer clippy versions ship new
+  lints that would otherwise fail only in the release workflow
 - Run `cargo update` to update all dependencies to their latest compatible versions
 
 ### 3. Pre-flight checks
 
 - Run `cargo fmt --all -- --check` — abort if formatting issues
-- Run `cargo clippy --workspace -- -D warnings` — abort if warnings
+- Run `cargo clippy --workspace --all-targets -- -D warnings` — abort if warnings
 - Run `cargo test --workspace` — abort if any test fails
 - Run `git status` — abort if there are uncommitted changes that are NOT documentation or version files
 
