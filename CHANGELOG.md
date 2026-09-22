@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- Dependencies: Ailloy 2.1.1 → 2.1.2 (lockfile-only upstream patch: lockfile refresh plus a
+  CI/release-process migration on ailloy's side, no API change) plus a `cargo update` refresh
+  across the lockfile. No manifest requirement changed; `reqwest` stays on 0.12 to share a single
+  TLS stack with Ailloy, and `serde_yaml` stays on 0.9. MSRV unchanged at 1.88.
+
 ## [1.1.1] - 2026-09-16
 
 ### Changed
