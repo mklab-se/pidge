@@ -53,6 +53,12 @@ Compile from source via crates.io (requires Rust 1.88+):
 cargo install pidge
 ```
 
+On Windows, building from source needs [NASM](https://www.nasm.us/) and [CMake](https://cmake.org/)
+on `PATH` (plus the Visual Studio Build Tools most Rust installs already have) — they're needed to
+compile [`aws-lc-rs`](https://github.com/aws/aws-lc-rs), the TLS crypto backend. macOS and Linux need
+nothing extra. If you'd rather skip the build tools entirely, use `cargo binstall` or Homebrew below —
+both fetch a pre-built binary.
+
 ## Build from Source
 
 ```bash
@@ -61,7 +67,8 @@ cd pidge
 cargo build --release
 ```
 
-The binary is at `target/release/pidge`. Requires Rust 1.88 or later.
+The binary is at `target/release/pidge`. Requires Rust 1.88 or later. The Windows NASM/CMake
+requirement above applies here too.
 
 ## cargo binstall
 

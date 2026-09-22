@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- `reqwest` upgraded 0.12 → 0.13 (feature `rustls-tls-native-roots` renamed `rustls`; ailloy bumped
+  to 2.2 in lockstep so only one TLS stack — rustls + aws-lc-rs — gets compiled in). `form` and
+  `query` are no longer bundled by default in 0.13, so both are now enabled explicitly (pidge-client's
+  OAuth token requests use `.form()`, its Graph calls use `.query()`). Building from source on
+  Windows now needs NASM and CMake on `PATH`; `release.yml`'s Windows build installs NASM via
+  `ilammy/setup-nasm@v1`. `cargo binstall` and Homebrew are unaffected (pre-built binaries).
+
 ## [1.2.0] - 2026-09-22
 
 ### Added
