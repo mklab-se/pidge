@@ -29,7 +29,7 @@ Three, built and shipped in this order. Each gets its own implementation plan.
 
 | # | Sub-project | Outcome |
 |---|---|---|
-| 1 | Tools and accounts | The 14 tools below, multi-account onboarding, send-from rules, migration from local pidge |
+| 1 | Tools and accounts | The 15 tools below, multi-account onboarding, send-from rules, migration from local pidge |
 | 2 | Platform | `https://pidge.mklab.se/mcp`, privacy-safe structured logs, CI/CD via GitHub OIDC |
 | 3 | Docs and distribution | Self-hosting guide, published container image, `pidge mcp` CLI commands |
 
@@ -96,7 +96,7 @@ Output: same item shape as `mail_overview`, newest first.
 Input: `id`, `thread` (bool), `account` (optional; inferred from the id's
 owner account when omitted by trying the user's accounts in order).
 Output: headers (from, to, cc, date, account), attachments (id, name, type,
-size), body as plain text with HTML rendered by pidge's renderer and quoted
+size; see `mail_attachment`), body as plain text with HTML rendered by pidge's renderer and quoted
 history stripped when `thread` is set. Thread mode returns messages newest
 first, each trimmed to its own contribution.
 
@@ -127,6 +127,18 @@ Semantics: `archive` moves to Archive; `delete` moves to Deleted Items;
 never a tracked link. Batched with Graph `$batch`. Output: per-id result.
 
 **`mail_folders`** — list folders with ids and unread counts per account.
+
+**`mail_attachment`** — get at "please see the attached file".
+Input: `id` (message), `attachment_id`, `mode` (`read` default, `link`),
+`account` (optional).
+`read` returns the attachment's content for the harness: documents (PDF,
+Word, Excel, PowerPoint, HTML, CSV, text, Markdown) converted to Markdown by
+markitdown (§1.10); images returned as an MCP image content block so a
+vision-capable harness reads them directly; anything else reports the type
+and size and suggests `link`. Text is wrapped as untrusted and capped at
+30 000 characters with `offset` for the rest.
+`link` returns a download URL valid for 15 minutes (§1.10) that the harness
+shows the user to click.
 
 ### 1.4 Calendar tools
 
@@ -252,6 +264,39 @@ refresh tokens leave the machine.
   cross-account refusal.
 - Renderer: existing fixture snapshots, unchanged.
 
+### 1.9 Read cache
+
+- Per-user, in memory only, 60-second TTL, keyed by user, tool and
+  normalized arguments. Covers `mail_overview`, `mail_search`, `mail_read`,
+  `mail_attachment` (read mode), `calendar_agenda`, `calendar_availability`,
+  `mail_folders`. Bounded to a few hundred entries per user with
+  least-recently-used eviction.
+- Any write by the user clears their entire cache: draft, send, act,
+  respond, event, account changes.
+- Not cached: `folder: drafts` listings, `accounts_*`, error results.
+- The mailbox token cache and the daily contact cache are separate and
+  unchanged. Nothing is persisted; a cold start pays full price once.
+- Graph delta queries are deliberately not used for caching yet; revisit if
+  measured latency or throttling justifies per-folder sync state.
+
+### 1.10 Attachments
+
+- **Conversion** runs markitdown as a subprocess inside the server
+  container: the image moves from distroless to a slim Python base carrying
+  the Rust binary and markitdown. One container keeps self-hosting simple.
+  Limits: 25 MB input, 30-second timeout, non-root, temp file deleted after
+  the call, never stored anywhere else. Unsupported or failed conversions
+  report the type and size instead of erroring.
+- **Images** (`image/*`) bypass conversion and return as MCP image content
+  (base64 in the tool result), capped at 5 MB.
+- **Download links** are signed tokens (`typ: download`, user, message id,
+  attachment id, 15-minute expiry) served at `GET /dl/<token>` with no other
+  authentication; the server streams the bytes from Graph with the original
+  filename and content type. The route is rate-limited per user and logs
+  only the user hash and outcome.
+- **Sending attachments from the harness is out of scope**; forwarding a
+  message carries its attachments already.
+
 ---
 
 ## Part 2 — Platform
@@ -328,7 +373,7 @@ refresh tokens leave the machine.
 
 ## Out of scope
 
-Attachment content extraction, reminders, category management beyond
+Sending new attachments from the harness, reminders, category management beyond
 `mail_act`, multiple calendars as a write target, any server-side model or
 server-side ranking, stored aliases or signature/style helpers (the harness
 handles these in a skill or in conversation), users outside the allowlist,
