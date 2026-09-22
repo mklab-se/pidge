@@ -41,7 +41,7 @@ pub struct Message {
     pub to: Vec<MessageFrom>,
     #[serde(default)]
     pub cc: Vec<MessageFrom>,
-    /// A meeting request or other calendar message (Graph `eventMessage`).
+    /// A meeting request (Graph `eventMessageRequest`).
     #[serde(default)]
     pub is_invite: bool,
 }
@@ -89,9 +89,12 @@ pub struct FullMessage {
     pub has_attachments: bool,
     #[serde(default)]
     pub flag_status: FlagStatus,
-    /// A meeting request or other calendar message (Graph `eventMessage`).
+    /// A meeting request (Graph `eventMessageRequest`).
     #[serde(default)]
     pub is_invite: bool,
+    /// For a meeting request, the calendar event it invites to.
+    #[serde(default)]
+    pub event_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +180,7 @@ mod tests {
             has_attachments: true,
             flag_status: FlagStatus::Flagged,
             is_invite: true,
+            event_id: Some("event-1".into()),
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: FullMessage = serde_json::from_str(&json).unwrap();

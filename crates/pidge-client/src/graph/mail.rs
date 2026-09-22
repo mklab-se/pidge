@@ -35,10 +35,10 @@ struct GraphMessage {
     odata_type: Option<String>,
 }
 
-/// Whether a Graph `@odata.type` names a calendar message
-/// (`eventMessage`, `eventMessageRequest`, `eventMessageResponse`, …).
+/// Whether a Graph `@odata.type` names a meeting request — an invite the
+/// user can respond to. Responses and cancellations are not invites.
 fn is_event_message(odata_type: Option<&str>) -> bool {
-    odata_type.is_some_and(|t| t.starts_with("#microsoft.graph.eventMessage"))
+    odata_type == Some("#microsoft.graph.eventMessageRequest")
 }
 
 #[derive(Debug, Deserialize)]
@@ -425,7 +425,8 @@ async fn search_in(
     limit: usize,
 ) -> Result<InboxPage, ClientError> {
     // $search expects a quoted KQL string; the user passes the raw query.
-    let quoted = format!("\"{}\"", query.replace('"', "\\\""));
+    let escaped = query.replace('\\', "\\\\").replace('"', "\\\"");
+    let quoted = format!("\"{escaped}\"");
     let url = match folder {
         Some(f) => format!("{base_url}/me/mailFolders/{f}/messages"),
         None => format!("{base_url}/me/messages"),
@@ -533,6 +534,12 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         });
     }
     let g: GraphFullMessage = resp.json().await?;
+    let is_invite = is_event_message(g.odata_type.as_deref());
+    let event_id = if is_invite {
+        fetch_event_id(http, base_url, access_token, message_id).await
+    } else {
+        None
+    };
 
     let content_type = match g.body.content_type.to_lowercase().as_str() {
         "html" => pidge_core::BodyContentType::Html,
@@ -561,8 +568,40 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         body_content: g.body.content,
         has_attachments: g.has_attachments.unwrap_or(false),
         flag_status: flag_status_from(g.flag),
-        is_invite: is_event_message(g.odata_type.as_deref()),
+        is_invite,
+        event_id,
     })
+}
+
+/// The calendar event behind a meeting request, via Graph's documented
+/// `$expand=microsoft.graph.eventMessage/event`. Only called for messages
+/// already known to be `eventMessageRequest`, so the type-cast expand is
+/// always valid. Best effort: any failure means "no event id".
+async fn fetch_event_id(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Option<String> {
+    #[derive(Deserialize)]
+    struct WithEvent {
+        event: Option<EventRef>,
+    }
+    #[derive(Deserialize)]
+    struct EventRef {
+        id: String,
+    }
+    let url = format!("{base_url}/me/messages/{message_id}");
+    let req = http.get(&url).bearer_auth(access_token).query(&[
+        ("$select", "id"),
+        ("$expand", "microsoft.graph.eventMessage/event($select=id)"),
+    ]);
+    let resp = super::send_with_retry(req).await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: WithEvent = resp.json().await.ok()?;
+    body.event.map(|e| e.id)
 }
 
 /// GET /me/messages/{id}?$select=internetMessageHeaders — fetch just the
@@ -1512,8 +1551,9 @@ mod tests {
             }
             message_from_delta_value(v, "a@example.com").unwrap()
         };
-        assert!(row(Some("#microsoft.graph.eventMessage")).is_invite);
         assert!(row(Some("#microsoft.graph.eventMessageRequest")).is_invite);
+        assert!(!row(Some("#microsoft.graph.eventMessage")).is_invite);
+        assert!(!row(Some("#microsoft.graph.eventMessageResponse")).is_invite);
         assert!(!row(Some("#microsoft.graph.message")).is_invite);
         assert!(!row(None).is_invite);
     }
@@ -1653,6 +1693,79 @@ mod tests {
         .unwrap()
         .messages;
         assert_eq!(msgs[0].id, "S1");
+    }
+
+    #[tokio::test]
+    async fn search_escapes_backslashes_before_quotes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages"))
+            .and(query_param("$search", r#""a\\b \"c\"""#))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "value": [] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        search_messages(&http, &server.uri(), "AT", "u@e.com", r#"a\b "c""#, 5)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_message_fetches_the_event_id_for_a_meeting_request_only() {
+        let server = MockServer::start().await;
+        let message = |id: &str, odata_type: &str| {
+            serde_json::json!({
+                "@odata.type": odata_type,
+                "id": id,
+                "receivedDateTime": "2026-09-23T08:00:00Z",
+                "sentDateTime": "2026-09-23T08:00:00Z",
+                "body": { "contentType": "text", "content": "" },
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/me/messages/INV"))
+            .and(query_param(
+                "$expand",
+                "microsoft.graph.eventMessage/event($select=id)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "INV", "event": { "id": "EV1" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/INV"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(message("INV", "#microsoft.graph.eventMessageRequest")),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/PLAIN"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(message("PLAIN", "#microsoft.graph.message")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let inv = get_message(&http, &server.uri(), "AT", "u@e.com", "INV")
+            .await
+            .unwrap();
+        assert!(inv.is_invite);
+        assert_eq!(inv.event_id.as_deref(), Some("EV1"));
+        let plain = get_message(&http, &server.uri(), "AT", "u@e.com", "PLAIN")
+            .await
+            .unwrap();
+        assert!(!plain.is_invite);
+        assert_eq!(plain.event_id, None);
     }
 
     #[tokio::test]
