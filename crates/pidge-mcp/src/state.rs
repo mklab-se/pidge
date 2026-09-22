@@ -2,15 +2,21 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use pidge_client::GraphClient;
 
+use crate::cache::ReadCache;
 use crate::config::Config;
 use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::Signer;
 use crate::secrets::SharedSecrets;
 use crate::users::UserStore;
+
+/// The read cache's TTL and per-user LRU bound (spec §1.9).
+const CACHE_TTL: StdDuration = StdDuration::from_secs(60);
+const CACHE_PER_USER: usize = 256;
 
 /// What a Microsoft sign-in is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +59,8 @@ pub struct AppState {
     /// connect can evict its cached tokens.
     pub token_backend: Arc<SecretTokenBackend>,
     pub users: UserStore,
+    /// Per-user, 60 s, LRU-bounded cache for read tools; see [`crate::cache`].
+    pub cache: ReadCache,
     pending: Mutex<HashMap<String, PendingAuthorization>>,
     /// `jti` → expiry of authorization codes already redeemed, so a code
     /// can't be replayed inside its two-minute lifetime.
@@ -76,6 +84,7 @@ impl AppState {
             graph,
             token_backend,
             users: UserStore::new(secrets),
+            cache: ReadCache::new(CACHE_TTL, CACHE_PER_USER),
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
         }

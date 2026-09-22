@@ -6,6 +6,7 @@
 //! refresh tokens (`secrets`). See `deploy/azure/` for hosting.
 
 mod app;
+mod cache;
 mod config;
 mod context;
 mod mailbox;

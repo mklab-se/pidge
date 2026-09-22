@@ -189,6 +189,7 @@ impl PidgeMcp {
                 .map_err(|e| store_error("deleting mailbox session", mailbox, e))?;
             self.state.token_backend.forget(mailbox);
         }
+        self.state.cache.invalidate_user(&signin);
         tracing::info!(user = %user_hash(&record.signin), "account settings updated");
 
         Ok(ok(format!(
@@ -434,6 +435,23 @@ mod tests {
             h.state.graph.auth().get_valid_token(WORK).await.is_err(),
             "cached tokens were evicted"
         );
+    }
+
+    #[tokio::test]
+    async fn update_clears_the_callers_read_cache() {
+        let h = ToolHarness::new(&[JANE, WORK]).await;
+        h.state.cache.put(JANE, "k".into(), "cached".into());
+        h.mcp
+            .accounts_update(
+                Parameters(UpdateArgs {
+                    timezone: Some("Europe/London".into()),
+                    ..Default::default()
+                }),
+                h.ctx(),
+            )
+            .await
+            .unwrap();
+        assert!(h.state.cache.get(JANE, "k").is_none());
     }
 
     #[tokio::test]

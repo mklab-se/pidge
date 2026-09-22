@@ -5,6 +5,8 @@
 //! from the bearer token the HTTP layer verified, never from tool input, and
 //! a mailbox named in tool input is only accepted if the record owns it.
 
+use std::future::Future;
+
 use pidge_client::ClientError;
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer};
@@ -89,6 +91,31 @@ impl ToolContext {
                 ))
             })
     }
+}
+
+/// Runs a read through the per-user cache: returns a live hit, otherwise
+/// calls `f` and, only on success, stores the result under `key` before
+/// returning it. `key` is opaque to this function — callers build it with
+/// [`crate::cache::ReadCache::key`].
+#[allow(dead_code)] // used by the mail and calendar read tools (Tasks 10+)
+pub async fn cached<F, Fut>(
+    state: &SharedState,
+    user: &str,
+    key: String,
+    f: F,
+) -> Result<String, McpError>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<String, McpError>>,
+{
+    if let Some(hit) = state.cache.get(user, &key) {
+        return Ok(hit);
+    }
+    let result = f().await;
+    if let Ok(value) = &result {
+        state.cache.put(user, key, value.clone());
+    }
+    result
 }
 
 /// A one-line, actionable error for the harness.
@@ -215,5 +242,55 @@ mod tests {
             message: "not found".into(),
         });
         assert!(e.message.starts_with("Microsoft Graph error: "), "{e:?}");
+    }
+
+    #[tokio::test]
+    async fn cached_runs_f_once_on_hit_and_never_caches_an_err() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use crate::tools::tests::ToolHarness;
+
+        let h = ToolHarness::new(&["jane@example.com"]).await;
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        // Miss: runs f, caches the Ok value.
+        let c = calls.clone();
+        let out = cached(&h.state, "jane@example.com", "k".into(), || async move {
+            c.fetch_add(1, Ordering::SeqCst);
+            Ok("v".to_string())
+        })
+        .await
+        .unwrap();
+        assert_eq!(out, "v");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Hit: does not run f again, even though it would return something else.
+        let c = calls.clone();
+        let out = cached(&h.state, "jane@example.com", "k".into(), || async move {
+            c.fetch_add(1, Ordering::SeqCst);
+            Ok("ignored".to_string())
+        })
+        .await
+        .unwrap();
+        assert_eq!(out, "v");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // An Err from f is never cached: the next call for the same key runs f again.
+        let c = calls.clone();
+        let err = cached(
+            &h.state,
+            "jane@example.com",
+            "other".into(),
+            || async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                Err(tool_error("boom"))
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.message.contains("boom"), "{err:?}");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(h.state.cache.get("jane@example.com", "other").is_none());
     }
 }

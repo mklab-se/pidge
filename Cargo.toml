@@ -78,6 +78,9 @@ comfy-table = { version = "8", features = ["custom_styling"] }
 linkify = "0.11"
 sha2 = "0.11"
 
+# Bounded per-user LRU for pidge-mcp's read cache
+lru = "0.18"
+
 # Inbox show: HTML rendering, image display, formatting
 html2text = "0.17"
 viuer = "0.11"
