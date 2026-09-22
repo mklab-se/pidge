@@ -554,6 +554,35 @@ struct GraphHeader {
     value: String,
 }
 
+/// POST `List-Unsubscribe=One-Click` to the given URL per RFC 8058. The
+/// body is form-urlencoded (the RFC says so explicitly).
+///
+/// This goes to an arbitrary third-party host, not Microsoft Graph, so it
+/// uses its own short-lived client — no bearer token, no shared retry
+/// policy (a broken sender's unsubscribe endpoint shouldn't get the same
+/// exponential backoff as a throttled Graph call).
+pub async fn unsubscribe_one_click(url: &str) -> Result<(), ClientError> {
+    let client = reqwest::Client::builder()
+        .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .post(url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("List-Unsubscribe=One-Click")
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
 /// GET /me/messages/{id}/attachments — list attachments without fetching bytes.
 /// Filters to file attachments only.
 pub async fn list_attachments(
@@ -1417,7 +1446,7 @@ pub async fn delete_mail_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path, path_regex, query_param};
+    use wiremock::matchers::{body_string, header, method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -2013,6 +2042,38 @@ mod tests {
         assert_eq!(headers[0].0, "List-Unsubscribe");
         assert_eq!(headers[0].1, "<mailto:u@x>, <https://x/u>");
         assert_eq!(headers[1].0, "List-Unsubscribe-Post");
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_posts_exact_form_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/u"))
+            .and(body_string("List-Unsubscribe=One-Click"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        unsubscribe_one_click(&format!("{}/u", server.uri()))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_errors_on_500() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/u"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        let err = unsubscribe_one_click(&format!("{}/u", server.uri()))
+            .await
+            .unwrap_err();
+        match err {
+            ClientError::Graph { status, .. } => assert_eq!(status, 500),
+            other => panic!("expected Graph error, got {other:?}"),
+        }
     }
 }
 

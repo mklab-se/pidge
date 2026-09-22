@@ -6,11 +6,12 @@ pub mod delta;
 pub mod events;
 mod mail;
 mod me;
+mod people;
 
 pub use calendars::list_calendars;
 pub use events::{
-    EventsPage, NewEvent, RsvpKind, cancel_event, create_event, delete_event, get_event,
-    list_calendar_view, list_events_at, move_event_to_calendar, move_time, rsvp_event,
+    EventsPage, NewEvent, ProposedTime, RsvpKind, cancel_event, create_event, delete_event,
+    get_event, list_calendar_view, list_events_at, move_event_to_calendar, move_time, rsvp_event,
     update_event,
 };
 pub use mail::{
@@ -20,9 +21,10 @@ pub use mail::{
     get_attachment_bytes, get_categories, get_message, list_attachments, list_child_folders,
     list_drafts, list_folder_messages, list_inbox, list_mail_folders, list_messages_at, mark_read,
     mark_unread, move_message, reply_all_message, reply_message, search_messages, send_draft,
-    send_mail, set_categories, set_flag, update_draft,
+    send_mail, set_categories, set_flag, unsubscribe_one_click, update_draft,
 };
 pub use me::{Me, get_me};
+pub use people::{Person, list_people};
 
 use crate::auth::AuthClient;
 use crate::auth::config;
@@ -536,6 +538,24 @@ impl GraphClient {
         mail::list_attachments(&self.http, &self.base_url, &token, message_id).await
     }
 
+    /// POST a `List-Unsubscribe=One-Click` form body (RFC 8058) to a
+    /// third-party unsubscribe URL. No bearer token — the URL belongs to
+    /// the sender, not Microsoft.
+    pub async fn unsubscribe_one_click(&self, url: &str) -> Result<(), ClientError> {
+        mail::unsubscribe_one_click(url).await
+    }
+
+    /// GET /me/people?$top={top}&$select=displayName,scoredEmailAddresses —
+    /// Outlook's ranked "people I interact with" list.
+    pub async fn list_people(
+        &self,
+        account: &str,
+        top: usize,
+    ) -> Result<Vec<people::Person>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        people::list_people(&self.http, &self.base_url, &token, top).await
+    }
+
     /// GET /me/messages/{id}/attachments/{att_id} returning decoded bytes.
     pub async fn get_attachment_bytes(
         &self,
@@ -667,6 +687,10 @@ impl GraphClient {
     }
 
     /// POST /me/events/{id}/accept | /tentativelyAccept | /decline.
+    ///
+    /// `proposed` carries a counter-proposed time; Graph only honors it on
+    /// `tentativelyAccept` and `decline` (ignored for `Accept`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn rsvp_event(
         &self,
         account: &str,
@@ -674,6 +698,7 @@ impl GraphClient {
         kind: events::RsvpKind,
         comment: &str,
         send_response: bool,
+        proposed: Option<&events::ProposedTime>,
     ) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         events::rsvp_event(
@@ -684,6 +709,7 @@ impl GraphClient {
             kind,
             comment,
             send_response,
+            proposed,
         )
         .await
     }

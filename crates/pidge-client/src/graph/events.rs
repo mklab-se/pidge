@@ -322,6 +322,33 @@ pub enum RsvpKind {
     Decline,
 }
 
+/// A counter-proposed meeting time attached to a `tentativelyAccept` or
+/// `decline` RSVP. Graph ignores it on `accept`.
+#[derive(Debug, Clone)]
+pub struct ProposedTime {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    /// IANA zone the proposal is expressed in (e.g. "Europe/Stockholm").
+    pub tz: String,
+}
+
+/// Format a UTC instant as the naive local clock in `tz`, in the
+/// `yyyy-MM-ddTHH:mm:ss.fffffff` shape Graph expects for
+/// `proposedNewTime` (7-digit fraction = 100ns ticks). Falls back to UTC
+/// when `tz` doesn't parse as an IANA zone name.
+fn format_proposed_dt(at: DateTime<Utc>, tz: &str) -> (String, String) {
+    use chrono::Timelike;
+    let (naive, zone) = match tz.parse::<chrono_tz::Tz>() {
+        Ok(z) => (at.with_timezone(&z).naive_local(), tz.to_string()),
+        Err(_) => (at.naive_utc(), "UTC".to_string()),
+    };
+    let ticks = naive.nanosecond() / 100;
+    (
+        format!("{}.{:07}", naive.format("%Y-%m-%dT%H:%M:%S"), ticks),
+        zone,
+    )
+}
+
 /// GET /me/calendarView?startDateTime=..&endDateTime=..
 ///
 /// Expands recurrence instances within the window. Pass `calendar_id` to
@@ -546,6 +573,10 @@ pub async fn cancel_event(
 }
 
 /// POST /me/events/{id}/accept | /tentativelyAccept | /decline
+///
+/// `proposed`, when `Some`, adds a `proposedNewTime` counter-proposal to the
+/// body; Graph only acts on it for `tentativelyAccept` and `decline`.
+#[allow(clippy::too_many_arguments)]
 pub async fn rsvp_event(
     http: &reqwest::Client,
     base_url: &str,
@@ -554,6 +585,7 @@ pub async fn rsvp_event(
     kind: RsvpKind,
     comment: &str,
     send_response: bool,
+    proposed: Option<&ProposedTime>,
 ) -> Result<(), ClientError> {
     let verb = match kind {
         RsvpKind::Accept => "accept",
@@ -561,7 +593,15 @@ pub async fn rsvp_event(
         RsvpKind::Decline => "decline",
     };
     let url = format!("{base_url}/me/events/{event_id}/{verb}");
-    let body = serde_json::json!({ "Comment": comment, "SendResponse": send_response });
+    let mut body = serde_json::json!({ "Comment": comment, "SendResponse": send_response });
+    if let Some(p) = proposed {
+        let (start_str, start_tz) = format_proposed_dt(p.start, &p.tz);
+        let (end_str, end_tz) = format_proposed_dt(p.end, &p.tz);
+        body["proposedNewTime"] = serde_json::json!({
+            "start": { "dateTime": start_str, "timeZone": start_tz },
+            "end": { "dateTime": end_str, "timeZone": end_tz },
+        });
+    }
     let resp =
         super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     bubble_no_body(resp).await
@@ -1103,6 +1143,43 @@ mod tests {
             RsvpKind::Tentative,
             "",
             false,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn rsvp_event_with_proposed_new_time_sends_it() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/me/events/E1/decline"))
+            .and(body_partial_json(serde_json::json!({
+                "proposedNewTime": { "start": { "timeZone": "Europe/Stockholm" } }
+            })))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let proposed = ProposedTime {
+            start: DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
+                .unwrap()
+                .to_utc(),
+            end: DateTime::parse_from_rfc3339("2026-09-24T13:00:00Z")
+                .unwrap()
+                .to_utc(),
+            tz: "Europe/Stockholm".into(),
+        };
+        rsvp_event(
+            &http,
+            &server.uri(),
+            "AT",
+            "E1",
+            RsvpKind::Decline,
+            "later?",
+            true,
+            Some(&proposed),
         )
         .await
         .unwrap();

@@ -20,6 +20,7 @@ tokio.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 tracing.workspace = true
 keyring.workspace = true
 base64.workspace = true

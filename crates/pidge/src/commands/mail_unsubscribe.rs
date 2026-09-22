@@ -8,7 +8,9 @@ use anyhow::{Context, Result, anyhow};
 use colored::Colorize;
 use inquire::Confirm;
 
-use pidge_client::{AuthClient, GraphClient, Outgoing, UnsubscribeMethod, parse_unsubscribe};
+use pidge_client::{
+    AuthClient, ClientError, GraphClient, Outgoing, UnsubscribeMethod, parse_unsubscribe,
+};
 
 use crate::commands::mail_fragment::resolve;
 
@@ -61,7 +63,17 @@ pub async fn run(fragment: String, yes: bool) -> Result<()> {
                 println!("Aborted.");
                 return Ok(());
             }
-            one_click_post(&url).await?;
+            graph.unsubscribe_one_click(&url).await.map_err(|e| {
+                if let ClientError::Graph { status, message } = &e {
+                    let trimmed: String = message.chars().take(200).collect();
+                    anyhow!(
+                        "Unsubscribe endpoint returned HTTP {status}. Response (first 200 \
+                         chars): {trimmed}\nTry the URL in a browser instead: {url}"
+                    )
+                } else {
+                    anyhow::Error::new(e).context("one-click unsubscribe POST failed")
+                }
+            })?;
             println!(
                 "{} Unsubscribed via one-click POST ({})",
                 "✔".green(),
@@ -115,35 +127,4 @@ fn confirm(yes_flag: bool, prompt: &str) -> Result<bool> {
         .with_default(false)
         .prompt()
         .map_err(|e| anyhow!("prompt cancelled: {e}"))
-}
-
-/// POST `List-Unsubscribe=One-Click` to the given URL per RFC 8058. The
-/// body is form-urlencoded (the RFC says so explicitly).
-///
-/// We use a fresh `reqwest::Client` rather than the Graph client's — this
-/// request goes to an arbitrary third-party host, not Microsoft, so it
-/// must not carry the Graph bearer token.
-async fn one_click_post(url: &str) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .context("building HTTP client")?;
-    let resp = client
-        .post(url)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body("List-Unsubscribe=One-Click")
-        .send()
-        .await
-        .context("POST failed")?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        let trimmed: String = body.chars().take(200).collect();
-        return Err(anyhow!(
-            "Unsubscribe endpoint returned HTTP {status}. Response (first 200 chars): {trimmed}\n\
-             Try the URL in a browser instead: {url}"
-        ));
-    }
-    Ok(())
 }
