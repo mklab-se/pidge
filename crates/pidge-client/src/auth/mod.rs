@@ -1,6 +1,7 @@
 //! OAuth browser-based sign-in (auth-code + PKCE), token refresh, and
 //! credential storage.
 
+mod backend;
 pub mod browser_flow;
 pub mod config;
 pub mod device_code;
@@ -11,6 +12,7 @@ mod store;
 mod token_store;
 mod tokens;
 
+pub use backend::{LocalBackend, TokenBackend};
 pub use browser_flow::AuthSuccess;
 pub use file_store::FileStore;
 pub use jwt::extract_tenant_id;
@@ -18,7 +20,7 @@ pub use store::KeychainStore;
 pub use token_store::TokenStore;
 pub use tokens::TokenSet;
 
-use pidge_core::TokenStorage;
+use std::sync::Arc;
 
 use crate::error::ClientError;
 
@@ -30,6 +32,7 @@ pub struct AuthClient {
     client_id: String,
     authority_base: String,
     scope: String,
+    backend: Arc<dyn TokenBackend>,
 }
 
 impl AuthClient {
@@ -45,7 +48,76 @@ impl AuthClient {
             client_id,
             authority_base: config::AUTHORITY.to_string(),
             scope: config::scope_string(),
+            backend: Arc::new(LocalBackend),
         })
+    }
+
+    /// Like [`Self::from_env`], but tokens are loaded from and saved to
+    /// `backend` instead of the CLI's config-resolved keychain/file store.
+    /// This is the constructor for hosted consumers such as the MCP server.
+    pub fn from_env_with_backend(backend: Arc<dyn TokenBackend>) -> Result<Self, ClientError> {
+        let mut client = Self::from_env()?;
+        client.backend = backend;
+        Ok(client)
+    }
+
+    /// Replace the token backend (builder style). Handy for tests that pair
+    /// [`Self::for_test`] with an in-memory store.
+    pub fn with_backend(mut self, backend: Arc<dyn TokenBackend>) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    /// The space-separated Microsoft Graph scope string this client requests.
+    pub fn scope(&self) -> &str {
+        &self.scope
+    }
+
+    /// The Entra `client_id` this client authenticates as.
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    /// Persist a freshly obtained [`TokenSet`] for `email` through the
+    /// configured backend. Hosted sign-in flows call this after
+    /// [`Self::exchange_code`].
+    pub async fn store_tokens(&self, email: &str, tokens: &TokenSet) -> Result<(), ClientError> {
+        self.backend.save(email, tokens).await
+    }
+
+    /// Build the Microsoft `/authorize` URL for an auth-code + PKCE sign-in
+    /// whose callback lands on `redirect_uri` (which must be registered on
+    /// the Entra app). The caller owns `state` and the PKCE verifier behind
+    /// `code_challenge`; pair with [`Self::exchange_code`].
+    pub fn authorize_url(&self, redirect_uri: &str, code_challenge: &str, state: &str) -> String {
+        browser_flow::build_authorize_url(
+            &self.authority_base,
+            &self.client_id,
+            redirect_uri,
+            &self.scope,
+            code_challenge,
+            state,
+        )
+    }
+
+    /// Redeem an authorization code delivered to `redirect_uri` for tokens.
+    /// Nothing is stored — call [`Self::store_tokens`] once the caller has
+    /// decided which account the tokens belong to.
+    pub async fn exchange_code(
+        &self,
+        code: &str,
+        code_verifier: &str,
+        redirect_uri: &str,
+    ) -> Result<AuthSuccess, ClientError> {
+        browser_flow::exchange_code_to_success(
+            &self.http,
+            &self.authority_base,
+            &self.client_id,
+            code,
+            code_verifier,
+            redirect_uri,
+        )
+        .await
     }
 
     /// Construct an AuthClient against a specific authority — for tests with wiremock.
@@ -55,6 +127,7 @@ impl AuthClient {
             client_id: client_id.into(),
             authority_base: authority_base.into(),
             scope: config::scope_string(),
+            backend: Arc::new(LocalBackend),
         }
     }
 
@@ -91,15 +164,18 @@ impl AuthClient {
     /// Returns `ClientError::SessionExpired` if the refresh fails — caller should
     /// prompt the user to `pidge auth login` again for that account.
     ///
-    /// The token storage backend is resolved from the account's config entry; if
-    /// the email has no entry in `config.yaml` yet (e.g. mid-login) we fall back
-    /// to the OS keychain.
+    /// Tokens come from the configured [`TokenBackend`]. The default,
+    /// [`LocalBackend`], resolves the storage backend from the account's
+    /// config entry and falls back to the OS keychain if the email has no
+    /// entry in `config.yaml` yet (e.g. mid-login).
     pub async fn get_valid_token(&self, email: &str) -> Result<String, ClientError> {
-        let storage = storage_for(email);
         let tokens =
-            TokenStore::load(email, storage)?.ok_or_else(|| ClientError::SessionExpired {
-                email: email.to_string(),
-            })?;
+            self.backend
+                .load(email)
+                .await?
+                .ok_or_else(|| ClientError::SessionExpired {
+                    email: email.to_string(),
+                })?;
 
         let access_token = if tokens.needs_refresh() {
             let new_tokens = refresh::refresh(
@@ -111,55 +187,14 @@ impl AuthClient {
                 email,
             )
             .await?;
-            TokenStore::save(email, &new_tokens, storage)?;
+            self.backend.save(email, &new_tokens).await?;
             new_tokens.access_token
         } else {
             tokens.access_token
         };
 
-        // Opportunistic backfill: accounts added before pidge requested the
-        // `openid` scope have an empty tenant_id in config. Microsoft Graph
-        // access tokens are JWTs that carry the `tid` claim, so we can fix
-        // this once per such account on the next Graph call without any
-        // user action.
-        backfill_tenant_id(email, &access_token);
+        self.backend.on_access_token(email, &access_token);
 
         Ok(access_token)
     }
-}
-
-/// If the cached Account for `email` has an empty `tenant_id`, decode the
-/// `tid` claim from the JWT access token and persist it to config. Silent on
-/// any failure — this is a best-effort cosmetic backfill, not a correctness
-/// requirement.
-fn backfill_tenant_id(email: &str, access_token: &str) {
-    let Ok(mut config) = pidge_core::Config::load() else {
-        return;
-    };
-    let Some(existing) = config.find(email).cloned() else {
-        return;
-    };
-    if !existing.tenant_id.is_empty() {
-        return;
-    }
-    let Some(tid) = jwt::extract_tenant_id(access_token) else {
-        return;
-    };
-    if tid.is_empty() {
-        return;
-    }
-    let mut updated = existing;
-    updated.tenant_id = tid;
-    config.add_account(updated);
-    let _ = config.save();
-}
-
-/// Resolve the token storage backend for an email by consulting `config.yaml`.
-/// Falls back to [`TokenStorage::Keychain`] (the default) if the config can't
-/// be read or the account isn't listed yet.
-fn storage_for(email: &str) -> TokenStorage {
-    pidge_core::Config::load()
-        .ok()
-        .and_then(|c| c.find(email).map(|a| a.storage))
-        .unwrap_or_default()
 }

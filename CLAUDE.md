@@ -14,7 +14,7 @@ cargo run -- --help                      # Run the CLI
 
 ## Architecture
 
-Rust workspace with three crates:
+Rust workspace with four crates:
 
 ```
 crates/
@@ -28,13 +28,19 @@ crates/
   pidge-core/           # Provider-agnostic types: Account, Config, Message
   pidge-client/         # Microsoft Graph client, OAuth flows, keychain token storage
     src/
-      auth/             # Browser auth-code+PKCE flow, refresh, JWT, keychain
+      auth/             # Browser auth-code+PKCE flow, refresh, JWT, keychain; `TokenBackend` seam
       graph/            # Full mail+calendar Graph surface, $batch, delta, retry seam
+  pidge-mcp/            # Remote MCP server (spike): own OAuth 2.1 AS, Microsoft sign-in,
+    src/                # Key Vault-backed mailbox tokens, bearer-guarded /mcp. `publish = false`.
+      oauth/            # Discovery, DCR, authorize→Microsoft→callback, token, bearer middleware
+      secrets/          # `SecretStore`: Azure Key Vault (managed identity) or files (dev)
+deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Container Apps
 ```
 
 - Workspace root `Cargo.toml` defines shared dependencies and version
 - `pidge-core` has no HTTP or auth code — it's safe to depend on from any consumer
-- `pidge-client` knows nothing about clap or terminal output
+- `pidge-client` knows nothing about clap or terminal output. `AuthClient` persists tokens through an `Arc<dyn TokenBackend>`; the default `LocalBackend` is the CLI's keychain/file behaviour, hosted consumers inject their own (`from_env_with_backend`)
+- `pidge-mcp` never trusts input for identity: the bearer middleware attaches `AuthenticatedUser` to the request and every tool reads the mailbox from there. Design: `docs/superpowers/specs/2026-09-22-remote-mcp-spike-design.md`; ops: `deploy/azure/README.md`
 
 ## Key Patterns
 
