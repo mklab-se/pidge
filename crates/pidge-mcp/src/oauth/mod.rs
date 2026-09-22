@@ -28,7 +28,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use url::Url;
 
-use crate::state::{PendingAuthorization, SharedState};
+use pidge_client::auth::TokenSet;
+
+use crate::state::{PendingAuthorization, PendingKind, SharedState};
+use crate::users::{MailboxRecord, OwnershipError, UserRecord, user_hash};
 
 pub const SCOPE: &str = "mail";
 
@@ -53,6 +56,7 @@ pub fn router() -> Router<SharedState> {
         .route("/register", post(register))
         .route("/authorize", get(authorize))
         .route("/callback", get(callback))
+        .route("/connect", get(connect))
         .route("/token", post(token))
 }
 
@@ -306,6 +310,7 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
     state.insert_pending(
         microsoft_state,
         PendingAuthorization {
+            kind: PendingKind::SignIn,
             client_id: client_id.to_string(),
             client_redirect_uri: redirect_uri.to_string(),
             client_state: client_state.map(str::to_string),
@@ -331,6 +336,37 @@ struct CallbackParams {
     error_description: Option<String>,
 }
 
+/// A failure after Microsoft returned: a sign-in redirects the error to the
+/// waiting OAuth client; a connect has no client, so it renders a page.
+fn callback_failure(pending: &PendingAuthorization, error: &str, description: &str) -> Response {
+    match pending.kind {
+        PendingKind::SignIn => redirect_with_error(
+            &pending.client_redirect_uri,
+            pending.client_state.as_deref(),
+            error,
+            description,
+        ),
+        PendingKind::Connect { .. } => {
+            let status = if error == "access_denied" {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            pages::error(
+                status,
+                &format!("{description}. Ask your AI client for a new connect link."),
+            )
+        }
+    }
+}
+
+fn owned_by_other_page(mailbox: &str) -> Response {
+    pages::error(
+        StatusCode::FORBIDDEN,
+        &format!("{mailbox} is already connected to another pidge user."),
+    )
+}
+
 async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackParams>) -> Response {
     let Some(pending) = p.state.as_deref().and_then(|s| state.take_pending(s)) else {
         return pages::error(
@@ -338,28 +374,22 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
             "This sign-in link has expired or was already used. Start again from your AI client.",
         );
     };
-    let client_state = pending.client_state.as_deref();
 
     if let Some(err) = p.error.as_deref() {
         tracing::warn!(error = err, description = ?p.error_description, "Microsoft sign-in failed");
-        return redirect_with_error(
-            &pending.client_redirect_uri,
-            client_state,
+        return callback_failure(
+            &pending,
             "access_denied",
             "Microsoft sign-in was not completed",
         );
     }
     let Some(code) = p.code.as_deref() else {
-        return redirect_with_error(
-            &pending.client_redirect_uri,
-            client_state,
-            "server_error",
-            "Microsoft returned no code",
-        );
+        return callback_failure(&pending, "server_error", "Microsoft returned no code");
     };
 
-    let auth = state.graph.auth();
-    let success = match auth
+    let success = match state
+        .graph
+        .auth()
         .exchange_code(
             code,
             &pending.microsoft_verifier,
@@ -370,9 +400,8 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
         Ok(s) => s,
         Err(e) => {
             tracing::error!(error = %e, "redeeming Microsoft code");
-            return redirect_with_error(
-                &pending.client_redirect_uri,
-                client_state,
+            return callback_failure(
+                &pending,
                 "server_error",
                 "could not complete Microsoft sign-in",
             );
@@ -383,9 +412,8 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
         Ok(me) => me,
         Err(e) => {
             tracing::error!(error = %e, "reading signed-in profile");
-            return redirect_with_error(
-                &pending.client_redirect_uri,
-                client_state,
+            return callback_failure(
+                &pending,
                 "server_error",
                 "could not read the signed-in account",
             );
@@ -397,26 +425,93 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
         .unwrap_or(me.user_principal_name.clone())
         .to_ascii_lowercase();
 
-    if !state.config.is_allowed(&email) {
-        tracing::warn!(email = %email, "sign-in refused: not on allowlist");
+    match &pending.kind {
+        PendingKind::SignIn => sign_in_complete(&state, &pending, &email, success.tokens).await,
+        PendingKind::Connect { owner } => {
+            connect_complete(&state, &pending, owner, &email, success.tokens).await
+        }
+    }
+}
+
+/// Binds `mailbox`'s fresh tokens to `owner`, refusing (403 page) if another
+/// user owns it. Evicts any cached tokens so the new ones take effect.
+/// Returns the response to send on failure, `None` on success.
+async fn bind_mailbox(
+    state: &SharedState,
+    pending: &PendingAuthorization,
+    mailbox: &str,
+    owner: &str,
+    tokens: TokenSet,
+) -> Option<Response> {
+    match state.users.check_ownership(mailbox, owner).await {
+        Ok(()) => {}
+        Err(OwnershipError::OwnedByOther) => {
+            tracing::warn!(
+                user = %user_hash(owner),
+                mailbox = %user_hash(mailbox),
+                "refused: mailbox owned by another user"
+            );
+            return Some(owned_by_other_page(mailbox));
+        }
+        Err(OwnershipError::Store(e)) => {
+            tracing::error!(error = %e, "checking mailbox ownership");
+            return Some(callback_failure(
+                pending,
+                "server_error",
+                "could not store the mailbox session",
+            ));
+        }
+    }
+    let record = MailboxRecord {
+        owner: owner.to_string(),
+        tokens,
+    };
+    if let Err(e) = state.users.save_mailbox(&record, mailbox).await {
+        tracing::error!(error = %e, "storing mailbox tokens");
+        return Some(callback_failure(
+            pending,
+            "server_error",
+            "could not store the mailbox session",
+        ));
+    }
+    state.token_backend.forget(mailbox);
+    None
+}
+
+async fn sign_in_complete(
+    state: &SharedState,
+    pending: &PendingAuthorization,
+    email: &str,
+    tokens: TokenSet,
+) -> Response {
+    let client_state = pending.client_state.as_deref();
+
+    if !state.config.is_allowed(email) {
+        tracing::warn!(user = %user_hash(email), "sign-in refused: not on allowlist");
         return pages::error(
             StatusCode::FORBIDDEN,
             &format!("{email} is not allowed to use this server."),
         );
     }
 
-    if let Err(e) = auth.store_tokens(&email, &success.tokens).await {
-        tracing::error!(error = %e, "storing mailbox tokens");
-        return redirect_with_error(
-            &pending.client_redirect_uri,
-            client_state,
-            "server_error",
-            "could not store the mailbox session",
-        );
+    if let Some(resp) = bind_mailbox(state, pending, email, email, tokens).await {
+        return resp;
+    }
+
+    let has_record = match state.users.load(email).await {
+        Ok(rec) => rec.is_some(),
+        Err(e) => {
+            tracing::error!(error = %e, "loading user record");
+            return callback_failure(pending, "server_error", "could not load the user profile");
+        }
+    };
+    if !has_record && let Err(e) = state.users.save(&UserRecord::new(email)).await {
+        tracing::error!(error = %e, "creating user record");
+        return callback_failure(pending, "server_error", "could not create the user profile");
     }
 
     let code = match state.signer.issue_code(
-        &email,
+        email,
         &pending.client_id,
         &pending.client_redirect_uri,
         &pending.code_challenge,
@@ -424,16 +519,11 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
         Ok(c) => c,
         Err(e) => {
             tracing::error!(error = %e, "issuing authorization code");
-            return redirect_with_error(
-                &pending.client_redirect_uri,
-                client_state,
-                "server_error",
-                "could not issue code",
-            );
+            return callback_failure(pending, "server_error", "could not issue code");
         }
     };
 
-    tracing::info!(email = %email, "sign-in complete, mailbox connected");
+    tracing::info!(user = %user_hash(email), "sign-in complete, mailbox connected");
     let mut url = Url::parse(&pending.client_redirect_uri).expect("validated at registration");
     {
         let mut q = url.query_pairs_mut();
@@ -443,6 +533,75 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
         }
     }
     Redirect::to(url.as_str()).into_response()
+}
+
+/// A connect link finished: `mailbox` becomes one of `owner`'s mailboxes.
+/// The allowlist governs sign-in identities only, so it isn't consulted.
+async fn connect_complete(
+    state: &SharedState,
+    pending: &PendingAuthorization,
+    owner: &str,
+    mailbox: &str,
+    tokens: TokenSet,
+) -> Response {
+    if let Some(resp) = bind_mailbox(state, pending, mailbox, owner, tokens).await {
+        return resp;
+    }
+
+    let mut record = match state.users.load(owner).await {
+        Ok(Some(rec)) => rec,
+        Ok(None) => UserRecord::new(owner),
+        Err(e) => {
+            tracing::error!(error = %e, "loading user record");
+            return callback_failure(pending, "server_error", "could not load the user profile");
+        }
+    };
+    if !record.owns(mailbox) {
+        record.mailboxes.push(mailbox.to_string());
+    }
+    if let Err(e) = state.users.save(&record).await {
+        tracing::error!(error = %e, "saving user record");
+        return callback_failure(pending, "server_error", "could not save the user profile");
+    }
+
+    tracing::info!(
+        user = %user_hash(owner),
+        mailbox = %user_hash(mailbox),
+        "mailbox connected"
+    );
+    pages::done("Mailbox connected. You can close this tab.")
+}
+
+// ---------------------------------------------------------------------------
+// Connect link → Microsoft
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct ConnectParams {
+    state: Option<String>,
+}
+
+/// Opens a link minted by `accounts_connect`: looks up its pending entry
+/// (without consuming it, so the link can be reopened until it expires) and
+/// sends the browser to Microsoft with the same state.
+async fn connect(State(state): State<SharedState>, Query(p): Query<ConnectParams>) -> Response {
+    let found = p
+        .state
+        .as_deref()
+        .and_then(|s| state.peek_pending(s).map(|pending| (s, pending)))
+        .filter(|(_, pending)| matches!(pending.kind, PendingKind::Connect { .. }));
+    let Some((microsoft_state, pending)) = found else {
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "This connect link has expired or is not valid. Ask your AI client for a new one.",
+        );
+    };
+    let microsoft_url = state.graph.auth().authorize_url(
+        &state.config.microsoft_callback_url(),
+        &jwt::pkce_challenge(&pending.microsoft_verifier),
+        microsoft_state,
+    );
+    Redirect::to(&microsoft_url).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -582,14 +741,14 @@ async fn token(
                 );
             }
             if !state.mark_code_used(&claims.jti, claims.exp) {
-                tracing::warn!(sub = %claims.sub, "authorization code replayed");
+                tracing::warn!(user = %user_hash(&claims.sub), "authorization code replayed");
                 return oauth_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_grant",
                     "code already used",
                 );
             }
-            tracing::info!(sub = %claims.sub, "issued tokens (authorization_code)");
+            tracing::info!(user = %user_hash(&claims.sub), "issued tokens (authorization_code)");
             token_response(&state, &claims.sub, &client_id)
         }
         Some("refresh_token") => {
@@ -625,7 +784,7 @@ async fn token(
                     "user is no longer allowed",
                 );
             }
-            tracing::info!(sub = %claims.sub, "issued tokens (refresh_token)");
+            tracing::info!(user = %user_hash(&claims.sub), "issued tokens (refresh_token)");
             token_response(&state, &claims.sub, &client_id)
         }
         _ => oauth_error(

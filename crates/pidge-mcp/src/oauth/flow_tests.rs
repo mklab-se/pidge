@@ -20,7 +20,8 @@ use crate::config::{Config, SecretsBackend};
 use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::{Signer, pkce_challenge, random_bytes};
 use crate::secrets::{FileSecrets, SharedSecrets, mailbox_secret_name};
-use crate::state::AppState;
+use crate::state::{AppState, PendingAuthorization, PendingKind, SharedState};
+use crate::users::{UserRecord, UserStore};
 
 const PUBLIC: &str = "http://localhost:8080";
 const CLIENT_REDIRECT: &str = "http://localhost:9999/cb";
@@ -28,6 +29,8 @@ const CLIENT_REDIRECT: &str = "http://localhost:9999/cb";
 struct Harness {
     app: Router,
     microsoft: MockServer,
+    state: SharedState,
+    secrets: SharedSecrets,
     secrets_dir: tempfile::TempDir,
 }
 
@@ -59,14 +62,35 @@ async fn harness(signed_in_email: &str) -> Harness {
         },
     };
     let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
-    let auth = AuthClient::for_test("cid", microsoft.uri())
-        .with_backend(Arc::new(SecretTokenBackend::new(secrets.clone())));
+    let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
+    let auth = AuthClient::for_test("cid", microsoft.uri()).with_backend(token_backend.clone());
     let graph = GraphClient::for_test(auth, format!("{}/v1.0", microsoft.uri()));
-    let state = Arc::new(AppState::new(config, signer, graph, secrets));
+    let state = Arc::new(AppState::new(
+        config,
+        signer,
+        graph,
+        token_backend,
+        secrets.clone(),
+    ));
     Harness {
-        app: build_router(state, CancellationToken::new()),
+        app: build_router(state.clone(), CancellationToken::new()),
         microsoft,
+        state,
+        secrets,
         secrets_dir,
+    }
+}
+
+/// A pending entry with no OAuth client attached, as `accounts_connect` makes.
+fn pending_stub() -> PendingAuthorization {
+    PendingAuthorization {
+        kind: PendingKind::SignIn,
+        client_id: String::new(),
+        client_redirect_uri: String::new(),
+        client_state: None,
+        code_challenge: String::new(),
+        microsoft_verifier: "stub-verifier".into(),
+        created_at: chrono::Utc::now(),
     }
 }
 
@@ -187,7 +211,6 @@ async fn mcp_initialize(app: &Router, bearer: Option<&str>) -> StatusCode {
 }
 
 #[tokio::test]
-#[ignore = "re-enabled in Task 8"] // callback now needs a MailboxRecord created via UserStore::save_mailbox first
 async fn full_flow_for_allowed_user() {
     let h = harness("Jane@Example.com").await;
     let client_id = register(&h.app).await;
@@ -211,6 +234,15 @@ async fn full_flow_for_allowed_user() {
     )
     .unwrap();
     assert!(stored.contains("MS_RT"));
+    let users = UserStore::new(h.secrets.clone());
+    let mailbox = users
+        .load_mailbox("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mailbox.owner, "jane@example.com");
+    let rec = users.load("jane@example.com").await.unwrap().unwrap();
+    assert_eq!(rec, UserRecord::new("jane@example.com"));
 
     // Wrong verifier fails, right verifier succeeds, replay fails.
     let (status, body) = redeem(
@@ -337,4 +369,213 @@ async fn unregistered_redirect_uri_never_redirects() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sign_in_creates_user_record_with_owner_stamp() {
+    let h = harness("jane@example.com").await;
+    let client_id = register(&h.app).await;
+    let resp = sign_in(
+        &h,
+        &client_id,
+        "verifier-verifier-verifier-verifier-verifier",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let users = UserStore::new(h.secrets.clone());
+    let rec = users.load("jane@example.com").await.unwrap().unwrap();
+    assert_eq!(rec.mailboxes, vec!["jane@example.com"]);
+    assert_eq!(
+        users
+            .load_mailbox("jane@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .owner,
+        "jane@example.com"
+    );
+}
+
+#[tokio::test]
+async fn sign_in_keeps_an_existing_user_record() {
+    let h = harness("jane@example.com").await;
+    let users = UserStore::new(h.secrets.clone());
+    let mut rec = UserRecord::new("jane@example.com");
+    rec.mailboxes.push("second@example.com".into());
+    rec.timezone = "Europe/London".into();
+    users.save(&rec).await.unwrap();
+    let client_id = register(&h.app).await;
+    let resp = sign_in(
+        &h,
+        &client_id,
+        "verifier-verifier-verifier-verifier-verifier",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert_eq!(users.load("jane@example.com").await.unwrap().unwrap(), rec);
+}
+
+#[tokio::test]
+async fn sign_in_refuses_a_mailbox_another_user_connected() {
+    let h = harness("jane@example.com").await;
+    let users = UserStore::new(h.secrets.clone());
+    users
+        .save_mailbox(
+            &crate::users::MailboxRecord {
+                owner: "mallory@example.com".into(),
+                tokens: pidge_client::auth::TokenSet {
+                    access_token: "a".into(),
+                    refresh_token: "MALLORY_RT".into(),
+                    expires_at: chrono::Utc::now(),
+                },
+            },
+            "jane@example.com",
+        )
+        .await
+        .unwrap();
+    let client_id = register(&h.app).await;
+    let resp = sign_in(
+        &h,
+        &client_id,
+        "verifier-verifier-verifier-verifier-verifier",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let mailbox = users
+        .load_mailbox("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mailbox.owner, "mallory@example.com", "record untouched");
+    assert!(users.load("jane@example.com").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
+    let h = harness("second@example.com").await; // Microsoft mock signs in as second@…
+    let state = h.state.clone();
+    state.insert_pending(
+        "s1".into(),
+        PendingAuthorization {
+            kind: PendingKind::Connect {
+                owner: "jane@example.com".into(),
+            },
+            ..pending_stub()
+        },
+    );
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/callback?code=x&state=s1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let rec = UserStore::new(h.secrets.clone())
+        .load("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.mailboxes,
+        vec!["jane@example.com", "second@example.com"]
+    );
+    assert_eq!(
+        UserStore::new(h.secrets.clone())
+            .load_mailbox("second@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .owner,
+        "jane@example.com"
+    );
+    // Mallory tries to connect the same mailbox.
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("mallory@example.com"))
+        .await
+        .unwrap();
+    state.insert_pending(
+        "s2".into(),
+        PendingAuthorization {
+            kind: PendingKind::Connect {
+                owner: "mallory@example.com".into(),
+            },
+            ..pending_stub()
+        },
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/callback?code=x&state=s2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let mallory = UserStore::new(h.secrets.clone())
+        .load("mallory@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mallory.mailboxes, vec!["mallory@example.com"]);
+}
+
+#[tokio::test]
+async fn connect_link_redirects_to_microsoft_with_the_pending_state() {
+    let h = harness("second@example.com").await;
+    h.state.insert_pending(
+        "s1".into(),
+        PendingAuthorization {
+            kind: PendingKind::Connect {
+                owner: "jane@example.com".into(),
+            },
+            ..pending_stub()
+        },
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/connect?state=s1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with(&h.microsoft.uri()));
+    assert_eq!(query(&location, "state").as_deref(), Some("s1"));
+    assert_eq!(
+        query(&location, "code_challenge").unwrap(),
+        pkce_challenge("stub-verifier")
+    );
+    assert_eq!(
+        query(&location, "redirect_uri").unwrap(),
+        format!("{PUBLIC}/callback")
+    );
+
+    // Unknown state and a sign-in entry are both refused.
+    h.state.insert_pending("s2".into(), pending_stub());
+    for uri in ["/connect?state=nope", "/connect?state=s2", "/connect"] {
+        let resp = h
+            .app
+            .clone()
+            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
+    }
 }

@@ -7,14 +7,29 @@ use chrono::{DateTime, Duration, Utc};
 use pidge_client::GraphClient;
 
 use crate::config::Config;
+use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::Signer;
 use crate::secrets::SharedSecrets;
 use crate::users::UserStore;
 
+/// What a Microsoft sign-in is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingKind {
+    /// An MCP client's OAuth flow: the Microsoft account becomes the
+    /// signed-in user (and their first mailbox).
+    SignIn,
+    /// An `accounts_connect` link: the Microsoft account becomes an
+    /// additional mailbox owned by `owner` (a sign-in address).
+    Connect { owner: String },
+}
+
 /// An authorization the user has started but not finished at Microsoft.
 /// Keyed by the `state` we send to Microsoft; lives in memory for minutes.
+/// The client fields are empty for [`PendingKind::Connect`], where no OAuth
+/// client is waiting.
 #[derive(Debug, Clone)]
 pub struct PendingAuthorization {
+    pub kind: PendingKind,
     pub client_id: String,
     pub client_redirect_uri: String,
     pub client_state: Option<String>,
@@ -23,15 +38,15 @@ pub struct PendingAuthorization {
     pub created_at: DateTime<Utc>,
 }
 
-const PENDING_TTL: Duration = Duration::minutes(10);
+pub const PENDING_TTL: Duration = Duration::minutes(10);
 
 pub struct AppState {
     pub config: Config,
     pub signer: Signer,
     pub graph: GraphClient,
-    #[allow(dead_code)] // kept for the upcoming connect_mailbox tool
-    pub secrets: SharedSecrets,
-    #[allow(dead_code)] // wired into the sign-in callback and tools in Task 8+
+    /// The token backend `graph` uses; held here so a disconnect or a fresh
+    /// connect can evict its cached tokens.
+    pub token_backend: Arc<SecretTokenBackend>,
     pub users: UserStore,
     pending: Mutex<HashMap<String, PendingAuthorization>>,
     /// `jti` → expiry of authorization codes already redeemed, so a code
@@ -42,13 +57,20 @@ pub struct AppState {
 pub type SharedState = Arc<AppState>;
 
 impl AppState {
-    pub fn new(config: Config, signer: Signer, graph: GraphClient, secrets: SharedSecrets) -> Self {
+    /// `token_backend` must be the backend `graph`'s `AuthClient` was built with.
+    pub fn new(
+        config: Config,
+        signer: Signer,
+        graph: GraphClient,
+        token_backend: Arc<SecretTokenBackend>,
+        secrets: SharedSecrets,
+    ) -> Self {
         Self {
             config,
             signer,
             graph,
-            users: UserStore::new(secrets.clone()),
-            secrets,
+            token_backend,
+            users: UserStore::new(secrets),
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
         }
@@ -59,6 +81,15 @@ impl AppState {
         let cutoff = Utc::now() - PENDING_TTL;
         map.retain(|_, p| p.created_at > cutoff);
         map.insert(state, pending);
+    }
+
+    /// Returns a copy of a live pending authorization without consuming it,
+    /// so a connect link can be opened (and retried) before the callback.
+    pub fn peek_pending(&self, state: &str) -> Option<PendingAuthorization> {
+        let map = self.pending.lock().expect("pending lock");
+        map.get(state)
+            .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
+            .cloned()
     }
 
     /// Removes and returns the pending authorization, so a Microsoft

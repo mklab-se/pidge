@@ -23,6 +23,12 @@ impl SecretTokenBackend {
             cache: Mutex::new(HashMap::new()),
         }
     }
+
+    /// Drop any cached tokens for `email`, so the next load reads the store.
+    /// Called when a mailbox is disconnected or freshly (re)connected.
+    pub fn forget(&self, email: &str) {
+        self.cache.lock().expect("cache lock").remove(email);
+    }
 }
 
 fn store_error(e: anyhow::Error) -> ClientError {

@@ -8,9 +8,9 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio_util::sync::CancellationToken;
 
-use crate::mcp::PidgeMcp;
 use crate::oauth;
 use crate::state::SharedState;
+use crate::tools::PidgeMcp;
 
 pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
     let mcp_service = StreamableHttpService::new(

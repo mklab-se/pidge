@@ -2,16 +2,17 @@
 //!
 //! One binary: an OAuth 2.1 authorization server that delegates sign-in to
 //! Microsoft (`oauth`), a bearer-guarded streamable-HTTP MCP endpoint at
-//! `/mcp` (`mcp`), and a secret store for the signing key and per-mailbox
+//! `/mcp` (`tools`), and a secret store for the signing key and per-mailbox
 //! refresh tokens (`secrets`). See `deploy/azure/` for hosting.
 
 mod app;
 mod config;
+mod context;
 mod mailbox;
-mod mcp;
 mod oauth;
 mod secrets;
 mod state;
+mod tools;
 mod users;
 
 use std::sync::Arc;
@@ -58,11 +59,11 @@ async fn main() -> Result<()> {
         config.resource_url(),
     );
 
-    let auth =
-        AuthClient::from_env_with_backend(Arc::new(SecretTokenBackend::new(secrets.clone())))?;
+    let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
+    let auth = AuthClient::from_env_with_backend(token_backend.clone())?;
     let graph = GraphClient::new(auth)?;
 
-    let state: SharedState = Arc::new(AppState::new(config, signer, graph, secrets));
+    let state: SharedState = Arc::new(AppState::new(config, signer, graph, token_backend, secrets));
 
     let cancel = CancellationToken::new();
     let app = app::build_router(state.clone(), cancel.child_token());

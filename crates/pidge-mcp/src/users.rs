@@ -28,7 +28,6 @@ pub struct UserRecord {
 
 impl UserRecord {
     /// A fresh record for `signin`: one mailbox (itself), Stockholm timezone.
-    #[allow(dead_code)] // wired into the sign-in callback in Task 8
     pub fn new(signin: &str) -> Self {
         let signin = signin.to_ascii_lowercase();
         Self {
@@ -42,7 +41,6 @@ impl UserRecord {
     }
 
     /// Case-insensitive check of whether this user owns `mailbox`.
-    #[allow(dead_code)] // used by mailbox-scoped tools in later tasks
     pub fn owns(&self, mailbox: &str) -> bool {
         self.mailboxes
             .iter()
@@ -51,7 +49,6 @@ impl UserRecord {
 
     /// The user's timezone, falling back to Stockholm if `timezone` doesn't
     /// parse as an IANA zone.
-    #[allow(dead_code)] // used by time-range and calendar tools in later tasks
     pub fn tz(&self) -> chrono_tz::Tz {
         self.timezone
             .parse()
@@ -79,7 +76,6 @@ enum StoredMailbox {
 
 /// A mailbox is claimed by someone other than the caller.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // constructed by check_ownership, consumed by tools in later tasks
 pub enum OwnershipError {
     #[error("mailbox is owned by another user")]
     OwnedByOther,
@@ -99,7 +95,6 @@ impl UserStore {
     }
 
     /// Load the user record for `signin`, `None` if never signed in.
-    #[allow(dead_code)] // wired into the sign-in callback and tools in Task 8+
     pub async fn load(&self, signin: &str) -> Result<Option<UserRecord>> {
         let Some(raw) = self.secrets.get(&user_secret_name(signin)).await? else {
             return Ok(None);
@@ -111,7 +106,6 @@ impl UserStore {
     }
 
     /// Persist a user record, keyed by its (already lower-cased) `signin`.
-    #[allow(dead_code)] // wired into the sign-in callback and tools in Task 8+
     pub async fn save(&self, rec: &UserRecord) -> Result<()> {
         let raw = serde_json::to_string(rec)?;
         self.secrets.set(&user_secret_name(&rec.signin), &raw).await
@@ -144,7 +138,6 @@ impl UserStore {
 
     /// `Ok(())` if `mailbox` is unowned or already owned by `owner`;
     /// `Err(OwnershipError::OwnedByOther)` if it's claimed by someone else.
-    #[allow(dead_code)] // used by mailbox-connect and mailbox-scoped tools in later tasks
     pub async fn check_ownership(&self, mailbox: &str, owner: &str) -> Result<(), OwnershipError> {
         match self.load_mailbox(mailbox).await? {
             Some(rec) if !rec.owner.eq_ignore_ascii_case(owner) => {
@@ -157,10 +150,26 @@ impl UserStore {
     /// Delete a mailbox's stored tokens. Modelled as writing an empty
     /// string rather than a real delete: Key Vault soft-delete makes true
     /// deletion slow, and the name space is per-mailbox anyway.
-    #[allow(dead_code)] // used by a disconnect-mailbox tool in a later task
     pub async fn delete_mailbox(&self, mailbox: &str) -> Result<()> {
         self.secrets.set(&mailbox_secret_name(mailbox), "").await
     }
+}
+
+/// A short, stable, non-reversible tag for a sign-in address, for logs:
+/// the first 8 hex characters of the SHA-256 of the lower-cased address.
+/// Addresses themselves never go into a log line.
+pub fn user_hash(signin: &str) -> String {
+    sha256_hex(signin)[..8].to_string()
+}
+
+fn sha256_hex(signin: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(signin.to_ascii_lowercase().as_bytes());
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 /// Secret name for a user record: `"user-"` + the first 16 hex characters of
@@ -168,11 +177,7 @@ impl UserStore {
 /// sanitized like [`mailbox_secret_name`]) so the secret name itself doesn't
 /// leak the address into logs or Key Vault's secret listing.
 pub fn user_secret_name(signin: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(signin.to_ascii_lowercase().as_bytes());
-    let digest = hasher.finalize();
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("user-{}", &hex[..16])
+    format!("user-{}", &sha256_hex(signin)[..16])
 }
 
 #[cfg(test)]
@@ -181,6 +186,18 @@ mod tests {
 
     use super::*;
     use crate::secrets::FileSecrets;
+
+    #[test]
+    fn user_hash_is_short_stable_and_case_insensitive() {
+        let h = user_hash("Jane@Example.com");
+        assert_eq!(h.len(), 8);
+        assert_eq!(h, user_hash("jane@example.com"));
+        assert!(!h.contains('@'));
+        assert_ne!(h, user_hash("mallory@example.com"));
+        assert!(
+            user_secret_name("jane@example.com").ends_with(&sha256_hex("jane@example.com")[..16])
+        );
+    }
 
     #[tokio::test]
     async fn new_user_record_defaults() {
