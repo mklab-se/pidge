@@ -296,9 +296,10 @@ refresh tokens leave the machine.
 
 ### 2.4 Hardening carried over from the spike
 
-- Confidential client for the server on the Entra app (client secret in Key
-  Vault, rotated manually) — or keep the public-client redirect if Microsoft
-  keeps accepting it; decide during the plan.
+- The server stays a public client of the Entra app (PKCE, hosted callback
+  registered as a public-client redirect URI). It works, it avoids a secret
+  that expires, and the token never leaves the server anyway. Revisit only if
+  Microsoft stops accepting https public-client redirects.
 - Key Vault purge protection on.
 - Refresh-token revocation: keep a per-user `token_generation` counter in
   the user record; refresh tokens carry it; bumping it revokes all sessions
