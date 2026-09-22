@@ -16,11 +16,15 @@ pub enum Direction {
     Future,
 }
 
-fn local_midnight(tz: Tz, date: NaiveDate) -> DateTime<Utc> {
+fn local_midnight(tz: Tz, date: NaiveDate) -> Result<DateTime<Utc>, String> {
     tz.from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
         .earliest()
-        .expect("midnight exists")
-        .with_timezone(&Utc)
+        .map(|d| d.with_timezone(&Utc))
+        .ok_or_else(|| {
+            format!(
+                "local midnight on {date} does not exist in {tz} (DST gap); use an explicit RFC 3339 time"
+            )
+        })
 }
 
 /// Parse a single timestamp: RFC 3339, a naive `YYYY-MM-DDTHH:MM:SS` (interpreted
@@ -35,7 +39,11 @@ pub fn parse_point(s: &str, tz: Tz, end_of_day: bool) -> Result<DateTime<Utc>, S
             .from_local_datetime(&naive)
             .earliest()
             .map(|d| d.with_timezone(&Utc))
-            .ok_or_else(|| format!("ambiguous local time {s}"));
+            .ok_or_else(|| {
+                format!(
+                    "local time {s} does not exist in {tz} (DST gap); use an explicit RFC 3339 time"
+                )
+            });
     }
     if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         let date = if end_of_day {
@@ -43,7 +51,7 @@ pub fn parse_point(s: &str, tz: Tz, end_of_day: bool) -> Result<DateTime<Utc>, S
         } else {
             date
         };
-        return Ok(local_midnight(tz, date));
+        return local_midnight(tz, date);
     }
     Err(format!(
         "cannot parse date {s:?}; use YYYY-MM-DD or RFC 3339"
@@ -87,10 +95,10 @@ pub fn parse_range(
     let monday = today - Duration::days(today.weekday().num_days_from_monday() as i64);
     let days = |d: NaiveDate, n: i64| local_midnight(tz, d + Duration::days(n));
     match range.unwrap_or("today") {
-        "today" => Ok((days(today, 0), days(today, 1))),
-        "tomorrow" => Ok((days(today, 1), days(today, 2))),
-        "this_week" => Ok((days(monday, 0), days(monday, 7))),
-        "next_week" => Ok((days(monday, 7), days(monday, 14))),
+        "today" => Ok((days(today, 0)?, days(today, 1)?)),
+        "tomorrow" => Ok((days(today, 1)?, days(today, 2)?)),
+        "this_week" => Ok((days(monday, 0)?, days(monday, 7)?)),
+        "next_week" => Ok((days(monday, 7)?, days(monday, 14)?)),
         "next" => Ok((now, now + Duration::days(14))),
         other => {
             let n: i64 = other
@@ -190,6 +198,35 @@ mod tests {
                 Direction::Future
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn today_errors_instead_of_panicking_across_a_dst_gap() {
+        // America/Sao_Paulo sprang forward at 2018-11-04T00:00:00, so local
+        // midnight on that date does not exist. 15:00 local that same day is a
+        // valid, unambiguous moment we can use as `now`.
+        let dst_gap_day_tz = chrono_tz::America::Sao_Paulo;
+        let now_on_gap_day = dst_gap_day_tz
+            .with_ymd_and_hms(2018, 11, 4, 15, 0, 0)
+            .unwrap()
+            .with_timezone(&Utc);
+        let result = parse_range(
+            Some("today"),
+            None,
+            None,
+            dst_gap_day_tz,
+            now_on_gap_day,
+            Direction::Future,
+        );
+        assert!(result.is_err());
+    }
+    #[test]
+    fn parse_point_errors_on_a_nonexistent_local_time() {
+        let err =
+            parse_point("2018-11-04T00:30:00", chrono_tz::America::Sao_Paulo, false).unwrap_err();
+        assert!(
+            err.contains("does not exist"),
+            "expected 'does not exist' in error, got: {err}"
         );
     }
 }
