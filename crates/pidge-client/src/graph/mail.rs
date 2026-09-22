@@ -26,12 +26,29 @@ struct GraphMessage {
     conversation_id: Option<String>,
     #[serde(default)]
     flag: Option<GraphFlag>,
+    #[serde(rename = "toRecipients", default)]
+    to_recipients: Vec<GraphFromWrapper>,
+    #[serde(rename = "ccRecipients", default)]
+    cc_recipients: Vec<GraphFromWrapper>,
 }
 
 #[derive(Debug, Deserialize)]
 struct GraphFlag {
     #[serde(rename = "flagStatus", default)]
     flag_status: Option<String>,
+}
+
+fn recipient_from(addr: GraphFromAddress) -> MessageFrom {
+    MessageFrom {
+        name: addr.name.unwrap_or_default(),
+        address: addr.address.unwrap_or_default(),
+    }
+}
+
+fn unwrap_recipients(rs: Vec<GraphFromWrapper>) -> Vec<MessageFrom> {
+    rs.into_iter()
+        .map(|w| recipient_from(w.email_address))
+        .collect()
 }
 
 fn flag_status_from(g: Option<GraphFlag>) -> FlagStatus {
@@ -222,7 +239,7 @@ async fn list_folder(
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
             "$select",
-            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId,toRecipients,ccRecipients",
         ),
         ("$orderby", "receivedDateTime desc"),
         ("$top", &limit.to_string()),
@@ -297,7 +314,7 @@ pub async fn list_conversation(
         .query(&[
             (
                 "$select",
-                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId,toRecipients,ccRecipients",
             ),
             // No $orderby: Graph rejects conversationId filters combined
             // with a sort ("InefficientFilter") — we sort client-side.
@@ -438,6 +455,8 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
         has_attachments: g.has_attachments.unwrap_or(false),
         body,
         body_content_type,
+        to: unwrap_recipients(g.to_recipients),
+        cc: unwrap_recipients(g.cc_recipients),
     }
 }
 
@@ -465,16 +484,6 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
     }
     let g: GraphFullMessage = resp.json().await?;
 
-    fn from(addr: GraphFromAddress) -> pidge_core::MessageFrom {
-        pidge_core::MessageFrom {
-            name: addr.name.unwrap_or_default(),
-            address: addr.address.unwrap_or_default(),
-        }
-    }
-    fn unwrap_recipients(rs: Vec<GraphFromWrapper>) -> Vec<pidge_core::MessageFrom> {
-        rs.into_iter().map(|w| from(w.email_address)).collect()
-    }
-
     let content_type = match g.body.content_type.to_lowercase().as_str() {
         "html" => pidge_core::BodyContentType::Html,
         _ => pidge_core::BodyContentType::Text,
@@ -486,7 +495,7 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         conversation_id: g.conversation_id.unwrap_or_default(),
         from: g
             .from
-            .map(|w| from(w.email_address))
+            .map(|w| recipient_from(w.email_address))
             .unwrap_or_else(|| pidge_core::MessageFrom {
                 name: String::new(),
                 address: String::new(),

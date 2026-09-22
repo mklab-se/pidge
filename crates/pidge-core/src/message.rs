@@ -36,6 +36,11 @@ pub struct Message {
     pub body: String,
     #[serde(default)]
     pub body_content_type: BodyContentType,
+    /// `To` recipients; empty for old cache entries and providers that don't list them.
+    #[serde(default)]
+    pub to: Vec<MessageFrom>,
+    #[serde(default)]
+    pub cc: Vec<MessageFrom>,
 }
 
 /// Outlook's follow-up flag state on a message. Three values to match what
@@ -128,6 +133,8 @@ mod tests {
             has_attachments: false,
             body: String::new(),
             body_content_type: BodyContentType::Text,
+            to: vec![],
+            cc: vec![],
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: Message = serde_json::from_str(&json).unwrap();

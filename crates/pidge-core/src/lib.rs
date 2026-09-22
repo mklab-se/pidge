@@ -9,6 +9,7 @@ mod config;
 mod contacts;
 mod error;
 mod event;
+pub mod flags;
 mod message;
 pub mod render;
 
