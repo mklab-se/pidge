@@ -455,6 +455,40 @@ async fn sign_in_refuses_a_mailbox_another_user_connected() {
 }
 
 #[tokio::test]
+async fn connect_invalidates_the_owners_read_cache() {
+    let h = harness("second@example.com").await; // Microsoft mock signs in as second@…
+    h.state.insert_pending(
+        "s1".into(),
+        PendingAuthorization {
+            kind: PendingKind::Connect {
+                owner: "jane@example.com".into(),
+            },
+            ..pending_stub()
+        },
+    );
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    h.state
+        .cache
+        .put("jane@example.com", "k".into(), "v".into());
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/callback?code=x&state=s1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(h.state.cache.get("jane@example.com", "k").is_none());
+}
+
+#[tokio::test]
 async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
     let h = harness("second@example.com").await; // Microsoft mock signs in as second@…
     let state = h.state.clone();

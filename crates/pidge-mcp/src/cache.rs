@@ -114,4 +114,39 @@ mod tests {
             ReadCache::key("t", &serde_json::json!({"a":2,"b":1}))
         );
     }
+
+    #[test]
+    fn key_is_order_independent_through_nested_objects_and_arrays_of_objects() {
+        let a = serde_json::json!({
+            "b": {"y": 1, "x": 2},
+            "a": [{"n": 1, "m": 2}, {"q": 3}],
+        });
+        // Same array order (arrays are position-sensitive), but each nested
+        // object's fields are reordered.
+        let b = serde_json::json!({
+            "a": [{"m": 2, "n": 1}, {"q": 3}],
+            "b": {"x": 2, "y": 1},
+        });
+        assert_eq!(ReadCache::key("t", &a), ReadCache::key("t", &b));
+    }
+
+    #[test]
+    fn per_user_capacity_evicts_the_least_recently_used_entry() {
+        let c = ReadCache::new(Duration::from_secs(60), 8);
+        for i in 0..8 {
+            c.put("u", format!("k{i}"), format!("v{i}"));
+        }
+        // Touch k0 so k1, not k0, becomes the least-recently-used entry.
+        assert_eq!(c.get("u", "k0").as_deref(), Some("v0"));
+
+        // A 9th entry overflows the 8-capacity LRU and evicts k1.
+        c.put("u", "k8".into(), "v8".into());
+        assert_eq!(
+            c.get("u", "k0").as_deref(),
+            Some("v0"),
+            "recently used, kept"
+        );
+        assert_eq!(c.get("u", "k1"), None, "least recently used, evicted");
+        assert_eq!(c.get("u", "k8").as_deref(), Some("v8"));
+    }
 }

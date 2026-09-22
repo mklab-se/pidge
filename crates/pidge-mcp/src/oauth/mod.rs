@@ -483,6 +483,7 @@ async fn bind_mailbox(
         ));
     }
     state.token_backend.forget(mailbox);
+    state.cache.invalidate_user(owner);
     None
 }
 
@@ -513,9 +514,12 @@ async fn sign_in_complete(
             return callback_failure(pending, "server_error", "could not load the user profile");
         }
     };
-    if !has_record && let Err(e) = state.users.save(&UserRecord::new(email)).await {
-        log_store_error("creating user record", email, &e);
-        return callback_failure(pending, "server_error", "could not create the user profile");
+    if !has_record {
+        if let Err(e) = state.users.save(&UserRecord::new(email)).await {
+            log_store_error("creating user record", email, &e);
+            return callback_failure(pending, "server_error", "could not create the user profile");
+        }
+        state.cache.invalidate_user(email);
     }
 
     let code = match state.signer.issue_code(
@@ -594,6 +598,7 @@ async fn connect_complete(
         log_store_error("saving user record", owner, &e);
         return callback_failure(pending, "server_error", "could not save the user profile");
     }
+    state.cache.invalidate_user(owner);
 
     tracing::info!(
         user = %user_hash(owner),
