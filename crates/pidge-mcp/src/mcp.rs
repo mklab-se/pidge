@@ -197,7 +197,13 @@ impl PidgeMcp {
 impl ServerHandler for PidgeMcp {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::from_build_env())
+            .with_server_info({
+                let mut info = Implementation::new("pidge", env!("CARGO_PKG_VERSION"));
+                info.title = Some("pidge".into());
+                info.description = Some("Outlook mail for AI agents".into());
+                info.website_url = Some("https://github.com/mklab-se/pidge".into());
+                info
+            })
             .with_protocol_version(ProtocolVersion::LATEST)
             .with_instructions(
                 "pidge gives you the signed-in user's Outlook mailbox. Start with inbox_latest, \
