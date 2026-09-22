@@ -97,13 +97,13 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             .await
         }
         MailCommands::Move {
-            fragment,
+            fragments,
             to,
             from,
             older_than,
             account,
             yes,
-        } => crate::commands::mail_move::run(fragment, from, older_than, account, to, yes).await,
+        } => crate::commands::mail_move::run(fragments, from, older_than, account, to, yes).await,
         MailCommands::Folders { account } => {
             crate::commands::mail_folders::run(account, json).await
         }
@@ -124,12 +124,12 @@ pub async fn run(command: MailCommands, json: bool) -> Result<()> {
             crate::commands::mail_compose::forward(fragment, compose).await
         }
         MailCommands::Delete {
-            fragment,
+            fragments,
             from,
             older_than,
             account,
             yes,
-        } => crate::commands::mail_delete::run(fragment, from, older_than, account, yes).await,
+        } => crate::commands::mail_delete::run(fragments, from, older_than, account, yes).await,
         MailCommands::Unsubscribe { fragment, yes } => {
             crate::commands::mail_unsubscribe::run(fragment, yes).await
         }

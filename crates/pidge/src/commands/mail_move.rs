@@ -7,8 +7,9 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use colored::Colorize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use pidge_client::graph::batch::BatchRequest;
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
 
@@ -19,10 +20,10 @@ use crate::commands::mail_delete::parse_older_than;
 use crate::commands::mail_folders::ensure_folder;
 use crate::commands::mail_fragment::{purge_from_cache, resolve};
 
-/// Dispatch for `pidge mail move`: single (fragment) or bulk (`--from` /
+/// Dispatch for `pidge mail move`: single/multi (fragments) or bulk (`--from` /
 /// `--older-than`). `to` is the destination folder's display name.
 pub async fn run(
-    fragment: Option<String>,
+    fragments: Vec<String>,
     from: Vec<String>,
     older_than: Option<String>,
     accounts: Vec<String>,
@@ -32,17 +33,126 @@ pub async fn run(
     if to.trim().is_empty() {
         return Err(anyhow!("--to <folder> must name a non-empty folder."));
     }
-    match (fragment, from.is_empty(), older_than.as_ref()) {
-        (Some(f), true, None) => move_single(f, &to).await,
-        (None, false, _) | (None, _, Some(_)) => {
-            move_bulk(from, older_than, accounts, &to, yes).await
-        }
-        (None, true, None) => Err(anyhow!(
-            "Specify a fragment, `--from <sender>`, or `--older-than <spec>`. \
+    match (fragments.len(), from.is_empty(), older_than.as_ref()) {
+        (1, true, None) => move_single(fragments.into_iter().next().unwrap(), &to).await,
+        (n, true, None) if n > 1 => move_multi(fragments, &to, yes).await,
+        (0, false, _) | (0, _, Some(_)) => move_bulk(from, older_than, accounts, &to, yes).await,
+        (0, true, None) => Err(anyhow!(
+            "Specify one or more fragments, `--from <sender>`, or `--older-than <spec>`. \
              Run `pidge mail move --help`."
         )),
-        (Some(_), _, _) => unreachable!("clap enforces conflicts_with"),
+        _ => unreachable!("clap enforces conflicts_with"),
     }
+}
+
+/// Move an exact, hand-picked set of messages named by hash fragments into
+/// `to`, creating the destination folder per account as needed. Unresolvable
+/// fragments are reported and skipped. Requires `-y` when moving more than one.
+async fn move_multi(fragments: Vec<String>, to: &str, yes: bool) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Bulk,
+        &format!("move {} hand-picked messages to {to}", fragments.len()),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+    if !yes {
+        return Err(anyhow!(
+            "Moving multiple messages requires explicit `-y` confirmation. \
+             Re-run with `-y` if you really mean it."
+        ));
+    }
+
+    // Resolve fragments, grouping by account (folder IDs are per-account).
+    let mut by_account: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    for frag in &fragments {
+        match resolve(frag) {
+            Ok((short, r)) => {
+                if seen.insert(short.clone()) {
+                    by_account
+                        .entry(r.account)
+                        .or_default()
+                        .push((short, r.graph_id));
+                }
+            }
+            Err(_) => unresolved.push(frag.clone()),
+        }
+    }
+
+    if by_account.is_empty() {
+        return Err(anyhow!(
+            "None of the {} fragment(s) resolved to a cached message. \
+             Run `pidge mail` (or `mail search`) to refresh the cache.",
+            fragments.len()
+        ));
+    }
+
+    let graph = GraphClient::new(AuthClient::from_env()?)?;
+    let mut total = 0usize;
+    for (account, items) in &by_account {
+        let (folder_id, created) = ensure_folder(&graph, account, to).await?;
+        if created {
+            println!(
+                "{} Created folder {} in {}.",
+                "✔".green(),
+                to.cyan(),
+                account.dimmed()
+            );
+        }
+        let requests: Vec<BatchRequest> = items
+            .iter()
+            .map(|(short, gid)| {
+                BatchRequest::json(
+                    short.clone(),
+                    "POST",
+                    format!("/me/messages/{gid}/move"),
+                    serde_json::json!({ "destinationId": folder_id }),
+                )
+            })
+            .collect();
+        let responses = match graph.batch_all(account, requests).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  {} move failed for {account}: {e}", "!".red());
+                continue;
+            }
+        };
+        let mut ok = 0usize;
+        for item in responses {
+            if item.is_success() {
+                ok += 1;
+                let _ = purge_from_cache(&item.id);
+            } else if item.status == 404 {
+                // already gone
+            } else {
+                eprintln!(
+                    "  {} failed to move {}: HTTP {}",
+                    "!".red(),
+                    item.id.dimmed(),
+                    item.status
+                );
+            }
+        }
+        total += ok;
+        println!(
+            "{} {account}: moved {ok} message{} to {}",
+            "✔".green(),
+            if ok == 1 { "" } else { "s" },
+            to.cyan()
+        );
+    }
+    if !unresolved.is_empty() {
+        eprintln!(
+            "{} {} fragment(s) didn't resolve and were skipped: {}",
+            "!".yellow(),
+            unresolved.len(),
+            unresolved.join(", ").dimmed()
+        );
+    }
+    println!("{} Total moved: {total}.", "✔".green().bold());
+    Ok(())
 }
 
 async fn move_single(fragment: String, to: &str) -> Result<()> {

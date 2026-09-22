@@ -16,29 +16,129 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 use colored::Colorize;
 use futures::future::join_all;
 use inquire::Confirm;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
+use pidge_client::graph::batch::BatchRequest;
 use pidge_client::{AuthClient, ClientError, GraphClient};
 use pidge_core::Config;
 
 use crate::commands::mail_fragment::{purge_from_cache, resolve};
 
 pub async fn run(
-    fragment: Option<String>,
+    fragments: Vec<String>,
     from: Vec<String>,
     older_than: Option<String>,
     accounts: Vec<String>,
     yes: bool,
 ) -> Result<()> {
-    match (fragment, from.is_empty(), older_than.as_ref()) {
-        (Some(f), true, None) => delete_single(f, yes).await,
-        (None, false, _) | (None, _, Some(_)) => delete_bulk(from, older_than, accounts, yes).await,
-        (None, true, None) => Err(anyhow!(
-            "Specify a fragment, `--from <sender>`, or `--older-than <spec>`. \
+    match (fragments.len(), from.is_empty(), older_than.as_ref()) {
+        (1, true, None) => delete_single(fragments.into_iter().next().unwrap(), yes).await,
+        (n, true, None) if n > 1 => delete_multi(fragments, yes).await,
+        (0, false, _) | (0, _, Some(_)) => delete_bulk(from, older_than, accounts, yes).await,
+        (0, true, None) => Err(anyhow!(
+            "Specify one or more fragments, `--from <sender>`, or `--older-than <spec>`. \
              Run `pidge mail delete --help`."
         )),
-        (Some(_), _, _) => unreachable!("clap enforces conflicts_with"),
+        _ => unreachable!("clap enforces conflicts_with"),
     }
+}
+
+/// Delete an exact, hand-picked set of messages named by hash fragments.
+/// Each fragment is resolved against the local cache; resolution failures are
+/// reported but don't abort the run (the resolvable ones still get deleted).
+/// Requires `-y` — there's no per-message prompt for a batch this size.
+async fn delete_multi(fragments: Vec<String>, yes: bool) -> Result<()> {
+    let gate = crate::guardrail::gate(
+        crate::guardrail::GuardrailAction::Bulk,
+        &format!("delete {} hand-picked messages", fragments.len()),
+    )?;
+    if gate == crate::guardrail::Gate::DryRun {
+        return Ok(());
+    }
+    if !yes {
+        return Err(anyhow!(
+            "Deleting multiple messages requires explicit `-y` confirmation. \
+             Re-run with `-y` if you really mean it."
+        ));
+    }
+
+    // Resolve every fragment first, grouping by account for batched deletes.
+    // (short_hash, graph_id) per account. De-dupe on short_hash so a repeated
+    // fragment isn't issued twice.
+    let mut by_account: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut unresolved: Vec<String> = Vec::new();
+    for frag in &fragments {
+        match resolve(frag) {
+            Ok((short, r)) => {
+                if seen.insert(short.clone()) {
+                    by_account
+                        .entry(r.account)
+                        .or_default()
+                        .push((short, r.graph_id));
+                }
+            }
+            Err(_) => unresolved.push(frag.clone()),
+        }
+    }
+
+    if by_account.is_empty() {
+        return Err(anyhow!(
+            "None of the {} fragment(s) resolved to a cached message. \
+             Run `pidge mail` (or `mail search`) to refresh the cache.",
+            fragments.len()
+        ));
+    }
+
+    let graph = GraphClient::new(AuthClient::from_env()?)?;
+    let mut total = 0usize;
+    for (account, items) in &by_account {
+        let requests: Vec<BatchRequest> = items
+            .iter()
+            .map(|(short, gid)| {
+                BatchRequest::bare(short.clone(), "DELETE", format!("/me/messages/{gid}"))
+            })
+            .collect();
+        let responses = match graph.batch_all(account, requests).await {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("  {} delete failed for {account}: {e}", "!".red());
+                continue;
+            }
+        };
+        let mut ok = 0usize;
+        for item in responses {
+            if item.is_success() {
+                ok += 1;
+                let _ = purge_from_cache(&item.id);
+            } else if item.status == 404 {
+                // already gone
+            } else {
+                eprintln!(
+                    "  {} failed to delete {}: HTTP {}",
+                    "!".red(),
+                    item.id.dimmed(),
+                    item.status
+                );
+            }
+        }
+        total += ok;
+        println!(
+            "{} {account}: deleted {ok} message{}",
+            "✔".green(),
+            if ok == 1 { "" } else { "s" }
+        );
+    }
+    if !unresolved.is_empty() {
+        eprintln!(
+            "{} {} fragment(s) didn't resolve and were skipped: {}",
+            "!".yellow(),
+            unresolved.len(),
+            unresolved.join(", ").dimmed()
+        );
+    }
+    println!("{} Total deleted: {total}.", "✔".green().bold());
+    Ok(())
 }
 
 async fn delete_single(fragment: String, yes: bool) -> Result<()> {

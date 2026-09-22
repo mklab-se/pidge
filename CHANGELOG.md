@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Multi-select batch delete and move for mail: `mail delete` and `mail move` now accept several
+  hash fragments at once (space-separated) to act on an exact hand-picked set of messages in one
+  call via Microsoft Graph `$batch`, instead of one fragment at a time. Requires `-y` when more
+  than one fragment is given — there's no per-message prompt for a batch this size. Unresolvable
+  fragments are reported and skipped rather than aborting the whole run. Existing single-fragment
+  and bulk (`--from`/`--older-than`) modes are unchanged.
+
 ## [1.3.0] - 2026-09-22
 
 ### Changed

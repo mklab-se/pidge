@@ -466,9 +466,10 @@ pub enum MailCommands {
 
     /// Move a message into a folder, creating the folder if needed. Single or bulk.
     Move {
-        /// Fragment of a single message's 8-char short hash. Omit when using
-        /// a bulk-mode flag like `--from` or `--older-than`.
-        fragment: Option<String>,
+        /// One or more fragments of messages' 8-char short hashes. Pass several
+        /// (space-separated) to move an exact hand-picked set in one call.
+        /// Omit when using a bulk-mode flag like `--from` or `--older-than`.
+        fragments: Vec<String>,
 
         /// Destination folder. Matched case-insensitively against existing
         /// folders; created if absent. Use `/` for nested folders, e.g.
@@ -480,12 +481,12 @@ pub enum MailCommands {
         /// BULK: move every message from this sender address across all
         /// folders (repeatable). Combine with `--older-than` to also
         /// constrain by date. Requires `-y`.
-        #[arg(long, conflicts_with = "fragment")]
+        #[arg(long, conflicts_with = "fragments")]
         from: Vec<String>,
 
         /// BULK: move every Inbox message older than this date or duration
         /// (e.g. `2026-01-01`, `30d`, `6m`, `1y`). Requires `-y`.
-        #[arg(long, conflicts_with = "fragment")]
+        #[arg(long, conflicts_with = "fragments")]
         older_than: Option<String>,
 
         /// Filter bulk move to a specific account (repeatable). Ignored for
@@ -538,20 +539,22 @@ pub enum MailCommands {
 
     /// Delete a message (moves to Deleted Items folder). Single or bulk.
     Delete {
-        /// Fragment of a single message's 8-char short hash. Omit when using
-        /// a bulk-mode flag like `--from` or `--older-than`.
-        fragment: Option<String>,
+        /// One or more fragments of messages' 8-char short hashes. Pass several
+        /// (space-separated) to delete an exact hand-picked set in one call
+        /// (requires `-y` when more than one). Omit when using a bulk-mode flag
+        /// like `--from` or `--older-than`.
+        fragments: Vec<String>,
 
         /// BULK: delete every message from this sender address across all
         /// folders (repeatable). Combine with `--older-than` to also
         /// constrain by date. Requires `-y`.
-        #[arg(long, conflicts_with = "fragment")]
+        #[arg(long, conflicts_with = "fragments")]
         from: Vec<String>,
 
         /// BULK: delete every message in the Inbox older than this date or
         /// duration (e.g. `2026-01-01`, `30d`, `6m`, `1y`). Always requires
         /// `-y` to confirm — there is no interactive prompt for bulk delete.
-        #[arg(long, conflicts_with = "fragment")]
+        #[arg(long, conflicts_with = "fragments")]
         older_than: Option<String>,
 
         /// Filter bulk delete to a specific account (repeatable). Ignored
@@ -577,7 +580,7 @@ pub enum MailCommands {
         yes: bool,
     },
 
-    /// Compose a new e-mail (full-screen form; pass flags + `-y` to skip the form for scripting)
+    /// Compose a new e-mail (full-screen form; `--to`, `--subject` and `--body` together send immediately for scripting)
     New(ComposeArgs),
 
     /// Reply to a message (the original sender only)
