@@ -95,6 +95,9 @@ pub struct FullMessage {
     /// For a meeting request, the calendar event it invites to.
     #[serde(default)]
     pub event_id: Option<String>,
+    /// An unsent draft (Graph `isDraft`).
+    #[serde(default)]
+    pub is_draft: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +184,7 @@ mod tests {
             flag_status: FlagStatus::Flagged,
             is_invite: true,
             event_id: Some("event-1".into()),
+            is_draft: false,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: FullMessage = serde_json::from_str(&json).unwrap();

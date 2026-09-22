@@ -6,6 +6,7 @@
 
 mod accounts;
 mod mail_read;
+mod mail_write;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerConfig};
@@ -32,7 +33,9 @@ impl PidgeMcp {
     pub fn new(state: SharedState) -> Self {
         Self {
             state,
-            tool_router: Self::accounts_router() + Self::mail_read_router(),
+            tool_router: Self::accounts_router()
+                + Self::mail_read_router()
+                + Self::mail_write_router(),
         }
     }
 }

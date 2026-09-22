@@ -276,26 +276,43 @@ impl PidgeMcp {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    /// The message `id` from the first of `accounts` that has it. A 404 or
-    /// an expired session moves on to the next mailbox; any other failure
-    /// ends the search.
-    async fn find_message(&self, accounts: &[String], id: &str) -> Result<FullMessage, McpError> {
+    /// The message `id` from the first of `accounts` that has it, or a
+    /// not-found error pointing at mail_overview / mail_search.
+    pub(crate) async fn find_message(
+        &self,
+        accounts: &[String],
+        id: &str,
+    ) -> Result<FullMessage, McpError> {
+        self.locate_message(accounts, id).await?.ok_or_else(|| {
+            tool_error(format!(
+                "Message {id} was not found in any of your mailboxes; take the id from mail_overview or mail_search"
+            ))
+        })
+    }
+
+    /// The message `id` from the first of `accounts` that has it; `None`
+    /// when every mailbox answered 404. An expired session moves on to the
+    /// next mailbox (and is reported if nothing turns up, since the message
+    /// may be in the mailbox we couldn't look in); any other failure ends
+    /// the search.
+    pub(crate) async fn locate_message(
+        &self,
+        accounts: &[String],
+        id: &str,
+    ) -> Result<Option<FullMessage>, McpError> {
         let mut expired = None;
         for account in accounts {
             match self.state.graph.get_message(account, id).await {
-                Ok(m) => return Ok(m),
+                Ok(m) => return Ok(Some(m)),
                 Err(ClientError::Graph { status: 404, .. }) => {}
                 Err(e @ ClientError::SessionExpired { .. }) => expired = Some(e),
                 Err(e) => return Err(graph_error(e)),
             }
         }
-        Err(match expired {
-            // It may be in the mailbox we couldn't look in.
-            Some(e) => graph_error(e),
-            None => tool_error(format!(
-                "Message {id} was not found in any of your mailboxes; take the id from mail_overview or mail_search"
-            )),
-        })
+        match expired {
+            Some(e) => Err(graph_error(e)),
+            None => Ok(None),
+        }
     }
 
     async fn render_message(&self, tc: &ToolContext, m: FullMessage) -> Result<String, McpError> {
@@ -522,7 +539,7 @@ fn list_output(
 }
 
 /// Plain text for a body: HTML through pidge's renderer with inline links.
-fn body_text(body: &str, kind: BodyContentType) -> String {
+pub(crate) fn body_text(body: &str, kind: BodyContentType) -> String {
     match kind {
         BodyContentType::Html => render_html(body, 100, LinkStyle::Inline),
         BodyContentType::Text => body.to_string(),
@@ -550,7 +567,7 @@ fn folder_id(folder: Option<&str>) -> Result<String, McpError> {
 
 /// Graph ids are URL-safe tokens; anything that could reshape the request
 /// path or query is refused before it reaches a URL.
-fn check_id(id: &str) -> Result<(), McpError> {
+pub(crate) fn check_id(id: &str) -> Result<(), McpError> {
     if id.is_empty() || id.contains(['/', '?', '#', '%']) || id.contains(char::is_whitespace) {
         return Err(tool_error(format!(
             "{id:?} is not a valid id; pass an id exactly as a pidge tool returned it"

@@ -8,6 +8,7 @@
 mod app;
 mod cache;
 mod config;
+mod contacts;
 mod context;
 mod mailbox;
 mod oauth;

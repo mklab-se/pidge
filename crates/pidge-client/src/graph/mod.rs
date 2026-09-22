@@ -22,7 +22,7 @@ pub use mail::{
     list_drafts, list_folder_messages, list_inbox, list_mail_folders, list_messages_at, mark_read,
     mark_unread, move_message, reply_all_message, reply_message, search_folder_messages,
     search_messages, send_draft, send_mail, set_categories, set_flag, unsubscribe_one_click,
-    update_draft,
+    update_draft, update_draft_recipients,
 };
 pub use me::{Me, get_me};
 pub use people::{Person, list_people};
@@ -481,6 +481,20 @@ impl GraphClient {
     ) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::update_draft(&self.http, &self.base_url, &token, message_id, message).await
+    }
+
+    /// PATCH /me/messages/{id} — replace only the given recipient lists.
+    pub async fn update_draft_recipients(
+        &self,
+        account: &str,
+        message_id: &str,
+        to: Option<&[String]>,
+        cc: Option<&[String]>,
+        bcc: Option<&[String]>,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::update_draft_recipients(&self.http, &self.base_url, &token, message_id, to, cc, bcc)
+            .await
     }
 
     /// DELETE /me/messages/{id} — moves to Deleted Items. Works for both

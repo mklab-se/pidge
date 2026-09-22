@@ -123,6 +123,8 @@ struct GraphFullMessage {
     flag: Option<GraphFlag>,
     #[serde(rename = "@odata.type", default)]
     odata_type: Option<String>,
+    #[serde(rename = "isDraft", default)]
+    is_draft: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -522,7 +524,7 @@ pub async fn get_message(
     let url = format!(
         "{base_url}/me/messages/{message_id}\
          ?$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,\
-receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
+receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId,isDraft"
     );
     let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
@@ -570,6 +572,7 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         flag_status: flag_status_from(g.flag),
         is_invite,
         event_id,
+        is_draft: g.is_draft.unwrap_or(false),
     })
 }
 
@@ -1209,6 +1212,45 @@ pub async fn update_draft(
 ) -> Result<(), ClientError> {
     let url = format!("{base_url}/me/messages/{message_id}");
     let body = message.to_graph_json();
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(&body)).await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
+/// PATCH /me/messages/{id} — replace only the recipient lists that are
+/// `Some`, leaving subject and body (e.g. a reply's quoted history) intact.
+pub async fn update_draft_recipients(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    to: Option<&[String]>,
+    cc: Option<&[String]>,
+    bcc: Option<&[String]>,
+) -> Result<(), ClientError> {
+    let mut body = serde_json::Map::new();
+    for (field, list) in [
+        ("toRecipients", to),
+        ("ccRecipients", cc),
+        ("bccRecipients", bcc),
+    ] {
+        if let Some(list) = list {
+            let addresses: Vec<_> = list
+                .iter()
+                .map(|addr| serde_json::json!({ "emailAddress": { "address": addr } }))
+                .collect();
+            body.insert(field.to_string(), addresses.into());
+        }
+    }
+    let url = format!("{base_url}/me/messages/{message_id}");
     let resp =
         super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(&body)).await?;
     let status = resp.status();
@@ -2152,6 +2194,65 @@ mod tests {
         ));
         assert_eq!(m.body_content, "<p>Hi</p>");
         assert!(m.has_attachments);
+    }
+
+    #[tokio::test]
+    async fn get_message_selects_and_maps_the_draft_flag() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/D1"))
+            .respond_with(move |req: &wiremock::Request| {
+                let select = req
+                    .url
+                    .query_pairs()
+                    .find(|(k, _)| k == "$select")
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap_or_default();
+                assert!(select.split(',').any(|f| f == "isDraft"), "{select}");
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "D1",
+                    "receivedDateTime": "2026-05-14T22:00:00Z",
+                    "sentDateTime": "2026-05-14T21:59:30Z",
+                    "body": { "contentType": "text", "content": "" },
+                    "isDraft": true
+                }))
+            })
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let m = get_message(&http, &server.uri(), "AT", "u@e.com", "D1")
+            .await
+            .unwrap();
+        assert!(m.is_draft);
+    }
+
+    #[tokio::test]
+    async fn update_draft_recipients_patches_only_the_given_lists() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path("/me/messages/D1"))
+            .and(body_string(
+                serde_json::json!({
+                    "ccRecipients": [{ "emailAddress": { "address": "cc@example.com" } }]
+                })
+                .to_string(),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        update_draft_recipients(
+            &http,
+            &server.uri(),
+            "AT",
+            "D1",
+            None,
+            Some(&["cc@example.com".to_string()]),
+            None,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
