@@ -82,10 +82,12 @@ Input: `since` (`today` default, `yesterday`, `Nd`, ISO), `unread_only`,
 Output: items newest first. Each item: `id`, `thread`, `account`, `from`,
 `subject`, `age`, `unread`, `preview`, and `flags` drawn from cheap facts the
 server already has: `to-me` (in To, not only Cc), `trusted` (sender on the
-user's trusted list), `list` (has a List-Unsubscribe header), `invite`
+user's trusted list), `invite`
 (meeting request awaiting response, with the event id so `calendar_respond`
 can be called directly), `attachments`, `flagged`, `question` (body preview
-contains a question). Triage is the harness's job, using these flags.
+contains a question). The `list` flag needs message headers, which Graph
+does not return in list queries, so it is only present in `mail_read`.
+Triage is the harness's job, using these flags.
 
 **`mail_search`** — "find the mail from Gabriel about the ticket".
 Input: `query` (free text, Graph `$search`), `from`, `subject`, `after`,
@@ -303,7 +305,7 @@ refresh tokens leave the machine.
 
 ### 2.1 Custom domain `pidge.mklab.se`
 
-- DNS at GoDaddy, subdomain only: `CNAME pidge → ca-pidge-mcp.<env>.
+- DNS at GoDaddy, managed with the `gddy` CLI, subdomain only: `CNAME pidge → ca-pidge-mcp.<env>.
   swedencentral.azurecontainerapps.io` and `TXT asuid.pidge → <verification
   id>`. Apex and `www` untouched.
 - Container Apps managed certificate, declared in Bicep after the hostname
