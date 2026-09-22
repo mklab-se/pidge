@@ -41,9 +41,10 @@ Three, built and shipped in this order. Each gets its own implementation plan.
 
 - **One tool per user intent**, not per Graph call. The harness should
   rarely need more than two calls to satisfy a request.
-- **Reads return compact, ranked plain text.** Every list item carries the
-  ids the harness needs for the follow-up call (message id, thread id,
-  account, event id).
+- **Reads return compact plain text, newest first.** Every list item carries
+  the ids the harness needs for the follow-up call (message id, thread id,
+  account, event id) and a few cheap facts as flags so the harness can
+  triage; the server does not rank.
 - **Writes are two-step.** Content is created as a draft and sent by id.
   `mail_send` never accepts raw content. Nothing is irreversible: delete
   means Deleted Items, cancel means Outlook's cancel.
@@ -51,8 +52,10 @@ Three, built and shipped in this order. Each gets its own implementation plan.
   named account must belong to the user.
 - **E-mail content is untrusted input.** Bodies are wrapped in an explicit
   untrusted block, capped in length, and every tool description says so.
-- **All accounts by default** for reads; merged and sorted, with the account
-  shown on each item.
+- **All accounts by default.** Every read merges every mailbox and every
+  calendar the user has connected unless the user names one; "the next
+  meeting" is the next event anywhere, "today's e-mail" spans all inboxes.
+  Each item shows which account it belongs to.
 
 ### 1.2 Shared conventions
 
@@ -76,14 +79,13 @@ my inbox", "what needs a reply".
 Input: `since` (`today` default, `yesterday`, `Nd`, ISO), `unread_only`,
 `folder` (`inbox` default, `drafts`, `sent`, `archive`, or a folder id),
 `account`, `limit` (default 20, max 50).
-Output: items ordered by a needs-attention score, then by time. Score
-inputs, all heuristic and cheap: addressed to me directly (not cc, not a
-list), sender on the user's trusted list, sender I have replied to before,
-contains a question mark or a request phrase, latest message in a thread I
-participated in, has no List-Unsubscribe header, is a meeting invite awaiting
-response. Each item: `id`, `thread`, `account`, `from`, `subject`, `age`,
-`unread`, `flags` (attachments, invite, flagged), `preview`. Meeting invites
-carry the event id so `calendar_respond` can be called directly.
+Output: items newest first. Each item: `id`, `thread`, `account`, `from`,
+`subject`, `age`, `unread`, `preview`, and `flags` drawn from cheap facts the
+server already has: `to-me` (in To, not only Cc), `trusted` (sender on the
+user's trusted list), `list` (has a List-Unsubscribe header), `invite`
+(meeting request awaiting response, with the event id so `calendar_respond`
+can be called directly), `attachments`, `flagged`, `question` (body preview
+contains a question). Triage is the harness's job, using these flags.
 
 **`mail_search`** — "find the mail from Gabriel about the ticket".
 Input: `query` (free text, Graph `$search`), `from`, `subject`, `after`,
@@ -212,9 +214,9 @@ refresh tokens leave the machine.
   (recent senders/recipients via Graph people and sent items), reusing
   `pidge_core::ContactsCache` without its file persistence. Refreshed when
   older than a day.
-- **Needs-attention scoring** lives in `pidge-core` as a pure function over
-  a message plus user context (trusted senders, my addresses), so the CLI can
-  adopt it later and it is unit-testable without Graph.
+- **Item flags** (§1.3) are computed by a pure function in `pidge-core`
+  over a message plus user context (trusted senders, my addresses), so the
+  CLI can adopt it later and it is unit-testable without Graph.
 - **HTML rendering** (`render_html_body`) and quoted-history stripping move
   from the CLI crate to `pidge-core` (or a small `pidge-render` module inside
   it) so both binaries share the fixture-tested renderer. The CLI's snapshot
@@ -242,7 +244,7 @@ refresh tokens leave the machine.
 
 ### 1.8 Testing
 
-- Pure logic (scoring, range parsing, send-from rules, availability
+- Pure logic (item flags, range parsing, send-from rules, availability
   computation, contact resolution, quoted-history stripping): unit tests in
   `pidge-core` / `pidge-mcp`.
 - Tool handlers: in-process tests with wiremock Graph, as the spike's OAuth
@@ -327,5 +329,7 @@ refresh tokens leave the machine.
 ## Out of scope
 
 Attachment content extraction, reminders, category management beyond
-`mail_act`, multiple calendars as a write target, any server-side model,
-users outside the allowlist, multi-replica deployment.
+`mail_act`, multiple calendars as a write target, any server-side model or
+server-side ranking, stored aliases or signature/style helpers (the harness
+handles these in a skill or in conversation), users outside the allowlist,
+multi-replica deployment.
