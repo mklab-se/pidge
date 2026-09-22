@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file.
   CI/release-process migration on ailloy's side, no API change) plus a `cargo update` refresh
   across the lockfile. No manifest requirement changed; `reqwest` stays on 0.12 to share a single
   TLS stack with Ailloy, and `serde_yaml` stays on 0.9. MSRV unchanged at 1.88.
+- Release tooling: ported `.claude/commands/release.md` to `.claude/skills/release/SKILL.md`
+  (matching the `rusty-tmpl` template's skill format); updated README.md and CLAUDE.md to point
+  at the new path.
 
 ## [1.1.1] - 2026-09-16
 

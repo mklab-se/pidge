@@ -157,7 +157,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor guide.
 
 ## Releasing
 
-Releases are driven by the [`/release`](.claude/commands/release.md) command (run it in Claude
+Releases are driven by the [`/release`](.claude/skills/release/SKILL.md) skill (run it in Claude
 Code with `major`, `minor`, or `patch`). It updates the toolchain and dependencies, runs the CI
 gates, bumps the version, updates the changelog, then commits, pushes, and tags `vX.Y.Z`. Pushing
 the tag triggers `.github/workflows/release.yml`, which:
