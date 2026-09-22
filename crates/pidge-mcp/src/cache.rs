@@ -32,14 +32,12 @@ impl ReadCache {
 
     /// A cache key for `tool` called with `args`, independent of the order
     /// fields were set in (JSON objects are canonicalised before stringifying).
-    #[allow(dead_code)] // used by the mail and calendar read tools (Tasks 10+)
     pub fn key(tool: &str, args: &impl Serialize) -> String {
         let value = serde_json::to_value(args).unwrap_or(Value::Null);
         format!("{tool}\n{}", canonicalize(value))
     }
 
     /// The cached value for `user`'s `key`, or `None` if absent or expired.
-    #[allow(dead_code)] // used via context::cached by the read tools (Tasks 10+)
     pub fn get(&self, user: &str, key: &str) -> Option<String> {
         let mut inner = self.inner.lock().expect("read cache lock");
         let cache = inner.get_mut(user)?;
@@ -51,7 +49,6 @@ impl ReadCache {
         Some(value)
     }
 
-    #[allow(dead_code)] // used via context::cached by the read tools (Tasks 10+)
     pub fn put(&self, user: &str, key: String, value: String) {
         let mut inner = self.inner.lock().expect("read cache lock");
         let cache = inner.entry(user.to_string()).or_insert_with(|| {
@@ -70,7 +67,6 @@ impl ReadCache {
 /// Recursively sorts object keys (via a `BTreeMap`) so two JSON values that
 /// differ only in field order stringify identically. `preserve_order` keeps
 /// `serde_json::Map` in insertion order otherwise, so this can't be skipped.
-#[allow(dead_code)] // used by ReadCache::key, itself unused until Tasks 10+
 fn canonicalize(value: Value) -> Value {
     match value {
         Value::Object(map) => {

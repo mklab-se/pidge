@@ -30,6 +30,15 @@ struct GraphMessage {
     to_recipients: Vec<GraphFromWrapper>,
     #[serde(rename = "ccRecipients", default)]
     cc_recipients: Vec<GraphFromWrapper>,
+    /// Present on derived types only, e.g. `#microsoft.graph.eventMessage`.
+    #[serde(rename = "@odata.type", default)]
+    odata_type: Option<String>,
+}
+
+/// Whether a Graph `@odata.type` names a calendar message
+/// (`eventMessage`, `eventMessageRequest`, `eventMessageResponse`, …).
+fn is_event_message(odata_type: Option<&str>) -> bool {
+    odata_type.is_some_and(|t| t.starts_with("#microsoft.graph.eventMessage"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +121,8 @@ struct GraphFullMessage {
     has_attachments: Option<bool>,
     #[serde(default)]
     flag: Option<GraphFlag>,
+    #[serde(rename = "@odata.type", default)]
+    odata_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -378,9 +389,47 @@ pub async fn search_messages(
     query: &str,
     limit: usize,
 ) -> Result<InboxPage, ClientError> {
+    search_in(http, base_url, access_token, account, None, query, limit).await
+}
+
+/// Like [`search_messages`], restricted to one folder (a well-known name
+/// such as `inbox`, or a folder id).
+pub async fn search_folder_messages(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    folder: &str,
+    query: &str,
+    limit: usize,
+) -> Result<InboxPage, ClientError> {
+    search_in(
+        http,
+        base_url,
+        access_token,
+        account,
+        Some(folder),
+        query,
+        limit,
+    )
+    .await
+}
+
+async fn search_in(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    folder: Option<&str>,
+    query: &str,
+    limit: usize,
+) -> Result<InboxPage, ClientError> {
     // $search expects a quoted KQL string; the user passes the raw query.
     let quoted = format!("\"{}\"", query.replace('"', "\\\""));
-    let url = format!("{base_url}/me/messages");
+    let url = match folder {
+        Some(f) => format!("{base_url}/me/mailFolders/{f}/messages"),
+        None => format!("{base_url}/me/messages"),
+    };
     let resp = super::send_with_retry(
         http.get(&url)
             .bearer_auth(access_token)
@@ -388,7 +437,7 @@ pub async fn search_messages(
             .query(&[
                 (
                     "$select",
-                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId,toRecipients,ccRecipients",
                 ),
                 ("$top", &limit.to_string()),
                 ("$search", &quoted),
@@ -457,6 +506,7 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
         body_content_type,
         to: unwrap_recipients(g.to_recipients),
         cc: unwrap_recipients(g.cc_recipients),
+        is_invite: is_event_message(g.odata_type.as_deref()),
     }
 }
 
@@ -511,6 +561,7 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         body_content: g.body.content,
         has_attachments: g.has_attachments.unwrap_or(false),
         flag_status: flag_status_from(g.flag),
+        is_invite: is_event_message(g.odata_type.as_deref()),
     })
 }
 
@@ -1449,6 +1500,24 @@ mod tests {
     use wiremock::matchers::{body_string, header, method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    #[test]
+    fn event_message_rows_are_invites_and_plain_messages_are_not() {
+        let row = |odata_type: Option<&str>| {
+            let mut v = serde_json::json!({
+                "id": "m1",
+                "receivedDateTime": "2026-09-23T08:00:00Z",
+            });
+            if let Some(t) = odata_type {
+                v["@odata.type"] = t.into();
+            }
+            message_from_delta_value(v, "a@example.com").unwrap()
+        };
+        assert!(row(Some("#microsoft.graph.eventMessage")).is_invite);
+        assert!(row(Some("#microsoft.graph.eventMessageRequest")).is_invite);
+        assert!(!row(Some("#microsoft.graph.message")).is_invite);
+        assert!(!row(None).is_invite);
+    }
+
     #[tokio::test]
     async fn list_inbox_parses_graph_response() {
         let server = MockServer::start().await;
@@ -1555,6 +1624,35 @@ mod tests {
             .messages;
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].subject, "Q4 budget review");
+    }
+
+    #[tokio::test]
+    async fn search_folder_messages_searches_within_the_folder() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/sentitems/messages"))
+            .and(query_param("$search", "\"budget\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [{ "id": "S1", "receivedDateTime": "2026-05-13T22:00:00Z" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let msgs = search_folder_messages(
+            &http,
+            &server.uri(),
+            "AT",
+            "u@e.com",
+            "sentitems",
+            "budget",
+            25,
+        )
+        .await
+        .unwrap()
+        .messages;
+        assert_eq!(msgs[0].id, "S1");
     }
 
     #[tokio::test]

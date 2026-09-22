@@ -20,8 +20,9 @@ pub use mail::{
     delete_attachment, delete_mail_folder, delete_message, fetch_message_headers, forward_message,
     get_attachment_bytes, get_categories, get_message, list_attachments, list_child_folders,
     list_drafts, list_folder_messages, list_inbox, list_mail_folders, list_messages_at, mark_read,
-    mark_unread, move_message, reply_all_message, reply_message, search_messages, send_draft,
-    send_mail, set_categories, set_flag, unsubscribe_one_click, update_draft,
+    mark_unread, move_message, reply_all_message, reply_message, search_folder_messages,
+    search_messages, send_draft, send_mail, set_categories, set_flag, unsubscribe_one_click,
+    update_draft,
 };
 pub use me::{Me, get_me};
 pub use people::{Person, list_people};
@@ -249,6 +250,27 @@ impl GraphClient {
     ) -> Result<InboxPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         search_messages(&self.http, &self.base_url, &token, account, query, limit).await
+    }
+
+    /// `$search` within one folder (well-known name or folder id).
+    pub async fn search_folder(
+        &self,
+        account: &str,
+        folder: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<InboxPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        search_folder_messages(
+            &self.http,
+            &self.base_url,
+            &token,
+            account,
+            folder,
+            query,
+            limit,
+        )
+        .await
     }
 
     /// PATCH /me/messages/{id} with `{ "isRead": false }`.

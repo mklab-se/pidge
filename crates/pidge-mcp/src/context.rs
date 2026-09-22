@@ -16,10 +16,8 @@ use crate::state::SharedState;
 use crate::users::{UserRecord, log_store_error, user_hash};
 
 pub struct ToolContext {
-    #[allow(dead_code)] // read by the mail and calendar tools (Tasks 10+)
     pub user: AuthenticatedUser,
     pub record: UserRecord,
-    #[allow(dead_code)] // read by the mail and calendar tools (Tasks 10+)
     pub tz: chrono_tz::Tz,
 }
 
@@ -73,7 +71,6 @@ impl ToolContext {
     }
 
     /// Every address the user receives mail at.
-    #[allow(dead_code)] // used for item flags by the mail tools (Tasks 10+)
     pub fn my_addresses(&self) -> &[String] {
         &self.record.mailboxes
     }
@@ -97,7 +94,6 @@ impl ToolContext {
 /// calls `f` and, only on success, stores the result under `key` before
 /// returning it. `key` is opaque to this function — callers build it with
 /// [`crate::cache::ReadCache::key`].
-#[allow(dead_code)] // used by the mail and calendar read tools (Tasks 10+)
 pub async fn cached<F, Fut>(
     state: &SharedState,
     user: &str,
@@ -124,7 +120,6 @@ pub fn tool_error(msg: impl Into<String>) -> McpError {
 }
 
 /// Maps a Graph failure to a one-line message; never a Graph payload dump.
-#[allow(dead_code)] // used by every Graph-calling tool (Tasks 10+)
 pub fn graph_error(e: ClientError) -> McpError {
     let msg = match e {
         ClientError::SessionExpired { email } => {

@@ -5,6 +5,7 @@
 //! nothing in a tool's input can name another user.
 
 mod accounts;
+mod mail_read;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerConfig};
@@ -31,7 +32,7 @@ impl PidgeMcp {
     pub fn new(state: SharedState) -> Self {
         Self {
             state,
-            tool_router: Self::accounts_router(),
+            tool_router: Self::accounts_router() + Self::mail_read_router(),
         }
     }
 }
@@ -82,7 +83,6 @@ pub(crate) mod tests {
     pub(crate) struct ToolHarness {
         /// Serves both Microsoft login (`/oauth2/v2.0/…`) and Graph (`/v1.0/…`);
         /// tests mount the mocks they need.
-        #[allow(dead_code)] // mounted on by the mail and calendar tool tests (Tasks 10+)
         pub graph: MockServer,
         pub state: SharedState,
         pub secrets: SharedSecrets,
@@ -94,7 +94,8 @@ pub(crate) mod tests {
 
     impl ToolHarness {
         /// A user who signed in as `mailboxes[0]` and owns all of `mailboxes`,
-        /// each with fresh (unexpired) stored tokens.
+        /// each with fresh (unexpired) stored tokens whose access token is
+        /// [`access_token`]`(mailbox)`, so Graph mocks can tell mailboxes apart.
         pub async fn new(mailboxes: &[&str]) -> Self {
             let graph = MockServer::start().await;
             let secrets_dir = tempfile::tempdir().unwrap();
@@ -110,7 +111,10 @@ pub(crate) mod tests {
                     .save_mailbox(
                         &MailboxRecord {
                             owner: signin.clone(),
-                            tokens: fresh_tokens(),
+                            tokens: TokenSet {
+                                access_token: access_token(m),
+                                ..fresh_tokens()
+                            },
                         },
                         m,
                     )
@@ -166,6 +170,11 @@ pub(crate) mod tests {
             token_backend,
             secrets,
         ))
+    }
+
+    /// The access token [`ToolHarness::new`] stores for `mailbox`.
+    pub(crate) fn access_token(mailbox: &str) -> String {
+        format!("AT-{mailbox}")
     }
 
     pub(crate) fn fresh_tokens() -> TokenSet {

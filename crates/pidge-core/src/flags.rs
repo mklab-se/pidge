@@ -90,6 +90,7 @@ mod tests {
             body_content_type: BodyContentType::Text,
             to: to.iter().map(|a| who(a)).collect(),
             cc: cc.iter().map(|a| who(a)).collect(),
+            is_invite: false,
         }
     }
 

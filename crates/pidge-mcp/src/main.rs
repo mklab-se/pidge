@@ -11,6 +11,7 @@ mod config;
 mod context;
 mod mailbox;
 mod oauth;
+mod render;
 mod secrets;
 mod state;
 #[cfg(test)]

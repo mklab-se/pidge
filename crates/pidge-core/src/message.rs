@@ -41,6 +41,9 @@ pub struct Message {
     pub to: Vec<MessageFrom>,
     #[serde(default)]
     pub cc: Vec<MessageFrom>,
+    /// A meeting request or other calendar message (Graph `eventMessage`).
+    #[serde(default)]
+    pub is_invite: bool,
 }
 
 /// Outlook's follow-up flag state on a message. Three values to match what
@@ -86,6 +89,9 @@ pub struct FullMessage {
     pub has_attachments: bool,
     #[serde(default)]
     pub flag_status: FlagStatus,
+    /// A meeting request or other calendar message (Graph `eventMessage`).
+    #[serde(default)]
+    pub is_invite: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +141,7 @@ mod tests {
             body_content_type: BodyContentType::Text,
             to: vec![],
             cc: vec![],
+            is_invite: false,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: Message = serde_json::from_str(&json).unwrap();
@@ -169,6 +176,7 @@ mod tests {
             body_content: "<p>Hello</p>".into(),
             has_attachments: true,
             flag_status: FlagStatus::Flagged,
+            is_invite: true,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: FullMessage = serde_json::from_str(&json).unwrap();
