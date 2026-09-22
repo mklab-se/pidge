@@ -78,6 +78,7 @@ impl PidgeMcp {
                 client_state: None,
                 code_challenge: String::new(),
                 microsoft_verifier: random_id() + &random_id(),
+                consent_nonce: None,
                 created_at: Utc::now(),
             },
         );

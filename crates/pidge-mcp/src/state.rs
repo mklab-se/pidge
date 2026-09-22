@@ -35,6 +35,11 @@ pub struct PendingAuthorization {
     pub client_state: Option<String>,
     pub code_challenge: String,
     pub microsoft_verifier: String,
+    /// For [`PendingKind::Connect`]: the nonce set as a cookie by the
+    /// confirmation page, which the Continue step must present, so the
+    /// Microsoft redirect only happens in a browser that saw the owner.
+    /// `None` until that page is shown, and always for sign-ins.
+    pub consent_nonce: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -90,6 +95,18 @@ impl AppState {
         map.get(state)
             .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
             .cloned()
+    }
+
+    /// Records the confirmation page's cookie nonce on a live pending entry;
+    /// replaces any earlier one. No-op if the entry is gone or expired.
+    pub fn set_consent_nonce(&self, state: &str, nonce: String) {
+        let mut map = self.pending.lock().expect("pending lock");
+        if let Some(p) = map
+            .get_mut(state)
+            .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
+        {
+            p.consent_nonce = Some(nonce);
+        }
     }
 
     /// Removes and returns the pending authorization, so a Microsoft

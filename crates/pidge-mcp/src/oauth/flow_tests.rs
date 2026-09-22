@@ -93,6 +93,7 @@ fn pending_stub() -> PendingAuthorization {
         client_state: None,
         code_challenge: String::new(),
         microsoft_verifier: "stub-verifier".into(),
+        consent_nonce: None,
         created_at: chrono::Utc::now(),
     }
 }
@@ -554,6 +555,19 @@ async fn get(h: &Harness, uri: &str) -> axum::response::Response {
         .unwrap()
 }
 
+async fn get_with_cookie(h: &Harness, uri: &str, cookie: &str) -> axum::response::Response {
+    h.app
+        .clone()
+        .oneshot(
+            Request::get(uri)
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
 async fn body_text(resp: axum::response::Response) -> String {
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8_lossy(&bytes).into_owned()
@@ -569,6 +583,13 @@ async fn connect_link_confirms_the_owner_then_goes_to_microsoft() {
     let resp = get(&h, "/connect?state=s1").await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(resp.headers().get(header::LOCATION).is_none());
+    let set_cookie = resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+    assert!(set_cookie.contains("Path=/connect"), "{set_cookie}");
+    let cookie = set_cookie.split(';').next().unwrap().to_string(); // "pidge_connect=<nonce>"
     let page = body_text(resp).await;
     assert!(
         page.contains("connect a mailbox to the pidge account jane@example.com"),
@@ -579,8 +600,9 @@ async fn connect_link_confirms_the_owner_then_goes_to_microsoft() {
         "{page}"
     );
 
-    // Continue goes to Microsoft with the link's state and verifier.
-    let resp = get(&h, "/connect/go?state=s1").await;
+    // Continue goes to Microsoft with the link's state and verifier, but
+    // only when the browser presents the confirmation page's cookie.
+    let resp = get_with_cookie(&h, "/connect/go?state=s1", &cookie).await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     let location = resp.headers()[header::LOCATION]
         .to_str()
@@ -597,6 +619,27 @@ async fn connect_link_confirms_the_owner_then_goes_to_microsoft() {
         format!("{PUBLIC}/callback")
     );
     assert!(h.state.peek_pending("s1").is_some(), "link still usable");
+}
+
+#[tokio::test]
+async fn connect_go_requires_the_confirmation_cookie() {
+    let h = harness("second@example.com").await;
+    h.state
+        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+
+    // Handed the Continue URL directly, having never seen the confirmation.
+    let resp = get(&h, "/connect/go?state=s1").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    let resp = get_with_cookie(&h, "/connect/go?state=s1", "pidge_connect=guess").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // Someone else's browser saw the confirmation; a different nonce still fails.
+    let resp = get(&h, "/connect?state=s1").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let resp = get_with_cookie(&h, "/connect/go?state=s1", "pidge_connect=wrong-nonce").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(resp.headers().get(header::LOCATION).is_none());
 }
 
 #[tokio::test]
@@ -698,4 +741,38 @@ async fn connect_refuses_an_owner_no_longer_on_the_allowlist() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn profile_read_failure_logs_only_the_status() {
+    use crate::test_support::{LogCapture, assert_no_address};
+
+    let h = harness("jane@example.com").await;
+    Mock::given(method("GET"))
+        .and(path("/v1.0/me"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": {"code": "x", "message": "no profile for jane@example.com"}
+        })))
+        .with_priority(1)
+        .mount(&h.microsoft)
+        .await;
+    let client_id = register(&h.app).await;
+    let (logs, _guard) = LogCapture::start();
+    let resp = sign_in(
+        &h,
+        &client_id,
+        "verifier-verifier-verifier-verifier-verifier",
+    )
+    .await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::SEE_OTHER,
+        "error goes back to the client"
+    );
+    let logged = logs.text();
+    assert!(
+        logged.contains("reading signed-in profile failed"),
+        "{logged}"
+    );
+    assert_no_address("logs", &logged);
 }

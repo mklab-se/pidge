@@ -30,7 +30,7 @@ use url::Url;
 
 use pidge_client::auth::TokenSet;
 
-use crate::state::{PendingAuthorization, PendingKind, SharedState};
+use crate::state::{PENDING_TTL, PendingAuthorization, PendingKind, SharedState};
 use crate::users::{MailboxRecord, OwnershipError, UserRecord, log_store_error, user_hash};
 
 pub const SCOPE: &str = "mail";
@@ -317,6 +317,7 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
             client_state: client_state.map(str::to_string),
             code_challenge: code_challenge.to_string(),
             microsoft_verifier,
+            consent_nonce: None,
             created_at: chrono::Utc::now(),
         },
     );
@@ -412,7 +413,13 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
     let me = match state.graph.me(&success.tokens.access_token).await {
         Ok(me) => me,
         Err(e) => {
-            tracing::error!(error = %e, "reading signed-in profile");
+            // The error's text can echo Graph's response body; log only the status.
+            match e {
+                pidge_client::ClientError::Graph { status, .. } => {
+                    tracing::error!(status, "reading signed-in profile failed");
+                }
+                _ => tracing::error!("reading signed-in profile failed"),
+            }
             return callback_failure(
                 &pending,
                 "server_error",
@@ -629,27 +636,74 @@ fn expired_connect_link() -> Response {
     )
 }
 
+/// Cookie carrying the confirmation page's nonce to the Continue step.
+const CONSENT_COOKIE: &str = "pidge_connect";
+
+/// `Set-Cookie` value for the consent nonce: scoped to `/connect`, gone
+/// with the pending entry's lifetime, `Secure` whenever we're served over https.
+fn consent_cookie(nonce: &str, secure: bool) -> String {
+    format!(
+        "{CONSENT_COOKIE}={nonce}; HttpOnly;{} SameSite=Lax; Max-Age={}; Path=/connect",
+        if secure { " Secure;" } else { "" },
+        PENDING_TTL.num_seconds()
+    )
+}
+
+/// The consent nonce from the request's `Cookie` header(s), if any.
+fn consent_nonce_from(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|pair| pair.trim().split_once('='))
+        .find(|(name, _)| *name == CONSENT_COOKIE)
+        .map(|(_, value)| value.to_string())
+}
+
 /// Opens a link minted by `accounts_connect`. Shows which pidge account the
 /// mailbox will be bound to before anything happens, so someone handed a
-/// stranger's link doesn't connect their mailbox to it unawares.
+/// stranger's link doesn't connect their mailbox to it unawares, and binds
+/// the Continue step to this browser with a cookie nonce.
 async fn connect(State(state): State<SharedState>, Query(p): Query<ConnectParams>) -> Response {
     let Some((key, owner, _)) = connect_pending(&state, &p) else {
         return expired_connect_link();
     };
+    let nonce = jwt::random_id();
+    state.set_consent_nonce(&key, nonce.clone());
     let go = format!(
         "{}/connect/go?state={}",
         state.config.base_url(),
         urlencode(&key)
     );
-    pages::confirm_connect(&owner, &go)
+    let secure = state.config.public_url.scheme() == "https";
+    let mut resp = pages::confirm_connect(&owner, &go);
+    resp.headers_mut().insert(
+        header::SET_COOKIE,
+        consent_cookie(&nonce, secure)
+            .parse()
+            .expect("cookie is ASCII"),
+    );
+    resp
 }
 
 /// The confirmation's Continue: sends the browser to Microsoft with the
-/// link's state.
-async fn connect_go(State(state): State<SharedState>, Query(p): Query<ConnectParams>) -> Response {
+/// link's state, but only from the browser that was shown the confirmation.
+async fn connect_go(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(p): Query<ConnectParams>,
+) -> Response {
     let Some((key, _, pending)) = connect_pending(&state, &p) else {
         return expired_connect_link();
     };
+    let presented = consent_nonce_from(&headers);
+    if pending.consent_nonce.is_none() || presented != pending.consent_nonce {
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "Open the connect link itself (not this page's address) and confirm the account there.",
+        );
+    }
     let microsoft_url = state.graph.auth().authorize_url(
         &state.config.microsoft_callback_url(),
         &jwt::pkce_challenge(&pending.microsoft_verifier),
@@ -870,6 +924,25 @@ mod tests {
         assert!(!redirect_uri_is_acceptable("https://claude.ai/cb#frag"));
         assert!(!redirect_uri_is_acceptable("myapp://callback"));
         assert!(!redirect_uri_is_acceptable("not a url"));
+    }
+
+    #[test]
+    fn consent_cookie_attributes_and_parsing() {
+        let c = consent_cookie("abc_-1", false);
+        assert_eq!(
+            c,
+            "pidge_connect=abc_-1; HttpOnly; SameSite=Lax; Max-Age=600; Path=/connect"
+        );
+        assert!(consent_cookie("abc", true).contains("; Secure;"));
+
+        let mut headers = HeaderMap::new();
+        assert_eq!(consent_nonce_from(&headers), None);
+        headers.append(header::COOKIE, "other=1; pidge_connect=n1".parse().unwrap());
+        assert_eq!(consent_nonce_from(&headers).as_deref(), Some("n1"));
+        let mut headers = HeaderMap::new();
+        headers.append(header::COOKIE, "a=b".parse().unwrap());
+        headers.append(header::COOKIE, "pidge_connect=n2".parse().unwrap());
+        assert_eq!(consent_nonce_from(&headers).as_deref(), Some("n2"));
     }
 
     #[test]
