@@ -6,7 +6,7 @@
 mod account;
 mod cache;
 mod config;
-mod contacts;
+pub mod contacts;
 mod error;
 mod event;
 pub mod flags;
