@@ -69,7 +69,11 @@ async fn build(state: &SharedState, user: &UserRecord) -> ContactsCache {
                     // People carry no timestamp; stepping back one second per
                     // rank keeps Graph's relevance order in ambiguity lists.
                     let seen = now - chrono::Duration::seconds(rank as i64);
-                    cache.upsert(&p.address, &p.display_name, seen, ContactSource::Mail);
+                    // `ContactsCache` counts two sources. People go under
+                    // `Calendar` ("known contact") so a contact seen only
+                    // under `Mail` is one known only as a recent sender;
+                    // see [`is_sender_only`].
+                    cache.upsert(&p.address, &p.display_name, seen, ContactSource::Calendar);
                 }
             }
             Err(_) => skipped += 1,
@@ -100,6 +104,15 @@ async fn build(state: &SharedState, user: &UserRecord) -> ContactsCache {
         "built contact cache"
     );
     cache
+}
+
+/// Whether `address` is in `cache` only because it sent recent inbox mail,
+/// not because Outlook's people list knows it.
+pub fn is_sender_only(cache: &ContactsCache, address: &str) -> bool {
+    cache
+        .by_email
+        .get(&address.to_lowercase())
+        .is_some_and(|c| c.seen_in_calendar == 0)
 }
 
 #[cfg(test)]
@@ -161,6 +174,8 @@ mod tests {
             cache.resolve_any("Carol"),
             ResolveOutcome::One("carol@example.com".into())
         );
+        assert!(super::is_sender_only(&cache, "Carol@example.com"));
+        assert!(!super::is_sender_only(&cache, "bob@example.com"));
 
         // Within the TTL the second call is served from memory (expect(1) above).
         let again = h.state.contacts.get(&h.state, &record).await.unwrap();

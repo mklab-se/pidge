@@ -4,6 +4,7 @@
 
 use pidge_client::Outgoing;
 use pidge_core::contacts::ResolveOutcome;
+use pidge_core::render::strip_quoted_history;
 use pidge_core::{ContactsCache, FullMessage, MessageFrom};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::PidgeMcp;
 use super::mail_read::{body_text, check_id};
+use crate::contacts::is_sender_only;
 use crate::context::{ToolContext, graph_error, tool_error};
 use crate::render::{cap, one_line, untrusted, who};
 use crate::state::SENDS_PER_HOUR;
@@ -88,7 +90,7 @@ impl PidgeMcp {
         for id in [&args.in_reply_to, &args.draft_id].into_iter().flatten() {
             check_id(id)?;
         }
-        let [to, cc, bcc] = self
+        let ([to, cc, bcc], unconfirmed) = self
             .recipients(&tc, [&args.to, &args.cc, &args.bcc])
             .await?;
 
@@ -103,6 +105,13 @@ impl PidgeMcp {
                     Some(id) => {
                         let candidates = tc.accounts(args.from_account.as_deref())?;
                         let existing = self.find_draft(&candidates, id).await?;
+                        // update_draft rewrites the whole body; a reply's or
+                        // forward's quoted history would be lost.
+                        if is_reply_or_forward(&existing) {
+                            return Err(tool_error(format!(
+                                "draft {id} is a reply or forward; revise its text in Outlook or create a new draft"
+                            )));
+                        }
                         let message = Outgoing {
                             subject: args.subject.clone().unwrap_or(existing.subject),
                             body_text: args.body.clone(),
@@ -225,7 +234,9 @@ impl PidgeMcp {
                 ))
             })?;
         Ok(CallToolResult::success(vec![ContentBlock::text(preview(
-            &account, &draft,
+            &account,
+            &draft,
+            &unconfirmed,
         ))]))
     }
 
@@ -259,14 +270,14 @@ impl PidgeMcp {
                 draft.id
             )));
         }
-        let note = self.reply_account_note(&tc, &draft).await;
-
         let user = &tc.user.email;
         if !self.state.reserve_send(user) {
             return Err(tool_error(format!(
                 "Send limit reached ({SENDS_PER_HOUR} per hour); try again later"
             )));
         }
+        // Best effort and never fails; skipped without a conversation id.
+        let note = self.reply_account_note(&tc, &draft).await;
         if let Err(e) = self.state.graph.send_draft(&draft.account, &draft.id).await {
             self.state.release_send(user);
             return Err(graph_error(e));
@@ -293,24 +304,27 @@ impl PidgeMcp {
 }
 
 impl PidgeMcp {
-    /// Each recipient list resolved to addresses; an empty or absent list
-    /// is `None`. Contacts are only built when some token is a name.
+    /// Each recipient list resolved to addresses (an empty or absent list
+    /// is `None`), plus the addresses a name matched only among recent
+    /// inbox senders, which the preview asks the user to confirm.
+    /// Contacts are only built when some token is a name.
     async fn recipients(
         &self,
         tc: &ToolContext,
         lists: [&Option<Vec<String>>; 3],
-    ) -> Result<[Option<Vec<String>>; 3], McpError> {
+    ) -> Result<([Option<Vec<String>>; 3], Vec<String>), McpError> {
         let empty = ContactsCache::default();
-        let any_name = lists
+        let names: Vec<&String> = lists
             .iter()
             .copied()
             .flatten()
             .flatten()
-            .any(|t| !matches!(empty.resolve_any(t), ResolveOutcome::Literal(_)));
-        let contacts = if any_name {
-            self.state.contacts.get(&self.state, &tc.record).await?
-        } else {
+            .filter(|t| !matches!(empty.resolve_any(t), ResolveOutcome::Literal(_)))
+            .collect();
+        let contacts = if names.is_empty() {
             empty
+        } else {
+            self.state.contacts.get(&self.state, &tc.record).await?
         };
         let resolve = |list: &Option<Vec<String>>| -> Result<Option<Vec<String>>, McpError> {
             match list {
@@ -320,7 +334,15 @@ impl PidgeMcp {
                 _ => Ok(None),
             }
         };
-        Ok([resolve(lists[0])?, resolve(lists[1])?, resolve(lists[2])?])
+        let resolved = [resolve(lists[0])?, resolve(lists[1])?, resolve(lists[2])?];
+        let unconfirmed = names
+            .into_iter()
+            .filter_map(|t| match contacts.resolve_any(t) {
+                ResolveOutcome::One(a) if is_sender_only(&contacts, &a) => Some(a),
+                _ => None,
+            })
+            .collect();
+        Ok((resolved, unconfirmed))
     }
 
     /// Adds each given list to the draft's current recipients of that kind
@@ -483,7 +505,7 @@ pub fn resolve_recipients(tokens: &[String], cache: &ContactsCache) -> Result<Ve
             let unusable = address.is_empty()
                 || address
                     .chars()
-                    .any(|c| c.is_whitespace() || c.is_control() || c == '<' || c == '>');
+                    .any(|c| c.is_whitespace() || c.is_control() || "<>,;\"".contains(c));
             if unusable {
                 return Err(format!(
                     "\"{shown}\" is not a usable e-mail address; give a plain address like name@example.com"
@@ -511,20 +533,43 @@ fn addresses(list: &[MessageFrom]) -> Vec<String> {
     list.iter().map(|r| r.address.clone()).collect()
 }
 
+/// Whether a draft is a reply or forward: an answer-style subject prefix
+/// or quoted history in its body.
+fn is_reply_or_forward(draft: &FullMessage) -> bool {
+    let subject = draft.subject.trim_start().to_ascii_lowercase();
+    let prefixed = ["re:", "fw:", "fwd:", "vs:", "sv:"]
+        .iter()
+        .any(|p| subject.starts_with(p));
+    let body = body_text(&draft.body_content, draft.body_content_type);
+    prefixed || strip_quoted_history(&body) != body.trim_end()
+}
+
 /// The draft as the user should see it before approving the send.
-fn preview(account: &str, draft: &FullMessage) -> String {
+/// Recipients in `unconfirmed` came from a name that only matched a
+/// recent sender, and are marked for the user to confirm.
+fn preview(account: &str, draft: &FullMessage, unconfirmed: &[String]) -> String {
     let mut out = format!(
         "draft_id: {id}\naccount: {account}\npreview:\nfrom: {account}\n",
         id = draft.id
     );
-    let to: Vec<String> = draft.to.iter().map(who).collect();
+    let show = |r: &MessageFrom| {
+        let mut s = who(r);
+        if unconfirmed
+            .iter()
+            .any(|a| a.eq_ignore_ascii_case(&r.address))
+        {
+            s.push_str(" (matched from a recent sender, not your contacts — confirm the address)");
+        }
+        s
+    };
+    let to: Vec<String> = draft.to.iter().map(show).collect();
     out.push_str(&match to.is_empty() {
         true => "to: (none)\n".to_string(),
         false => format!("to: {}\n", to.join(", ")),
     });
     for (label, list) in [("cc", &draft.cc), ("bcc", &draft.bcc)] {
         if !list.is_empty() {
-            let names: Vec<String> = list.iter().map(who).collect();
+            let names: Vec<String> = list.iter().map(show).collect();
             out.push_str(&format!("{label}: {}\n", names.join(", ")));
         }
     }
@@ -642,7 +687,14 @@ mod tests {
     fn resolve_recipients_rejects_unknown_names_and_unusable_addresses() {
         let err = resolve_recipients(&strings(&["zed"]), &contacts()).unwrap_err();
         assert_eq!(err, "Unknown recipient \"zed\"; give an e-mail address");
-        for bad in ["a b@example.com", "x<y@example.com", "x@exa>mple.com"] {
+        for bad in [
+            "a b@example.com",
+            "x<y@example.com",
+            "x@exa>mple.com",
+            "a@x.com,b@y.com",
+            "a@x.com;b@y.com",
+            "\"a\"@example.com",
+        ] {
             assert!(
                 resolve_recipients(&strings(&[bad]), &contacts()).is_err(),
                 "{bad} accepted"
@@ -1026,6 +1078,117 @@ mod tests {
         );
     }
 
+    async fn revise(h: &ToolHarness, id: &str) -> Result<String, McpError> {
+        draft(
+            h,
+            DraftArgs {
+                draft_id: Some(id.into()),
+                body: "New text".into(),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn revising_refuses_a_reply_or_forward_draft() {
+        let h = ToolHarness::new(&[JANE]).await;
+        let mut by_subject = message("R1", true);
+        by_subject["subject"] = json!("SV: Lunch");
+        mount_get(&h, JANE, "R1", 200, by_subject).await;
+        let mut by_quote = message("R2", true);
+        by_quote["body"] = json!({ "contentType": "text", "content":
+            "Sure.\n\nFrom: Bob\nSent: Monday\nSubject: Lunch\n\nSee you at noon?" });
+        mount_get(&h, JANE, "R2", 200, by_quote).await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&h.graph)
+            .await;
+
+        for id in ["R1", "R2"] {
+            let err = revise(&h, id).await.unwrap_err();
+            assert_eq!(
+                err.message,
+                format!(
+                    "draft {id} is a reply or forward; revise its text in Outlook or create a new draft"
+                )
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn revising_a_new_draft_in_a_conversation_is_allowed() {
+        // Graph gives every message a conversation id, new drafts included.
+        let h = ToolHarness::new(&[JANE]).await;
+        let mut d = message("D1", true);
+        d["conversationId"] = json!("C1");
+        mount_get(&h, JANE, "D1", 200, d).await;
+        Mock::given(method("PATCH"))
+            .and(path("/v1.0/me/messages/D1"))
+            .and(body_partial_json(json!({
+                "subject": "Lunch",
+                "body": { "content": "New text" },
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&h.graph)
+            .await;
+        let out = revise(&h, "D1").await.unwrap();
+        assert!(out.starts_with("draft_id: D1\n"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn a_name_matched_only_from_a_recent_sender_is_flagged_in_the_preview() {
+        let h = ToolHarness::new(&[JANE]).await;
+        Mock::given(method("GET"))
+            .and(path("/v1.0/me/people"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "value": [
+                { "displayName": "Bob Builder",
+                  "scoredEmailAddresses": [{ "address": "bob@example.com" }] },
+            ]})))
+            .mount(&h.graph)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1.0/me/mailFolders/inbox/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "value": [{
+                "id": "M9",
+                "from": { "emailAddress": { "name": "Carol Sender", "address": "carol@example.com" } },
+                "receivedDateTime": "2026-09-23T08:00:00Z",
+            }]})))
+            .mount(&h.graph)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1.0/me/messages"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({ "id": "D1" })))
+            .mount(&h.graph)
+            .await;
+        let mut d = message("D1", true);
+        d["toRecipients"] = json!([
+            { "emailAddress": { "name": "Bob Builder", "address": "bob@example.com" } },
+            { "emailAddress": { "name": "Carol Sender", "address": "carol@example.com" } },
+        ]);
+        mount_get(&h, JANE, "D1", 200, d).await;
+
+        let out = draft(
+            &h,
+            DraftArgs {
+                to: Some(strings(&["Bob", "Carol"])),
+                body: "Hi".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            out.contains(
+                "to: Bob Builder <bob@example.com>, Carol Sender <carol@example.com> \
+                 (matched from a recent sender, not your contacts — confirm the address)\n"
+            ),
+            "{out}"
+        );
+    }
+
     // ---- mail_send ----
 
     async fn mount_send(h: &ToolHarness, mailbox: &str, id: &str, times: u64) {
@@ -1095,6 +1258,27 @@ mod tests {
             err.message,
             "Send limit reached (30 per hour); try again later"
         );
+    }
+
+    #[tokio::test]
+    async fn the_send_limit_is_checked_before_any_conversation_lookup() {
+        let h = ToolHarness::new(&[JANE, WORK]).await;
+        h.state
+            .sends
+            .lock()
+            .unwrap()
+            .insert(JANE.into(), vec![Instant::now(); SENDS_PER_HOUR]);
+        let mut d = message("D1", true);
+        d["conversationId"] = json!("C1");
+        mount_get(&h, JANE, "D1", 200, d).await;
+        Mock::given(method("GET"))
+            .and(path("/v1.0/me/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "value": [] })))
+            .expect(0)
+            .mount(&h.graph)
+            .await;
+        let err = send(&h, "D1").await.unwrap_err();
+        assert!(err.message.starts_with("Send limit reached"), "{err:?}");
     }
 
     #[tokio::test]
