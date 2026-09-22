@@ -2426,7 +2426,7 @@ dependencies = [
 
 [[package]]
 name = "pidge"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "ailloy",
  "anyhow",
@@ -2464,7 +2464,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-client"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-core"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "chrono",
  "chrono-tz",
