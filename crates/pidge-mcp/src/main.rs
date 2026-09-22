@@ -12,6 +12,8 @@ mod mailbox;
 mod oauth;
 mod secrets;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod tools;
 mod users;
 

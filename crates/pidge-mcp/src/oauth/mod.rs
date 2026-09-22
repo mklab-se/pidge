@@ -31,7 +31,7 @@ use url::Url;
 use pidge_client::auth::TokenSet;
 
 use crate::state::{PendingAuthorization, PendingKind, SharedState};
-use crate::users::{MailboxRecord, OwnershipError, UserRecord, user_hash};
+use crate::users::{MailboxRecord, OwnershipError, UserRecord, log_store_error, user_hash};
 
 pub const SCOPE: &str = "mail";
 
@@ -57,6 +57,7 @@ pub fn router() -> Router<SharedState> {
         .route("/authorize", get(authorize))
         .route("/callback", get(callback))
         .route("/connect", get(connect))
+        .route("/connect/go", get(connect_go))
         .route("/token", post(token))
 }
 
@@ -454,7 +455,7 @@ async fn bind_mailbox(
             return Some(owned_by_other_page(mailbox));
         }
         Err(OwnershipError::Store(e)) => {
-            tracing::error!(error = %e, "checking mailbox ownership");
+            log_store_error("checking mailbox ownership", mailbox, &e);
             return Some(callback_failure(
                 pending,
                 "server_error",
@@ -467,7 +468,7 @@ async fn bind_mailbox(
         tokens,
     };
     if let Err(e) = state.users.save_mailbox(&record, mailbox).await {
-        tracing::error!(error = %e, "storing mailbox tokens");
+        log_store_error("storing mailbox tokens", mailbox, &e);
         return Some(callback_failure(
             pending,
             "server_error",
@@ -501,12 +502,12 @@ async fn sign_in_complete(
     let has_record = match state.users.load(email).await {
         Ok(rec) => rec.is_some(),
         Err(e) => {
-            tracing::error!(error = %e, "loading user record");
+            log_store_error("loading user record", email, &e);
             return callback_failure(pending, "server_error", "could not load the user profile");
         }
     };
     if !has_record && let Err(e) = state.users.save(&UserRecord::new(email)).await {
-        tracing::error!(error = %e, "creating user record");
+        log_store_error("creating user record", email, &e);
         return callback_failure(pending, "server_error", "could not create the user profile");
     }
 
@@ -536,7 +537,9 @@ async fn sign_in_complete(
 }
 
 /// A connect link finished: `mailbox` becomes one of `owner`'s mailboxes.
-/// The allowlist governs sign-in identities only, so it isn't consulted.
+/// The allowlist governs sign-in identities, so a connected mailbox needn't
+/// be on it; but an identity that *is* on it belongs to its own pidge user
+/// and is never bound to someone else. Stores nothing when refusing.
 async fn connect_complete(
     state: &SharedState,
     pending: &PendingAuthorization,
@@ -544,6 +547,27 @@ async fn connect_complete(
     mailbox: &str,
     tokens: TokenSet,
 ) -> Response {
+    if !state.config.is_allowed(owner) {
+        tracing::warn!(user = %user_hash(owner), "connect refused: owner no longer allowed");
+        return pages::error(
+            StatusCode::FORBIDDEN,
+            "The pidge account this link belongs to is no longer allowed to use this server.",
+        );
+    }
+    if state.config.is_allowed(mailbox) && !mailbox.eq_ignore_ascii_case(owner) {
+        tracing::warn!(
+            user = %user_hash(owner),
+            mailbox = %user_hash(mailbox),
+            "connect refused: mailbox is another user's sign-in identity"
+        );
+        return pages::error(
+            StatusCode::FORBIDDEN,
+            &format!(
+                "{mailbox} signs in to pidge as its own user and cannot be connected to another account."
+            ),
+        );
+    }
+
     if let Some(resp) = bind_mailbox(state, pending, mailbox, owner, tokens).await {
         return resp;
     }
@@ -552,7 +576,7 @@ async fn connect_complete(
         Ok(Some(rec)) => rec,
         Ok(None) => UserRecord::new(owner),
         Err(e) => {
-            tracing::error!(error = %e, "loading user record");
+            log_store_error("loading user record", owner, &e);
             return callback_failure(pending, "server_error", "could not load the user profile");
         }
     };
@@ -560,7 +584,7 @@ async fn connect_complete(
         record.mailboxes.push(mailbox.to_string());
     }
     if let Err(e) = state.users.save(&record).await {
-        tracing::error!(error = %e, "saving user record");
+        log_store_error("saving user record", owner, &e);
         return callback_failure(pending, "server_error", "could not save the user profile");
     }
 
@@ -569,11 +593,13 @@ async fn connect_complete(
         mailbox = %user_hash(mailbox),
         "mailbox connected"
     );
-    pages::done("Mailbox connected. You can close this tab.")
+    pages::done(&format!(
+        "Mailbox connected to {owner}. You can close this tab."
+    ))
 }
 
 // ---------------------------------------------------------------------------
-// Connect link → Microsoft
+// Connect link → confirmation → Microsoft
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -581,27 +607,59 @@ struct ConnectParams {
     state: Option<String>,
 }
 
-/// Opens a link minted by `accounts_connect`: looks up its pending entry
-/// (without consuming it, so the link can be reopened until it expires) and
-/// sends the browser to Microsoft with the same state.
+/// The live `Connect` entry for a link's state, with its owner; `None` if
+/// the state is missing, unknown, expired or belongs to a sign-in.
+/// Non-consuming, so the link works until the callback uses it.
+fn connect_pending(
+    state: &SharedState,
+    p: &ConnectParams,
+) -> Option<(String, String, PendingAuthorization)> {
+    let key = p.state.as_deref()?;
+    let pending = state.peek_pending(key)?;
+    match &pending.kind {
+        PendingKind::Connect { owner } => Some((key.to_string(), owner.clone(), pending)),
+        PendingKind::SignIn => None,
+    }
+}
+
+fn expired_connect_link() -> Response {
+    pages::error(
+        StatusCode::BAD_REQUEST,
+        "This connect link has expired or is not valid. Ask your AI client for a new one.",
+    )
+}
+
+/// Opens a link minted by `accounts_connect`. Shows which pidge account the
+/// mailbox will be bound to before anything happens, so someone handed a
+/// stranger's link doesn't connect their mailbox to it unawares.
 async fn connect(State(state): State<SharedState>, Query(p): Query<ConnectParams>) -> Response {
-    let found = p
-        .state
-        .as_deref()
-        .and_then(|s| state.peek_pending(s).map(|pending| (s, pending)))
-        .filter(|(_, pending)| matches!(pending.kind, PendingKind::Connect { .. }));
-    let Some((microsoft_state, pending)) = found else {
-        return pages::error(
-            StatusCode::BAD_REQUEST,
-            "This connect link has expired or is not valid. Ask your AI client for a new one.",
-        );
+    let Some((key, owner, _)) = connect_pending(&state, &p) else {
+        return expired_connect_link();
+    };
+    let go = format!(
+        "{}/connect/go?state={}",
+        state.config.base_url(),
+        urlencode(&key)
+    );
+    pages::confirm_connect(&owner, &go)
+}
+
+/// The confirmation's Continue: sends the browser to Microsoft with the
+/// link's state.
+async fn connect_go(State(state): State<SharedState>, Query(p): Query<ConnectParams>) -> Response {
+    let Some((key, _, pending)) = connect_pending(&state, &p) else {
+        return expired_connect_link();
     };
     let microsoft_url = state.graph.auth().authorize_url(
         &state.config.microsoft_callback_url(),
         &jwt::pkce_challenge(&pending.microsoft_verifier),
-        microsoft_state,
+        &key,
     );
     Redirect::to(&microsoft_url).into_response()
+}
+
+fn urlencode(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
 
 // ---------------------------------------------------------------------------

@@ -155,6 +155,13 @@ impl UserStore {
     }
 }
 
+/// Logs a secret-store failure as a fixed message plus the hashed account it
+/// concerned. The error's own text is deliberately dropped: store errors carry
+/// secret names, and mailbox secret names are derived from the address.
+pub fn log_store_error(context: &str, account: &str, _err: &anyhow::Error) {
+    tracing::error!(account = %user_hash(account), "{context}: secret store failure");
+}
+
 /// A short, stable, non-reversible tag for a sign-in address, for logs:
 /// the first 8 hex characters of the SHA-256 of the lower-cased address.
 /// Addresses themselves never go into a log line.

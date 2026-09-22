@@ -9,7 +9,7 @@ use pidge_client::ClientError;
 use pidge_client::auth::{TokenBackend, TokenSet};
 
 use crate::secrets::SharedSecrets;
-use crate::users::UserStore;
+use crate::users::{UserStore, log_store_error};
 
 pub struct SecretTokenBackend {
     users: UserStore,
@@ -31,8 +31,11 @@ impl SecretTokenBackend {
     }
 }
 
-fn store_error(e: anyhow::Error) -> ClientError {
-    ClientError::Io(std::io::Error::other(format!("secret store: {e:#}")))
+/// Logs the failure (redacted) and returns a `ClientError` whose text names
+/// no secret, so it can't leak an address through Graph error messages.
+fn store_error(email: &str, e: anyhow::Error) -> ClientError {
+    log_store_error("token store", email, &e);
+    ClientError::Io(std::io::Error::other("secret store failure"))
 }
 
 #[async_trait]
@@ -41,7 +44,12 @@ impl TokenBackend for SecretTokenBackend {
         if let Some(hit) = self.cache.lock().expect("cache lock").get(email) {
             return Ok(Some(hit.clone()));
         }
-        let Some(rec) = self.users.load_mailbox(email).await.map_err(store_error)? else {
+        let Some(rec) = self
+            .users
+            .load_mailbox(email)
+            .await
+            .map_err(|e| store_error(email, e))?
+        else {
             return Ok(None);
         };
         self.cache
@@ -58,7 +66,12 @@ impl TokenBackend for SecretTokenBackend {
     /// exists yet, that sign-in hasn't happened (or the record was deleted),
     /// so this errors rather than silently creating an unowned mailbox.
     async fn save(&self, email: &str, tokens: &TokenSet) -> Result<(), ClientError> {
-        let Some(mut rec) = self.users.load_mailbox(email).await.map_err(store_error)? else {
+        let Some(mut rec) = self
+            .users
+            .load_mailbox(email)
+            .await
+            .map_err(|e| store_error(email, e))?
+        else {
             return Err(ClientError::SessionExpired {
                 email: email.to_string(),
             });
@@ -67,11 +80,45 @@ impl TokenBackend for SecretTokenBackend {
         self.users
             .save_mailbox(&rec, email)
             .await
-            .map_err(store_error)?;
+            .map_err(|e| store_error(email, e))?;
         self.cache
             .lock()
             .expect("cache lock")
             .insert(email.to_string(), rec.tokens);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::test_support::{FailingSecrets, LogCapture, assert_no_address};
+
+    #[tokio::test]
+    async fn store_failures_never_carry_the_address() {
+        let (logs, _guard) = LogCapture::start();
+        let backend = SecretTokenBackend::new(Arc::new(FailingSecrets));
+        let err = backend.load("jane@example.com").await.unwrap_err();
+        assert_no_address("load error", &err.to_string());
+        let err = backend
+            .save(
+                "jane@example.com",
+                &TokenSet {
+                    access_token: "a".into(),
+                    refresh_token: "r".into(),
+                    expires_at: chrono::Utc::now(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_no_address("save error", &err.to_string());
+        let logged = logs.text();
+        assert!(
+            logged.contains("token store: secret store failure"),
+            "{logged}"
+        );
+        assert_no_address("logs", &logged);
     }
 }

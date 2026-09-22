@@ -11,10 +11,10 @@ use chrono::Utc;
 use chrono_tz::Tz;
 
 use super::PidgeMcp;
-use crate::context::{ToolContext, tool_error};
+use crate::context::{ToolContext, store_error, tool_error};
 use crate::oauth::jwt::random_id;
 use crate::state::{PENDING_TTL, PendingAuthorization, PendingKind};
-use crate::users::{UserRecord, user_hash};
+use crate::users::{UserRecord, log_store_error, user_hash};
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct ConnectArgs {
@@ -107,7 +107,7 @@ impl PidgeMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tc = ToolContext::from_request(&self.state, &ctx).await?;
-        let mut record = tc.record.clone();
+        let signin = tc.record.signin.clone();
 
         // Validate everything before changing anything.
         let default_sender = args
@@ -129,7 +129,7 @@ impl PidgeMcp {
         let disconnect = match args.disconnect.as_deref() {
             Some(m) => {
                 let mailbox = tc.accounts(Some(m))?.remove(0);
-                if mailbox == record.signin {
+                if mailbox == signin {
                     return Err(tool_error(format!(
                         "{mailbox} is the sign-in mailbox and cannot be disconnected"
                     )));
@@ -140,6 +140,16 @@ impl PidgeMcp {
         };
         let trust = sender_address(args.trust.as_deref(), "trust")?;
         let untrust = sender_address(args.untrust.as_deref(), "untrust")?;
+
+        // Merge onto the freshest record: a connect callback may have
+        // appended a mailbox since `from_request` loaded it.
+        let mut record = self
+            .state
+            .users
+            .load(&signin)
+            .await
+            .map_err(|e| store_error("loading user record", &signin, e))?
+            .unwrap_or_else(|| tc.record.clone());
 
         if let Some(sender) = default_sender {
             record.default_sender = sender;
@@ -165,13 +175,17 @@ impl PidgeMcp {
         // Save the record first: if deleting the session then fails, the
         // mailbox is already gone from the user's view rather than listed
         // with a half-deleted session.
-        self.state.users.save(&record).await.map_err(store_error)?;
+        self.state
+            .users
+            .save(&record)
+            .await
+            .map_err(|e| store_error("saving user record", &signin, e))?;
         if let Some(mailbox) = &disconnect {
             self.state
                 .users
                 .delete_mailbox(mailbox)
                 .await
-                .map_err(store_error)?;
+                .map_err(|e| store_error("deleting mailbox session", mailbox, e))?;
             self.state.token_backend.forget(mailbox);
         }
         tracing::info!(user = %user_hash(&record.signin), "account settings updated");
@@ -191,7 +205,7 @@ impl PidgeMcp {
         );
         let mut any_broken = false;
         for mailbox in &record.mailboxes {
-            let healthy = self.mailbox_is_healthy(mailbox).await;
+            let healthy = self.mailbox_is_healthy(mailbox, &record.signin).await;
             any_broken |= !healthy;
             let role = if *mailbox == record.signin {
                 " (sign-in)"
@@ -215,10 +229,12 @@ impl PidgeMcp {
         out
     }
 
-    /// `ok` if the stored access token is still fresh, or a refresh
-    /// succeeds. Makes no Graph call beyond that refresh.
-    async fn mailbox_is_healthy(&self, mailbox: &str) -> bool {
+    /// `ok` if the mailbox's record is owned by `owner` and its access token
+    /// is still fresh, or a refresh succeeds. Makes no Graph call beyond that
+    /// refresh, and never touches tokens stamped with another owner.
+    async fn mailbox_is_healthy(&self, mailbox: &str, owner: &str) -> bool {
         match self.state.users.load_mailbox(mailbox).await {
+            Ok(Some(rec)) if !rec.owner.eq_ignore_ascii_case(owner) => false,
             Ok(Some(rec)) if !rec.tokens.needs_refresh() => true,
             Ok(Some(_)) => self
                 .state
@@ -229,7 +245,7 @@ impl PidgeMcp {
                 .is_ok(),
             Ok(None) => false,
             Err(e) => {
-                tracing::error!(error = %e, "loading mailbox record");
+                log_store_error("loading mailbox record", mailbox, &e);
                 false
             }
         }
@@ -247,14 +263,6 @@ fn sender_address(input: Option<&str>, field: &str) -> Result<Option<String>, Mc
         )));
     }
     Ok(Some(raw.to_ascii_lowercase()))
-}
-
-fn store_error(e: anyhow::Error) -> McpError {
-    tracing::error!(error = %e, "user store");
-    McpError::internal_error(
-        "pidge could not save your account settings; try again",
-        None,
-    )
 }
 
 fn ok(text: String) -> CallToolResult {
@@ -282,6 +290,25 @@ mod tests {
         assert!(out.contains("signed in as: jane@example.com"), "{out}");
         assert!(out.contains("default sender: jane@example.com"), "{out}");
         assert!(out.contains("timezone: Europe/Stockholm"), "{out}");
+        assert!(out.contains("jane@example.com (sign-in): ok"), "{out}");
+        assert!(out.contains("work@example.com: needs reconnect"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn list_reports_a_mailbox_stamped_with_another_owner_as_needing_reconnect() {
+        let h = ToolHarness::new(&[JANE, WORK]).await;
+        // Fresh tokens, but the mailbox record belongs to someone else.
+        UserStore::new(h.secrets.clone())
+            .save_mailbox(
+                &crate::users::MailboxRecord {
+                    owner: "mallory@example.com".into(),
+                    tokens: crate::tools::tests::fresh_tokens(),
+                },
+                WORK,
+            )
+            .await
+            .unwrap();
+        let out = text(&h.mcp.accounts_list(h.ctx()).await.unwrap());
         assert!(out.contains("jane@example.com (sign-in): ok"), "{out}");
         assert!(out.contains("work@example.com: needs reconnect"), "{out}");
     }

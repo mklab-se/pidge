@@ -11,7 +11,7 @@ use rmcp::{ErrorData as McpError, RoleServer};
 
 use crate::oauth::bearer::AuthenticatedUser;
 use crate::state::SharedState;
-use crate::users::{UserRecord, user_hash};
+use crate::users::{UserRecord, log_store_error, user_hash};
 
 pub struct ToolContext {
     #[allow(dead_code)] // read by the mail and calendar tools (Tasks 10+)
@@ -40,11 +40,15 @@ impl ToolContext {
             Ok(Some(rec)) => rec,
             Ok(None) => {
                 let rec = UserRecord::new(&user.email);
-                state.users.save(&rec).await.map_err(store_error)?;
+                state
+                    .users
+                    .save(&rec)
+                    .await
+                    .map_err(|e| store_error("creating user record", &user.email, e))?;
                 tracing::info!(user = %user_hash(&user.email), "created missing user record");
                 rec
             }
-            Err(e) => return Err(store_error(e)),
+            Err(e) => return Err(store_error("loading user record", &user.email, e)),
         };
         let tz = record.tz();
         Ok(Self { user, record, tz })
@@ -110,10 +114,12 @@ pub fn graph_error(e: ClientError) -> McpError {
     McpError::internal_error(msg, None)
 }
 
-fn store_error(e: anyhow::Error) -> McpError {
-    tracing::error!(error = %e, "user store");
+/// A secret-store failure during a tool call: logged redacted (see
+/// [`log_store_error`]) and reported to the harness as a fixed message.
+pub fn store_error(context: &str, account: &str, e: anyhow::Error) -> McpError {
+    log_store_error(context, account, &e);
     McpError::internal_error(
-        "pidge could not read your account settings; try again",
+        "pidge could not access your account settings; try again",
         None,
     )
 }
@@ -132,6 +138,35 @@ mod tests {
             tz: record.tz(),
             record,
         }
+    }
+
+    #[tokio::test]
+    async fn store_failures_are_reported_and_logged_without_the_address() {
+        use std::sync::Arc;
+
+        use crate::test_support::{FailingSecrets, LogCapture, assert_no_address};
+        use crate::tools::tests::{request_context, test_state};
+
+        let (logs, _guard) = LogCapture::start();
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(
+            Arc::new(FailingSecrets),
+            "http://127.0.0.1:9",
+            "jane@example.com",
+            dir.path(),
+        );
+        let err =
+            match ToolContext::from_request(&state, &request_context("jane@example.com")).await {
+                Err(e) => e,
+                Ok(_) => panic!("store failure must fail the call"),
+            };
+        assert_no_address("tool error", &err.message);
+        let logged = logs.text();
+        assert!(
+            logged.contains("loading user record: secret store failure"),
+            "{logged}"
+        );
+        assert_no_address("logs", &logged);
     }
 
     #[test]

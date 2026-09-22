@@ -118,25 +118,7 @@ pub(crate) mod tests {
                     .unwrap();
             }
 
-            let config = Config {
-                port: 8080,
-                public_url: Url::parse(PUBLIC).unwrap(),
-                allowed_emails: HashSet::from([signin.clone()]),
-                secrets: SecretsBackend::File {
-                    dir: secrets_dir.path().to_path_buf(),
-                },
-            };
-            let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
-            let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
-            let auth = AuthClient::for_test("cid", graph.uri()).with_backend(token_backend.clone());
-            let client = GraphClient::for_test(auth, format!("{}/v1.0", graph.uri()));
-            let state: SharedState = Arc::new(AppState::new(
-                config,
-                signer,
-                client,
-                token_backend,
-                secrets.clone(),
-            ));
+            let state = test_state(secrets.clone(), &graph.uri(), &signin, secrets_dir.path());
             Self {
                 mcp: PidgeMcp::new(state.clone()),
                 graph,
@@ -155,6 +137,35 @@ pub(crate) mod tests {
         pub async fn record(&self) -> UserRecord {
             self.state.users.load(&self.signin).await.unwrap().unwrap()
         }
+    }
+
+    /// An `AppState` over `secrets`, with Microsoft login and Graph served by
+    /// `mock_uri` and `signin` the only allowlisted address.
+    pub(crate) fn test_state(
+        secrets: SharedSecrets,
+        mock_uri: &str,
+        signin: &str,
+        secrets_dir: &std::path::Path,
+    ) -> SharedState {
+        let config = Config {
+            port: 8080,
+            public_url: Url::parse(PUBLIC).unwrap(),
+            allowed_emails: HashSet::from([signin.to_string()]),
+            secrets: SecretsBackend::File {
+                dir: secrets_dir.to_path_buf(),
+            },
+        };
+        let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
+        let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
+        let auth = AuthClient::for_test("cid", mock_uri).with_backend(token_backend.clone());
+        let client = GraphClient::for_test(auth, format!("{mock_uri}/v1.0"));
+        Arc::new(AppState::new(
+            config,
+            signer,
+            client,
+            token_backend,
+            secrets,
+        ))
     }
 
     pub(crate) fn fresh_tokens() -> TokenSet {

@@ -56,7 +56,10 @@ async fn harness(signed_in_email: &str) -> Harness {
     let config = Config {
         port: 8080,
         public_url: Url::parse(PUBLIC).unwrap(),
-        allowed_emails: HashSet::from(["jane@example.com".to_string()]),
+        allowed_emails: HashSet::from([
+            "jane@example.com".to_string(),
+            "anna@example.com".to_string(),
+        ]),
         secrets: SecretsBackend::File {
             dir: secrets_dir.path().to_path_buf(),
         },
@@ -478,6 +481,11 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let page = body_text(resp).await;
+    assert!(
+        page.contains("Mailbox connected to jane@example.com"),
+        "{page}"
+    );
     let rec = UserStore::new(h.secrets.clone())
         .load("jane@example.com")
         .await
@@ -496,16 +504,16 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
             .owner,
         "jane@example.com"
     );
-    // Mallory tries to connect the same mailbox.
+    // Anna, another allowed user, tries to connect the same mailbox.
     UserStore::new(h.secrets.clone())
-        .save(&UserRecord::new("mallory@example.com"))
+        .save(&UserRecord::new("anna@example.com"))
         .await
         .unwrap();
     state.insert_pending(
         "s2".into(),
         PendingAuthorization {
             kind: PendingKind::Connect {
-                owner: "mallory@example.com".into(),
+                owner: "anna@example.com".into(),
             },
             ..pending_stub()
         },
@@ -521,36 +529,58 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-    let mallory = UserStore::new(h.secrets.clone())
-        .load("mallory@example.com")
+    let anna = UserStore::new(h.secrets.clone())
+        .load("anna@example.com")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(mallory.mailboxes, vec!["mallory@example.com"]);
+    assert_eq!(anna.mailboxes, vec!["anna@example.com"]);
+}
+
+fn connect_pending(owner: &str) -> PendingAuthorization {
+    PendingAuthorization {
+        kind: PendingKind::Connect {
+            owner: owner.into(),
+        },
+        ..pending_stub()
+    }
+}
+
+async fn get(h: &Harness, uri: &str) -> axum::response::Response {
+    h.app
+        .clone()
+        .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn body_text(resp: axum::response::Response) -> String {
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[tokio::test]
-async fn connect_link_redirects_to_microsoft_with_the_pending_state() {
+async fn connect_link_confirms_the_owner_then_goes_to_microsoft() {
     let h = harness("second@example.com").await;
-    h.state.insert_pending(
-        "s1".into(),
-        PendingAuthorization {
-            kind: PendingKind::Connect {
-                owner: "jane@example.com".into(),
-            },
-            ..pending_stub()
-        },
+    h.state
+        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+
+    // The link first shows whose pidge account the mailbox will join.
+    let resp = get(&h, "/connect?state=s1").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    let page = body_text(resp).await;
+    assert!(
+        page.contains("connect a mailbox to the pidge account jane@example.com"),
+        "{page}"
     );
-    let resp = h
-        .app
-        .clone()
-        .oneshot(
-            Request::get("/connect?state=s1")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    assert!(
+        page.contains(&format!("{PUBLIC}/connect/go?state=s1")),
+        "{page}"
+    );
+
+    // Continue goes to Microsoft with the link's state and verifier.
+    let resp = get(&h, "/connect/go?state=s1").await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     let location = resp.headers()[header::LOCATION]
         .to_str()
@@ -566,16 +596,106 @@ async fn connect_link_redirects_to_microsoft_with_the_pending_state() {
         query(&location, "redirect_uri").unwrap(),
         format!("{PUBLIC}/callback")
     );
+    assert!(h.state.peek_pending("s1").is_some(), "link still usable");
+}
 
-    // Unknown state and a sign-in entry are both refused.
-    h.state.insert_pending("s2".into(), pending_stub());
-    for uri in ["/connect?state=nope", "/connect?state=s2", "/connect"] {
-        let resp = h
-            .app
-            .clone()
-            .oneshot(Request::get(uri).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
+#[tokio::test]
+async fn connect_link_refuses_unknown_expired_and_sign_in_states() {
+    let h = harness("second@example.com").await;
+    h.state.insert_pending("signin".into(), pending_stub());
+    h.state.insert_pending(
+        "old".into(),
+        PendingAuthorization {
+            created_at: chrono::Utc::now() - chrono::Duration::minutes(11),
+            ..connect_pending("jane@example.com")
+        },
+    );
+    for path in ["/connect", "/connect/go"] {
+        for query in ["", "?state=nope", "?state=signin", "?state=old"] {
+            let uri = format!("{path}{query}");
+            let resp = get(&h, &uri).await;
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
+            assert!(resp.headers().get(header::LOCATION).is_none(), "{uri}");
+        }
     }
+}
+
+#[tokio::test]
+async fn connect_failures_render_a_page_instead_of_redirecting() {
+    let h = harness("second@example.com").await;
+    h.state
+        .insert_pending("denied".into(), connect_pending("jane@example.com"));
+    let resp = get(&h, "/callback?error=access_denied&state=denied").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+
+    // Microsoft refuses the code: a higher-priority mock overrides the harness's.
+    Mock::given(method("POST"))
+        .and(path("/oauth2/v2.0/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": "invalid_grant", "error_description": "bad code"
+        })))
+        .with_priority(1)
+        .mount(&h.microsoft)
+        .await;
+    h.state
+        .insert_pending("badcode".into(), connect_pending("jane@example.com"));
+    let resp = get(&h, "/callback?code=x&state=badcode").await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    assert!(
+        UserStore::new(h.secrets.clone())
+            .load_mailbox("second@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn connect_refuses_another_users_sign_in_identity() {
+    // Anna is on the allowlist, so her Microsoft account is her own pidge
+    // user and can't become one of Jane's mailboxes.
+    let h = harness("anna@example.com").await;
+    let users = UserStore::new(h.secrets.clone());
+    users
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    h.state
+        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+    let resp = get(&h, "/callback?code=x&state=s1").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(
+        users
+            .load_mailbox("anna@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        users
+            .load("jane@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .mailboxes,
+        vec!["jane@example.com"]
+    );
+}
+
+#[tokio::test]
+async fn connect_refuses_an_owner_no_longer_on_the_allowlist() {
+    let h = harness("second@example.com").await;
+    h.state
+        .insert_pending("s1".into(), connect_pending("mallory@example.com"));
+    let resp = get(&h, "/callback?code=x&state=s1").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(
+        UserStore::new(h.secrets.clone())
+            .load_mailbox("second@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
