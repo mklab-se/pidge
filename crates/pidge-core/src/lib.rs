@@ -10,6 +10,7 @@ mod contacts;
 mod error;
 mod event;
 mod message;
+pub mod render;
 
 pub use account::{Account, TokenStorage};
 pub use cache::{

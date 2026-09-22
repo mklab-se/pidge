@@ -20,6 +20,7 @@ chrono-tz.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 dirs.workspace = true
+html2text.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

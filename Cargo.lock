@@ -2788,6 +2788,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "dirs",
+ "html2text",
  "serde",
  "serde_json",
  "serde_yaml",
