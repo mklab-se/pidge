@@ -18,8 +18,14 @@ clap_complete = { version = "4.6", features = ["unstable-dynamic"] }
 # Async
 tokio = { version = "1.53", features = ["full"] }
 
-# HTTP (for update checker)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+# HTTP (for update checker, and pidge-client's OAuth + Graph calls)
+# rustls-tls-native-roots was renamed rustls in reqwest 0.13; it now validates against the
+# live OS trust store (rustls-platform-verifier) with aws-lc-rs as the crypto provider, which
+# needs NASM + CMake to build on Windows (see the release workflow's "Install NASM" step and
+# INSTALL.md). Ailloy is on the same 0.13 line, so the TLS stack stays shared.
+# `form` and `query` are no longer bundled by default in 0.13 (pidge-client's OAuth token
+# requests use `.form()`, its Graph calls use `.query()`).
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "form", "query"] }
 
 # Errors
 anyhow = "1.0"
@@ -46,7 +52,7 @@ iana-time-zone = "0.1"
 dirs = "7.0"
 
 # AI integration
-ailloy = { version = "2.1", default-features = false, features = ["config-tui"] }
+ailloy = { version = "2.2", default-features = false, features = ["config-tui"] }
 
 # Keychain
 # keyring 4 `v1` mode: macOS Keychain, Windows Credential Manager, Secret Service on Linux
