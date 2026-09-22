@@ -4,6 +4,7 @@
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
 
 mod account;
+pub mod availability;
 mod cache;
 mod config;
 pub mod contacts;
