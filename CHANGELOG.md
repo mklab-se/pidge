@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Outlook reminders on calendar events: `calendar new --reminder <spec>` and
+  `calendar edit --reminder <spec>` set `isReminderOn` / `reminderMinutesBeforeStart`.
+  The spec is a duration (`15m`, `2h`, `1d`, `1d2h`, `1w`), plain minutes (`30`), or `off`.
+  Omitting the flag keeps Graph's default on create and preserves the existing setting on
+  edit; `calendar duplicate` copies the source event's reminder. `calendar show` prints a
+  `Remind:` line and the JSON `Event` carries `reminder_minutes` (`null` when off).
+
+### Fixed
+
+- `calendar edit` without `--body`/`--body-file` no longer rewrites the event body: it used to
+  re-send the stored HTML body as `contentType: text`, which escaped every tag into visible
+  `&lt;html&gt;…` text. The body is now left out of the PATCH so Graph keeps it as is.
+- `calendar duplicate` copies an HTML body as HTML instead of text.
+
 ## [1.1.2] - 2026-09-22
 
 ### Changed

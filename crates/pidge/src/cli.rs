@@ -1208,6 +1208,10 @@ pub struct CalendarNewArgs {
     /// Add a Microsoft Teams meeting URL
     #[arg(long)]
     pub online: bool,
+    /// Outlook reminder before start: `15m`, `2h`, `1d`, `1d2h`, plain
+    /// minutes (`30`), or `off`. Omit for the mailbox default.
+    #[arg(long)]
+    pub reminder: Option<String>,
     /// Create in a non-default calendar (name or id)
     #[arg(long)]
     pub calendar: Option<String>,
@@ -1247,6 +1251,10 @@ pub struct CalendarEditArgs {
     /// Apply to the whole recurring series instead of this occurrence
     #[arg(long)]
     pub series: bool,
+    /// Outlook reminder before start: `15m`, `2h`, `1d`, `1d2h`, plain
+    /// minutes (`30`), or `off`. Omit to keep the current setting.
+    #[arg(long)]
+    pub reminder: Option<String>,
     #[arg(long)]
     pub tz: Option<String>,
     #[arg(short = 'y', long)]

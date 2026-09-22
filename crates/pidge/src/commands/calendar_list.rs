@@ -378,6 +378,7 @@ mod tests {
             response_status: Default::default(),
             online_meeting_url: None,
             series_master_id: None,
+            reminder_minutes: None,
         }
     }
 

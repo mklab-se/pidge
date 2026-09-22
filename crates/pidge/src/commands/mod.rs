@@ -49,6 +49,7 @@ pub mod mail_show;
 pub mod mail_thread;
 pub mod mail_unsubscribe;
 pub mod name_resolve;
+pub mod reminder;
 pub mod skill;
 pub mod time;
 pub mod trust;

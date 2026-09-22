@@ -52,6 +52,10 @@ struct GraphEvent {
     series_master_id: Option<String>,
     #[serde(rename = "calendarId", default)]
     calendar_id: Option<String>,
+    #[serde(rename = "isReminderOn", default)]
+    is_reminder_on: Option<bool>,
+    #[serde(rename = "reminderMinutesBeforeStart", default)]
+    reminder_minutes_before_start: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -153,10 +157,38 @@ pub struct NewEvent {
     pub all_day: bool,
     pub location: Option<String>,
     pub body_text: Option<String>,
+    /// Send `body_text` as `contentType: html` instead of `text`. Set when
+    /// copying a body Graph returned as HTML, so tags are not escaped.
+    pub body_html: bool,
     pub required_attendees: Vec<String>,
     pub optional_attendees: Vec<String>,
     pub recurrence: Option<RecurrencePattern>,
     pub online_meeting: bool,
+    pub reminder: Reminder,
+}
+
+/// Outlook reminder setting carried on a create/update payload.
+///
+/// `Default` sends nothing: on create Graph applies the mailbox default
+/// (typically 15 minutes), on update the existing setting is preserved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reminder {
+    #[default]
+    Default,
+    /// `isReminderOn: false`.
+    Off,
+    /// `isReminderOn: true` with this many minutes before start.
+    MinutesBefore(u32),
+}
+
+impl Reminder {
+    /// The setting an existing event carries, for copy/preserve flows.
+    pub fn from_minutes(m: Option<u32>) -> Self {
+        match m {
+            Some(n) => Reminder::MinutesBefore(n),
+            None => Reminder::Off,
+        }
+    }
 }
 
 impl NewEvent {
@@ -183,7 +215,8 @@ impl NewEvent {
             v["location"] = serde_json::json!({ "displayName": loc });
         }
         if let Some(b) = &self.body_text {
-            v["body"] = serde_json::json!({ "contentType": "text", "content": b });
+            let content_type = if self.body_html { "html" } else { "text" };
+            v["body"] = serde_json::json!({ "contentType": content_type, "content": b });
         }
         let mut atts: Vec<serde_json::Value> = self
             .required_attendees
@@ -204,6 +237,16 @@ impl NewEvent {
         if self.online_meeting {
             v["isOnlineMeeting"] = serde_json::Value::Bool(true);
             v["onlineMeetingProvider"] = serde_json::Value::String("teamsForBusiness".into());
+        }
+        match self.reminder {
+            Reminder::Default => {}
+            Reminder::Off => {
+                v["isReminderOn"] = serde_json::Value::Bool(false);
+            }
+            Reminder::MinutesBefore(m) => {
+                v["isReminderOn"] = serde_json::Value::Bool(true);
+                v["reminderMinutesBeforeStart"] = serde_json::Value::Number(m.into());
+            }
         }
         v
     }
@@ -603,6 +646,10 @@ fn to_event(g: GraphEvent, account: &str, calendar_hint: Option<&str>) -> Event 
         response_status: parse_response(g.response_status.and_then(|r| r.response).as_deref()),
         online_meeting_url: g.online_meeting.and_then(|m| m.join_url),
         series_master_id: g.series_master_id,
+        reminder_minutes: match g.is_reminder_on {
+            Some(true) => g.reminder_minutes_before_start,
+            _ => None,
+        },
     }
 }
 
@@ -704,11 +751,101 @@ mod tests {
             all_day: false,
             location: None,
             body_text: None,
+            body_html: false,
             required_attendees: vec![],
             optional_attendees: vec![],
             recurrence: None,
             online_meeting: false,
+            reminder: Reminder::Default,
         }
+    }
+
+    #[test]
+    fn to_graph_json_body_content_type_follows_body_html() {
+        let mut e = sample_event("UTC");
+        e.body_text = Some("<p>hi</p>".into());
+        let v = e.to_graph_json();
+        assert_eq!(v["body"]["contentType"], "text");
+        e.body_html = true;
+        let v = e.to_graph_json();
+        assert_eq!(v["body"]["contentType"], "html");
+        assert_eq!(v["body"]["content"], "<p>hi</p>");
+    }
+
+    #[test]
+    fn to_graph_json_omits_body_when_none() {
+        let v = sample_event("UTC").to_graph_json();
+        assert!(v.get("body").is_none());
+    }
+
+    #[test]
+    fn to_graph_json_omits_reminder_fields_by_default() {
+        let v = sample_event("UTC").to_graph_json();
+        assert!(v.get("isReminderOn").is_none());
+        assert!(v.get("reminderMinutesBeforeStart").is_none());
+    }
+
+    #[test]
+    fn to_graph_json_switches_reminder_off() {
+        let mut e = sample_event("UTC");
+        e.reminder = Reminder::Off;
+        let v = e.to_graph_json();
+        assert_eq!(v["isReminderOn"], false);
+        assert!(v.get("reminderMinutesBeforeStart").is_none());
+    }
+
+    #[test]
+    fn to_graph_json_sets_reminder_minutes() {
+        let mut e = sample_event("UTC");
+        e.reminder = Reminder::MinutesBefore(1440);
+        let v = e.to_graph_json();
+        assert_eq!(v["isReminderOn"], true);
+        assert_eq!(v["reminderMinutesBeforeStart"], 1440);
+    }
+
+    #[test]
+    fn reminder_from_minutes_maps_none_to_off() {
+        assert_eq!(Reminder::from_minutes(None), Reminder::Off);
+        assert_eq!(
+            Reminder::from_minutes(Some(30)),
+            Reminder::MinutesBefore(30)
+        );
+    }
+
+    #[tokio::test]
+    async fn get_event_parses_reminder_only_when_on() {
+        let server = MockServer::start().await;
+        let base = serde_json::json!({
+            "id": "EVT-R",
+            "subject": "Car service",
+            "start": { "dateTime": "2026-10-07T09:25:00.000", "timeZone": "UTC" },
+            "end":   { "dateTime": "2026-10-07T10:00:00.000", "timeZone": "UTC" },
+        });
+        let mut on = base.clone();
+        on["isReminderOn"] = serde_json::Value::Bool(true);
+        on["reminderMinutesBeforeStart"] = serde_json::Value::Number(1440.into());
+        let mut off = base.clone();
+        off["isReminderOn"] = serde_json::Value::Bool(false);
+        off["reminderMinutesBeforeStart"] = serde_json::Value::Number(15.into());
+        Mock::given(method("GET"))
+            .and(path("/me/events/ON"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(on))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/events/OFF"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(off))
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let e = get_event(&http, &server.uri(), "AT", "u@e.com", "ON")
+            .await
+            .unwrap();
+        assert_eq!(e.reminder_minutes, Some(1440));
+        let e = get_event(&http, &server.uri(), "AT", "u@e.com", "OFF")
+            .await
+            .unwrap();
+        assert_eq!(e.reminder_minutes, None);
     }
 
     #[test]
@@ -845,6 +982,8 @@ mod tests {
                 "isAllDay": false,
                 "isOnlineMeeting": true,
                 "onlineMeetingProvider": "teamsForBusiness",
+                "isReminderOn": true,
+                "reminderMinutesBeforeStart": 30,
                 "attendees": [
                     { "emailAddress": { "address": "a@x.com" }, "type": "required" },
                     { "emailAddress": { "address": "b@x.com" }, "type": "optional" }
@@ -871,6 +1010,7 @@ mod tests {
             all_day: false,
             location: None,
             body_text: None,
+            body_html: false,
             required_attendees: vec!["a@x.com".into()],
             optional_attendees: vec!["b@x.com".into()],
             recurrence: Some(RecurrencePattern {
@@ -880,6 +1020,7 @@ mod tests {
                 range: RecurrenceRange::NoEnd,
             }),
             online_meeting: true,
+            reminder: Reminder::MinutesBefore(30),
         };
         let id = create_event(&http, &server.uri(), "AT", None, &new)
             .await

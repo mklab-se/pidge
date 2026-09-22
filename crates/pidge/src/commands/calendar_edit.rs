@@ -9,6 +9,7 @@ use pidge_core::{Config, ContactsCache};
 use crate::cli::CalendarEditArgs;
 use crate::commands::calendar_fragment;
 use crate::commands::name_resolve::resolve_addresses;
+use crate::commands::reminder::parse_reminder;
 use crate::commands::time::{input_tz, parse_when};
 
 pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<()> {
@@ -57,7 +58,10 @@ pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<(
             Some(s)
         }
         (_, Some(p)) => Some(std::fs::read_to_string(p)?),
-        _ => Some(cur.body_content.clone()),
+        // No --body: leave `body` out of the PATCH so Graph keeps the stored
+        // one. Re-sending `cur.body_content` (HTML) as `text` escaped every
+        // tag into the event.
+        _ => None,
     };
 
     let contacts = ContactsCache::load()?;
@@ -88,10 +92,14 @@ pub async fn run(fragment: &str, args: CalendarEditArgs, json: bool) -> Result<(
         all_day: cur.all_day,
         location: args.location.clone().or_else(|| cur.location.clone()),
         body_text,
+        body_html: false,
         required_attendees,
         optional_attendees,
         recurrence: cur.recurrence.clone(),
         online_meeting: cur.online_meeting_url.is_some(),
+        // `Default` sends no reminder fields, so an edit without --reminder
+        // keeps whatever the event already has.
+        reminder: parse_reminder(args.reminder.as_deref())?,
     };
 
     graph.update_event(&r.account, &event_id, &new).await?;

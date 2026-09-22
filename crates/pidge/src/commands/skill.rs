@@ -407,7 +407,8 @@ These are sketches, not contracts. Always check `--help` for exact flags.
   windows.
 - `{invoke} calendar search \"team sync\" --json` — KQL search.
 - `{invoke} calendar show <hash> --json` — full event details + attendees +
-  organizer + RSVP states + recurrence summary.
+  organizer + RSVP states + recurrence summary + `reminder_minutes`
+  (`null` when the reminder is off).
 - `{invoke} calendar calendars` — enumerate the calendars on each account.
 
 ### Create
@@ -421,12 +422,16 @@ These are sketches, not contracts. Always check `--help` for exact flags.
   mon,wed,fri`. Range: `--until 2026-12-31` OR `--count 10` (mutually
   exclusive). `--interval N` for every-Nth-period.
 - `--online` adds a Microsoft Teams meeting URL.
+- `--reminder 1d` sets a real Outlook reminder before start (`15m`, `2h`,
+  `1d`, `1d2h`, plain minutes, or `off`). Omit for the mailbox default.
+  Prefer this over creating a separate \"reminder\" event.
 - `--calendar <name-or-id>` to create in a non-default calendar.
 
 ### Modify
 - `{invoke} calendar edit <hash> --title \"...\" --start \"...\"` etc. Pass
   `--series` to apply to the whole recurring series instead of just this
-  occurrence.
+  occurrence. `--reminder 1d` / `--reminder off` changes only the reminder;
+  without the flag the existing reminder is kept.
 - `{invoke} calendar move-time <hash> --start \"fri 14:00\"` — reschedule
   without touching other fields.
 - `{invoke} calendar duplicate <hash> --start \"2026-06-01T15:00\"` —

@@ -36,6 +36,10 @@ pub struct Event {
     pub online_meeting_url: Option<String>,
     #[serde(default)]
     pub series_master_id: Option<String>,
+    /// Minutes before `start` that Outlook raises a reminder; `None` when the
+    /// reminder is switched off.
+    #[serde(default)]
+    pub reminder_minutes: Option<u32>,
 }
 
 /// A calendar instant. `at` is the canonical UTC time; `tz` is the IANA zone
@@ -177,6 +181,7 @@ mod tests {
             response_status: ResponseStatus::Organizer,
             online_meeting_url: None,
             series_master_id: None,
+            reminder_minutes: Some(15),
         };
         let json = serde_json::to_string(&e).unwrap();
         let e2: Event = serde_json::from_str(&json).unwrap();

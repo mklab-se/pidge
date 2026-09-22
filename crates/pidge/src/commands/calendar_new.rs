@@ -11,6 +11,7 @@ use pidge_core::{
 
 use crate::cli::CalendarNewArgs;
 use crate::commands::name_resolve::resolve_addresses;
+use crate::commands::reminder::parse_reminder;
 use crate::commands::time::parse_when;
 use crate::output::resolve_tz;
 
@@ -39,6 +40,7 @@ pub async fn run(args: CalendarNewArgs, json: bool) -> Result<()> {
     let body_text = read_body(args.body.clone(), args.body_file.clone())?;
 
     let recurrence = build_recurrence(&args)?;
+    let reminder = parse_reminder(args.reminder.as_deref())?;
 
     let contacts = ContactsCache::load()?;
     let required_attendees = resolve_addresses(&args.invite, &contacts)?;
@@ -52,10 +54,12 @@ pub async fn run(args: CalendarNewArgs, json: bool) -> Result<()> {
         all_day: args.all_day,
         location: args.location.clone(),
         body_text,
+        body_html: false,
         required_attendees,
         optional_attendees,
         recurrence,
         online_meeting: args.online,
+        reminder,
     };
 
     let auth = AuthClient::from_env()?;

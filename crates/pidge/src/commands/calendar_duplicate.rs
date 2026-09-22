@@ -3,7 +3,10 @@
 use anyhow::{Result, anyhow};
 use chrono::{Duration, Utc};
 
-use pidge_client::{AuthClient, GraphClient, graph::events::NewEvent};
+use pidge_client::{
+    AuthClient, GraphClient,
+    graph::events::{NewEvent, Reminder},
+};
 use pidge_core::Config;
 
 use crate::commands::calendar_fragment;
@@ -36,6 +39,7 @@ pub async fn run(
         all_day: cur.all_day,
         location: cur.location.clone(),
         body_text: Some(cur.body_content.clone()),
+        body_html: matches!(cur.body_content_type, pidge_core::BodyContentType::Html),
         required_attendees: cur
             .attendees
             .iter()
@@ -50,6 +54,7 @@ pub async fn run(
             .collect(),
         recurrence: None,
         online_meeting: cur.online_meeting_url.is_some(),
+        reminder: Reminder::from_minutes(cur.reminder_minutes),
     };
 
     let cal_id = match calendar_name_or_id {

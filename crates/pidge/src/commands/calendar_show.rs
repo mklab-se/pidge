@@ -8,6 +8,7 @@ use pidge_core::Config;
 
 use crate::commands::calendar_fragment;
 use crate::commands::calendar_list::short_id_for;
+use crate::commands::reminder;
 use crate::commands::time::format_when;
 use crate::output::resolve_tz;
 
@@ -57,6 +58,11 @@ pub async fn run(fragment: &str, json: bool) -> Result<()> {
     if let Some(url) = &event.online_meeting_url {
         println!("{} {}", "Join: ".dimmed(), url);
     }
+    println!(
+        "{} {}",
+        "Remind:".dimmed(),
+        reminder::describe(event.reminder_minutes)
+    );
     if let Some(r) = &event.recurrence {
         let freq = format!("{:?}", r.freq).to_lowercase();
         let range_label = match &r.range {

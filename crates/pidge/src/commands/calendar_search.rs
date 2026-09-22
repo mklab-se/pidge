@@ -194,6 +194,7 @@ mod tests {
             response_status: ResponseStatus::None,
             online_meeting_url: None,
             series_master_id: None,
+            reminder_minutes: None,
         }
     }
 

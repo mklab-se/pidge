@@ -120,6 +120,16 @@ pidge calendar new \
   --start "next mon 09:00" --end "+30m" \
   --repeat weekly --on mon --until 2026-12-31
 
+# Appointment with a real Outlook reminder the day before
+pidge calendar new \
+  --title "Car service" \
+  --start "2026-10-07T11:25" --end "+35m" \
+  --location "Volvo Car Kista" --reminder 1d
+
+# Change or switch off the reminder on an existing event
+pidge calendar edit 4cabda75 --reminder 2h
+pidge calendar edit 4cabda75 --reminder off
+
 # Reschedule
 pidge calendar move-time 4cabda75 --start "fri 14:00"
 
