@@ -12,6 +12,7 @@ mod mcp;
 mod oauth;
 mod secrets;
 mod state;
+mod users;
 
 use std::sync::Arc;
 

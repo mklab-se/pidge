@@ -9,6 +9,7 @@ use pidge_client::GraphClient;
 use crate::config::Config;
 use crate::oauth::jwt::Signer;
 use crate::secrets::SharedSecrets;
+use crate::users::UserStore;
 
 /// An authorization the user has started but not finished at Microsoft.
 /// Keyed by the `state` we send to Microsoft; lives in memory for minutes.
@@ -30,6 +31,8 @@ pub struct AppState {
     pub graph: GraphClient,
     #[allow(dead_code)] // kept for the upcoming connect_mailbox tool
     pub secrets: SharedSecrets,
+    #[allow(dead_code)] // wired into the sign-in callback and tools in Task 8+
+    pub users: UserStore,
     pending: Mutex<HashMap<String, PendingAuthorization>>,
     /// `jti` → expiry of authorization codes already redeemed, so a code
     /// can't be replayed inside its two-minute lifetime.
@@ -44,6 +47,7 @@ impl AppState {
             config,
             signer,
             graph,
+            users: UserStore::new(secrets.clone()),
             secrets,
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),

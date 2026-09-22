@@ -1,25 +1,25 @@
-//! Bridges pidge-client's token persistence to the secret store, with an
-//! in-memory cache so a Graph call doesn't cost a Key Vault round trip.
+//! Bridges pidge-client's token persistence to the per-mailbox record store,
+//! with an in-memory cache so a Graph call doesn't cost a Key Vault round trip.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use pidge_client::ClientError;
 use pidge_client::auth::{TokenBackend, TokenSet};
 
-use crate::secrets::{SharedSecrets, mailbox_secret_name};
+use crate::secrets::SharedSecrets;
+use crate::users::UserStore;
 
 pub struct SecretTokenBackend {
-    secrets: SharedSecrets,
+    users: UserStore,
     cache: Mutex<HashMap<String, TokenSet>>,
 }
 
 impl SecretTokenBackend {
     pub fn new(secrets: SharedSecrets) -> Self {
         Self {
-            secrets,
+            users: UserStore::new(secrets),
             cache: Mutex::new(HashMap::new()),
         }
     }
@@ -35,33 +35,37 @@ impl TokenBackend for SecretTokenBackend {
         if let Some(hit) = self.cache.lock().expect("cache lock").get(email) {
             return Ok(Some(hit.clone()));
         }
-        let Some(raw) = self
-            .secrets
-            .get(&mailbox_secret_name(email))
-            .await
-            .map_err(store_error)?
-        else {
+        let Some(rec) = self.users.load_mailbox(email).await.map_err(store_error)? else {
             return Ok(None);
         };
-        let tokens: TokenSet = serde_json::from_str(&raw)?;
         self.cache
             .lock()
             .expect("cache lock")
-            .insert(email.to_string(), tokens.clone());
-        Ok(Some(tokens))
+            .insert(email.to_string(), rec.tokens.clone());
+        Ok(Some(rec.tokens))
     }
 
+    /// Rotates the tokens on an existing mailbox record, preserving its
+    /// `owner`. This only handles refresh-rotation: the first store for a
+    /// mailbox happens during sign-in, which creates the record directly via
+    /// `UserStore::save_mailbox` with the owner attached. If no record
+    /// exists yet, that sign-in hasn't happened (or the record was deleted),
+    /// so this errors rather than silently creating an unowned mailbox.
     async fn save(&self, email: &str, tokens: &TokenSet) -> Result<(), ClientError> {
-        let raw = serde_json::to_string(tokens)?;
-        self.secrets
-            .set(&mailbox_secret_name(email), &raw)
+        let Some(mut rec) = self.users.load_mailbox(email).await.map_err(store_error)? else {
+            return Err(ClientError::SessionExpired {
+                email: email.to_string(),
+            });
+        };
+        rec.tokens = tokens.clone();
+        self.users
+            .save_mailbox(&rec, email)
             .await
-            .context("saving mailbox tokens")
             .map_err(store_error)?;
         self.cache
             .lock()
             .expect("cache lock")
-            .insert(email.to_string(), tokens.clone());
+            .insert(email.to_string(), rec.tokens);
         Ok(())
     }
 }
