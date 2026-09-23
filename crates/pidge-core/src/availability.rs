@@ -64,8 +64,14 @@ pub fn free_slots(
     let last_day = range.1.with_timezone(&tz).date_naive();
     while day <= last_day && out.len() < max {
         if hours.weekdays[day.weekday().num_days_from_monday() as usize] {
+            // Hour 24 is the next local midnight (`end_hour: 24`).
             let mk = |h: u32| -> Option<DateTime<Utc>> {
-                tz.from_local_datetime(&day.and_hms_opt(h, 0, 0)?)
+                let (date, h) = if h >= 24 {
+                    (day + Duration::days(1), 0)
+                } else {
+                    (day, h)
+                };
+                tz.from_local_datetime(&date.and_hms_opt(h, 0, 0)?)
                     .earliest()
                     .map(|d| d.with_timezone(&Utc))
             };
@@ -191,6 +197,30 @@ mod tests {
                     end: l(23, 18, 0)
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn end_hour_24_runs_to_local_midnight() {
+        let hours = WorkingHours {
+            start_hour: 20,
+            end_hour: 24,
+            ..WorkingHours::default()
+        };
+        let slots = free_slots(
+            &[],
+            (l(23, 0, 0), l(24, 0, 0)),
+            Duration::minutes(60),
+            &hours,
+            tz(),
+            20,
+        );
+        assert_eq!(
+            slots,
+            vec![Slot {
+                start: l(23, 20, 0),
+                end: l(24, 0, 0)
+            }]
         );
     }
 

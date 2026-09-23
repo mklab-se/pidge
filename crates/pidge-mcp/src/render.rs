@@ -1,10 +1,11 @@
 //! Plain-text formatting shared by the read tools: list items, the
-//! untrusted-content wrapper, length caps, and time/sender shorthands.
+//! untrusted-content wrapper, length caps, time/sender shorthands, and the
+//! calendar event line.
 
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use pidge_core::flags::ItemFlags;
-use pidge_core::{Message, MessageFrom};
+use pidge_core::{Event, Message, MessageFrom, ResponseStatus};
 
 const TAG: &str = "untrusted-email-content";
 
@@ -118,11 +119,105 @@ pub fn cap_inline(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// One calendar event in the shape every calendar tool uses:
+///
+/// ```text
+/// - 09:00–10:00 Wed 23 Sep  <subject>   [account]  id=<id>
+///     where: <location or join link>   organizer: <name>   me: accepted   attendees: 4
+/// ```
+///
+/// Times are in `tz`. All-day events read `all day Wed 23 Sep`; their dates
+/// are floating (Graph returns them at midnight UTC under pidge's `Prefer`
+/// header), so they are taken as-is rather than shifted into `tz`. The
+/// second line lists only the facts present, and is left out when none are.
+/// `me:` and `attendees:` appear only for meetings (events with attendees);
+/// `organizer:` only when someone else organises.
+pub fn event_line(e: &Event, tz: Tz) -> String {
+    const DAY: &str = "%a %-d %b";
+    let when = if e.all_day {
+        let first = e.start.at.date_naive();
+        // The end is exclusive: the midnight after the last day.
+        let last = (e.end.at.date_naive() - chrono::Duration::days(1)).max(first);
+        if last == first {
+            format!("all day {}", first.format(DAY))
+        } else {
+            format!("all day {}–{}", first.format(DAY), last.format(DAY))
+        }
+    } else {
+        let (start, end) = (e.start.at.with_timezone(&tz), e.end.at.with_timezone(&tz));
+        if start.date_naive() == end.date_naive() {
+            format!(
+                "{}–{} {}",
+                start.format("%H:%M"),
+                end.format("%H:%M"),
+                start.format(DAY)
+            )
+        } else {
+            format!(
+                "{}–{}",
+                start.format(&format!("%H:%M {DAY}")),
+                end.format(&format!("%H:%M {DAY}"))
+            )
+        }
+    };
+    let subject = match one_line(&e.subject) {
+        s if s.is_empty() => "(no title)".to_string(),
+        s => s,
+    };
+    let mut out = format!("- {when}  {subject}   [{}]  id={}", e.account, e.id);
+
+    let mut facts = Vec::new();
+    let place = e
+        .location
+        .as_deref()
+        .map(one_line)
+        .filter(|l| !l.is_empty())
+        .or_else(|| e.online_meeting_url.as_deref().map(one_line));
+    if let Some(place) = place.filter(|p| !p.is_empty()) {
+        facts.push(format!("where: {place}"));
+    }
+    if !e.is_organizer {
+        let name = match one_line(&e.organizer.name) {
+            n if n.is_empty() => one_line(&e.organizer.address),
+            n => n,
+        };
+        if !name.is_empty() {
+            facts.push(format!("organizer: {name}"));
+        }
+    }
+    if !e.attendees.is_empty() {
+        facts.push(format!("me: {}", my_response(e)));
+        facts.push(format!("attendees: {}", e.attendees.len()));
+    }
+    if !facts.is_empty() {
+        out.push_str("\n    ");
+        out.push_str(&facts.join("   "));
+    }
+    out
+}
+
+/// The user's answer to `e`: `organizer`, `accepted`, `tentative`,
+/// `declined`, or `none`.
+fn my_response(e: &Event) -> &'static str {
+    if e.is_organizer {
+        return "organizer";
+    }
+    match e.response_status {
+        ResponseStatus::Organizer => "organizer",
+        ResponseStatus::Accepted => "accepted",
+        ResponseStatus::Tentative => "tentative",
+        ResponseStatus::Declined => "declined",
+        ResponseStatus::None | ResponseStatus::NotResponded => "none",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use pidge_core::{BodyContentType, FlagStatus};
+    use pidge_core::{
+        Attendee, AttendeeKind, BodyContentType, EventTime, FlagStatus, ResponseStatus,
+    };
 
     fn addr(name: &str, address: &str) -> MessageFrom {
         MessageFrom {
@@ -259,5 +354,121 @@ mod tests {
         let out = message_item(2, &m, &ItemFlags::default(), chrono_tz::UTC, now, None);
         let preview = out.lines().last().unwrap();
         assert_eq!(preview, format!("   preview: {}…", "x".repeat(200)));
+    }
+
+    fn event(start: DateTime<Utc>, end: DateTime<Utc>) -> Event {
+        let organizer = Attendee {
+            name: "Anna\nAndersson".into(),
+            address: "anna@example.com".into(),
+            kind: AttendeeKind::Required,
+            response: ResponseStatus::Organizer,
+        };
+        Event {
+            account: "jane@example.com".into(),
+            calendar_id: "cal".into(),
+            id: "E1".into(),
+            subject: "Planning\nsync".into(),
+            start: EventTime {
+                at: start,
+                tz: "UTC".into(),
+            },
+            end: EventTime {
+                at: end,
+                tz: "UTC".into(),
+            },
+            all_day: false,
+            location: Some("Room\t1".into()),
+            attendees: vec![organizer.clone(); 4],
+            organizer,
+            body_preview: String::new(),
+            body_content: String::new(),
+            body_content_type: BodyContentType::Text,
+            recurrence: None,
+            is_organizer: false,
+            response_status: ResponseStatus::Accepted,
+            online_meeting_url: Some("https://teams.example.com/j/1".into()),
+            series_master_id: None,
+            reminder_minutes: None,
+        }
+    }
+
+    fn utc(d: u32, h: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 9, d, h, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn event_line_has_the_documented_shape() {
+        let e = event(utc(23, 7), utc(23, 8));
+        assert_eq!(
+            event_line(&e, chrono_tz::Europe::Stockholm),
+            "- 09:00–10:00 Wed 23 Sep  Planning sync   [jane@example.com]  id=E1\n    \
+             where: Room 1   organizer: Anna Andersson   me: accepted   attendees: 4"
+        );
+    }
+
+    #[test]
+    fn event_line_falls_back_to_the_join_link_and_maps_responses() {
+        let mut e = event(utc(23, 7), utc(23, 8));
+        e.location = None;
+        e.response_status = ResponseStatus::NotResponded;
+        let out = event_line(&e, chrono_tz::UTC);
+        assert!(
+            out.ends_with("where: https://teams.example.com/j/1   organizer: Anna Andersson   me: none   attendees: 4"),
+            "{out}"
+        );
+        e.response_status = ResponseStatus::Tentative;
+        assert!(event_line(&e, chrono_tz::UTC).contains("me: tentative"));
+    }
+
+    #[test]
+    fn event_line_omits_an_empty_second_line() {
+        let mut e = event(utc(23, 7), utc(23, 8));
+        e.location = None;
+        e.online_meeting_url = None;
+        e.attendees.clear();
+        e.is_organizer = true;
+        e.response_status = ResponseStatus::Organizer;
+        assert_eq!(
+            event_line(&e, chrono_tz::UTC),
+            "- 07:00–08:00 Wed 23 Sep  Planning sync   [jane@example.com]  id=E1"
+        );
+    }
+
+    #[test]
+    fn event_line_as_organizer_says_so() {
+        let mut e = event(utc(23, 7), utc(23, 8));
+        e.is_organizer = true;
+        e.response_status = ResponseStatus::Organizer;
+        let out = event_line(&e, chrono_tz::UTC);
+        assert!(
+            out.ends_with("where: Room 1   me: organizer   attendees: 4"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn event_line_renders_all_day_and_multi_day_events() {
+        let mut e = event(utc(23, 0), utc(24, 0));
+        e.all_day = true;
+        e.subject = String::new();
+        // All-day dates are floating: Stockholm must not shift them, nor
+        // must a zone west of UTC pull them back a day.
+        for tz in [chrono_tz::Europe::Stockholm, chrono_tz::America::New_York] {
+            let out = event_line(&e, tz);
+            assert!(
+                out.starts_with("- all day Wed 23 Sep  (no title)   [jane@example.com]  id=E1\n"),
+                "{out}"
+            );
+        }
+        e.end.at = utc(26, 0);
+        assert!(event_line(&e, chrono_tz::UTC).starts_with("- all day Wed 23 Sep–Fri 25 Sep  "));
+
+        let e = event(utc(23, 21), utc(23, 23));
+        assert!(
+            event_line(&e, chrono_tz::Europe::Stockholm)
+                .starts_with("- 23:00 Wed 23 Sep–01:00 Thu 24 Sep  Planning sync"),
+            "{}",
+            event_line(&e, chrono_tz::Europe::Stockholm)
+        );
     }
 }

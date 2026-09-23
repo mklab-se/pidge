@@ -259,7 +259,7 @@ impl PidgeMcp {
 impl PidgeMcp {
     /// Runs `f` through the caller's read cache (or uncached when `key` is
     /// `None`) and wraps its text as a tool result.
-    async fn read_through<F, Fut>(
+    pub(crate) async fn read_through<F, Fut>(
         &self,
         tc: &ToolContext,
         key: Option<String>,
@@ -468,7 +468,7 @@ fn limit(requested: Option<u32>) -> usize {
 /// A per-mailbox Graph result. A mailbox Microsoft won't serve right now
 /// (expired session, access denied, throttled) becomes a note and the call
 /// carries on with the other mailboxes; anything else fails the call.
-fn per_account<T>(
+pub(crate) fn per_account<T>(
     account: &str,
     result: Result<T, ClientError>,
     notes: &mut Vec<String>,
