@@ -549,7 +549,7 @@ pub(crate) fn body_text(body: &str, kind: BodyContentType) -> String {
 }
 
 /// Graph's well-known name for a folder alias, or the input as a folder id.
-fn folder_id(folder: Option<&str>) -> Result<String, McpError> {
+pub(crate) fn folder_id(folder: Option<&str>) -> Result<String, McpError> {
     let raw = folder.map(str::trim).unwrap_or("inbox");
     let id = match raw.to_ascii_lowercase().as_str() {
         "inbox" => "inbox",
