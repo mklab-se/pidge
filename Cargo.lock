@@ -2721,7 +2721,7 @@ dependencies = [
 
 [[package]]
 name = "pidge"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "ailloy",
  "anyhow",
@@ -2760,7 +2760,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-client"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2785,7 +2785,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-core"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -2801,7 +2801,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-mcp"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "anyhow",
  "async-trait",

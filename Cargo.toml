@@ -6,7 +6,7 @@ members = ["crates/pidge", "crates/pidge-core", "crates/pidge-client", "crates/p
 default-members = ["crates/pidge"]
 
 [workspace.package]
-version = "1.4.1"
+version = "1.4.2"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -130,5 +130,5 @@ azure_identity = "1"
 azure_security_keyvault_secrets = "1"
 
 # Internal crates
-pidge-core = { version = "1.4.1", path = "crates/pidge-core" }
-pidge-client = { version = "1.4.1", path = "crates/pidge-client" }
+pidge-core = { version = "1.4.2", path = "crates/pidge-core" }
+pidge-client = { version = "1.4.2", path = "crates/pidge-client" }
