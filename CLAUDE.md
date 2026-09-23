@@ -65,7 +65,7 @@ deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Contai
 - **Cache invalidation:** every mutating tool (draft, send, act, calendar writes, account changes) calls `cache.invalidate_user` for the caller; reads are cached per user for 60 s.
 - **Sending:** only `mail_send` sends, only by draft id, at most 30 per hour per user (unsubscribe e-mails count too).
 - **markitdown hardening:** scrubbed environment; a fresh per-conversion work dir as `HOME`/`TMPDIR`, removed on every path; 30 s timeout with kill-on-drop; 4 GB address-space limit on Linux; 2 MB output cap; stderr discarded (it can quote the document); at most 2 concurrent conversions. The server marks itself non-dumpable on Linux so the child cannot read its environment.
-- **Deploy:** `.github/workflows/deploy-mcp.yml` redeploys on every green CI run on `main`; every env var it and `deploy/azure/deploy.sh` can set is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs`.
+- **Deploy:** `.github/workflows/deploy-mcp.yml` redeploys on every green CI run on `main`; every env var the running server reads is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs` — `deploy/azure/deploy.sh` and `deploy-mcp.yml` also read some deploy-time-only vars (`PIDGE_RG`, `PIDGE_CLIENT_ID`, `IMAGE_TAG`, `PIDGE_MCP_CUSTOM_DOMAIN`, `PIDGE_MCP_CUTOVER`) that `deploy.sh` translates into the vars `Config::from_env` actually sees.
 
 ## Key Patterns
 

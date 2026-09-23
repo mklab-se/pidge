@@ -90,8 +90,13 @@ shape (every URI already on the app, plus the missing one(s) appended):
 
 ```bash
 az ad app update --id <entra-app-id> --public-client-redirect-uris \
-  https://<container-apps-fqdn>/callback https://<custom-domain>/callback
+  https://<container-apps-fqdn>/callback <any-other-already-registered-uri> \
+  https://<custom-domain>/callback
 ```
+
+The first two are already registered and only being re-listed (Entra
+replaces the whole set on every `update`, so anything left out would be
+removed); the custom domain's `/callback` is the one actually being added.
 
 **Rollback.** Unset `PIDGE_MCP_CUTOVER` (or set it to anything other than
 `1`) and rerun the script: the Container Apps FQDN becomes the public URL
@@ -398,12 +403,23 @@ and fail with `invalid_token` / `invalid_grant` on a mismatch, regardless
 of expiry. Every client of that user, including the one that made the
 call, must sign in again.
 
-The generation check fails closed: if the secret store can't be read (a
-transient Key Vault error, for example), the server can't prove the caller
-*wasn't* signed out, so it rejects the token rather than let a stale
-in-memory value pass one through. A client sees this as a normal 401 and
-retries or re-authenticates; it does not distinguish "signed out" from
-"store unavailable".
+The generation lookup is checked in-memory first; the secret store is only
+read on a cache miss (the first lookup for that user in this process's
+lifetime), and it's that read failing — a transient Key Vault error, say —
+that the server can't tell apart from an actual sign-out. Each of the three
+places that check it fails closed, but not identically:
+
+- **The bearer check on `/mcp`** (`oauth/bearer.rs`) returns 401
+  `invalid_token` either way — on a real generation mismatch or on a store
+  read failure. A client just sees an expired-looking token and
+  re-authenticates.
+- **A refresh grant with a stale generation** (`oauth/mod.rs`) returns 400
+  `invalid_grant`, `"session was signed out"` — an unambiguous "sign in
+  again", since the store read succeeded and confirmed the mismatch.
+- **A store-read failure during either grant type** (`authorization_code`
+  or `refresh_token`, `oauth/mod.rs`) returns 503
+  `temporarily_unavailable` before the mismatch can even be checked — a
+  signal to retry shortly, not to re-authenticate.
 
 ### Key Vault purge protection
 
