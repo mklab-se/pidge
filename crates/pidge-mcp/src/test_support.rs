@@ -1,13 +1,14 @@
-//! Test-only helpers shared across modules: a secret store that always
-//! fails, and an in-memory capture of this thread's tracing output.
+//! Test-only helpers shared across modules: secret stores that fail always
+//! or on demand, and an in-memory capture of this thread's tracing output.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use tracing_subscriber::fmt::MakeWriter;
 
-use crate::secrets::SecretStore;
+use crate::secrets::{SecretStore, SharedSecrets};
 
 /// Fails every call with an error that names the secret and spells out the
 /// address it was derived from — the worst case for log leakage.
@@ -24,6 +25,48 @@ impl SecretStore for FailingSecrets {
         Err(anyhow!(
             "writing secret {name} (jane@example.com): vault unavailable"
         ))
+    }
+}
+
+/// Passes through to `inner` until told to fail: every read while
+/// `fail_reads` is set, and writes to the one secret named in `fail_writes_to`.
+pub struct FlakySecrets {
+    inner: SharedSecrets,
+    fail_reads: AtomicBool,
+    fail_writes_to: Mutex<Option<String>>,
+}
+
+impl FlakySecrets {
+    pub fn new(inner: SharedSecrets) -> Arc<Self> {
+        Arc::new(Self {
+            inner,
+            fail_reads: AtomicBool::new(false),
+            fail_writes_to: Mutex::new(None),
+        })
+    }
+
+    pub fn fail_reads(&self, fail: bool) {
+        self.fail_reads.store(fail, Ordering::SeqCst);
+    }
+
+    pub fn fail_writes_to(&self, name: Option<String>) {
+        *self.fail_writes_to.lock().unwrap() = name;
+    }
+}
+
+#[async_trait]
+impl SecretStore for FlakySecrets {
+    async fn get(&self, name: &str) -> Result<Option<String>> {
+        if self.fail_reads.load(Ordering::SeqCst) {
+            return FailingSecrets.get(name).await;
+        }
+        self.inner.get(name).await
+    }
+    async fn set(&self, name: &str, value: &str) -> Result<()> {
+        if self.fail_writes_to.lock().unwrap().as_deref() == Some(name) {
+            return FailingSecrets.set(name, value).await;
+        }
+        self.inner.set(name, value).await
     }
 }
 

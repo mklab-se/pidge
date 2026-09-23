@@ -92,6 +92,11 @@ pub struct AppState {
 
 pub type SharedState = Arc<AppState>;
 
+/// The secret store failed while looking up a user's token generation
+/// (already logged, redacted, by [`AppState::generation_for`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreFailure;
+
 impl AppState {
     /// `token_backend` must be the backend `graph`'s `AuthClient` was built with.
     pub fn new(
@@ -186,36 +191,33 @@ impl AppState {
         }
     }
 
-    /// `signin`'s current token generation: tokens carrying an older one
+    /// `signin`'s current token generation: tokens carrying any other one
     /// have been signed out. Served from memory after the first lookup, so
     /// the bearer check costs one secret-store read per user per process.
-    /// 0 when the user has no record yet. A store failure also answers 0
-    /// (logged, not cached) so an outage doesn't lock everyone out; the next
-    /// call retries.
-    pub async fn generation_for(&self, signin: &str) -> u32 {
-        if let Some(generation) = self
-            .generations
-            .lock()
-            .expect("generations lock")
-            .get(signin)
-        {
-            return *generation;
+    /// 0 when the user has no record yet. A store failure is logged
+    /// (redacted), cached as nothing, and returned as [`StoreFailure`]:
+    /// callers fail closed, since a cold cache can't tell whether the user
+    /// signed out.
+    pub async fn generation_for(&self, signin: &str) -> Result<u32, StoreFailure> {
+        let key = signin.to_ascii_lowercase();
+        if let Some(generation) = self.generations.lock().expect("generations lock").get(&key) {
+            return Ok(*generation);
         }
-        let generation = match self.users.load(signin).await {
+        let generation = match self.users.load(&key).await {
             Ok(record) => record.map_or(0, |r| r.token_generation),
             Err(e) => {
-                log_store_error("loading token generation", signin, &e);
-                return 0;
+                log_store_error("loading token generation", &key, &e);
+                return Err(StoreFailure);
             }
         };
         // Don't let a lookup that raced a sign-out overwrite the newer value.
-        *self
+        Ok(*self
             .generations
             .lock()
             .expect("generations lock")
-            .entry(signin.to_string())
+            .entry(key)
             .and_modify(|g| *g = (*g).max(generation))
-            .or_insert(generation)
+            .or_insert(generation))
     }
 
     /// Records `signin`'s new token generation (after a sign-out everywhere).
@@ -223,7 +225,7 @@ impl AppState {
         self.generations
             .lock()
             .expect("generations lock")
-            .insert(signin.to_string(), generation);
+            .insert(signin.to_ascii_lowercase(), generation);
     }
 
     /// Returns `false` if this code id was already redeemed.

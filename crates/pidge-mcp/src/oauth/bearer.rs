@@ -57,9 +57,11 @@ pub async fn require_bearer(
     if !state.config.is_allowed(&claims.sub) {
         return challenge(&state, Some("invalid_token"));
     }
-    // Signed out everywhere since this token was issued.
-    if claims.r#gen != state.generation_for(&claims.sub).await {
-        return challenge(&state, Some("invalid_token"));
+    // Signed out everywhere since this token was issued? When the store
+    // can't say, fail closed: the client retries or signs in again.
+    match state.generation_for(&claims.sub).await {
+        Ok(current) if current == claims.r#gen => {}
+        _ => return challenge(&state, Some("invalid_token")),
     }
 
     req.extensions_mut()

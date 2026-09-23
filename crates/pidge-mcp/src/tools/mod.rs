@@ -159,6 +159,18 @@ pub(crate) mod tests {
             }
         }
 
+        /// A fresh state and server over `secrets` (e.g. a wrapper around
+        /// [`Self::secrets`]), with the same Graph mock and sign-in user.
+        pub fn over(&self, secrets: SharedSecrets) -> (SharedState, PidgeMcp) {
+            let state = test_state(
+                secrets,
+                &self.graph.uri(),
+                &self.signin,
+                self._secrets_dir.path(),
+            );
+            (state.clone(), PidgeMcp::new(state))
+        }
+
         /// A request context authenticated as the harness's sign-in user.
         pub fn ctx(&self) -> RequestContext<RoleServer> {
             request_context(&self.signin)

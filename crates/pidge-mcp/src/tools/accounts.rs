@@ -190,6 +190,11 @@ impl PidgeMcp {
             .save(&record)
             .await
             .map_err(|e| store_error("saving user record", &signin, e))?;
+        // Enforce the sign-out as soon as it is stored, so a later failure
+        // (deleting a disconnected mailbox) can't leave the cache stale.
+        if sign_out {
+            self.state.set_generation(&signin, record.token_generation);
+        }
         if let Some(mailbox) = &disconnect {
             self.state
                 .users
@@ -200,7 +205,6 @@ impl PidgeMcp {
         }
         self.state.cache.invalidate_user(&signin);
         if sign_out {
-            self.state.set_generation(&signin, record.token_generation);
             tracing::info!(user = %user_hash(&record.signin), "signed out everywhere");
             return Ok(ok(
                 "All sessions signed out; every client must sign in again".to_string(),
@@ -474,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn sign_out_everywhere_bumps_the_generation_and_clears_the_cache() {
         let h = ToolHarness::new(&[JANE, WORK]).await;
-        assert_eq!(h.state.generation_for(JANE).await, 0);
+        assert_eq!(h.state.generation_for(JANE).await.unwrap(), 0);
         h.state.cache.put(JANE, "k".into(), "cached".into());
         let out = text(
             &h.mcp
@@ -493,7 +497,7 @@ mod tests {
             "{out}"
         );
         assert_eq!(h.record().await.token_generation, 1, "stored");
-        assert_eq!(h.state.generation_for(JANE).await, 1, "cached");
+        assert_eq!(h.state.generation_for(JANE).await.unwrap(), 1, "cached");
         assert!(h.state.cache.get(JANE, "k").is_none(), "cache invalidated");
 
         // `false` changes nothing.
@@ -508,6 +512,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(h.record().await.token_generation, 1);
+    }
+
+    #[tokio::test]
+    async fn sign_out_is_enforced_even_if_a_later_step_fails() {
+        let h = ToolHarness::new(&[JANE, WORK]).await;
+        let flaky = crate::test_support::FlakySecrets::new(h.secrets.clone());
+        let (state, mcp) = h.over(flaky.clone());
+        assert_eq!(state.generation_for(JANE).await.unwrap(), 0, "warm cache");
+        flaky.fail_writes_to(Some(crate::secrets::mailbox_secret_name(WORK)));
+        mcp.accounts_update(
+            Parameters(UpdateArgs {
+                disconnect: Some(WORK.into()),
+                sign_out_everywhere: Some(true),
+                ..Default::default()
+            }),
+            h.ctx(),
+        )
+        .await
+        .expect_err("deleting the mailbox session fails");
+        assert_eq!(h.record().await.token_generation, 1, "stored");
+        assert_eq!(
+            state.generation_for(JANE).await.unwrap(),
+            1,
+            "and already enforced"
+        );
+    }
+
+    #[tokio::test]
+    async fn generations_are_keyed_by_the_lower_cased_address() {
+        let h = ToolHarness::new(&[JANE]).await;
+        h.state.set_generation("Jane@Example.com", 3);
+        assert_eq!(h.state.generation_for(JANE).await.unwrap(), 3);
+        assert_eq!(h.state.generation_for("JANE@example.com").await.unwrap(), 3);
     }
 
     #[tokio::test]

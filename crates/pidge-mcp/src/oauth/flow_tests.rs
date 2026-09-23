@@ -22,6 +22,7 @@ use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::{Signer, pkce_challenge, random_bytes};
 use crate::secrets::{FileSecrets, SharedSecrets, mailbox_secret_name};
 use crate::state::{AppState, PendingAuthorization, PendingKind, SharedState};
+use crate::test_support::FlakySecrets;
 use crate::users::{Identity, UserRecord, UserStore};
 
 const PUBLIC: &str = "http://localhost:8080";
@@ -35,6 +36,9 @@ struct Harness {
     secrets_dir: tempfile::TempDir,
     /// The key `state.signer` signs with, for hand-built tokens.
     key: Vec<u8>,
+    /// The store `state` reads and writes through; wraps `secrets`, and can
+    /// be told to fail.
+    flaky: Arc<FlakySecrets>,
 }
 
 const TENANT: &str = "tenant-1";
@@ -109,12 +113,13 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
     let auth = AuthClient::for_test("cid", microsoft.uri()).with_backend(token_backend.clone());
     let graph = GraphClient::for_test(auth, format!("{}/v1.0", microsoft.uri()));
+    let flaky = FlakySecrets::new(secrets.clone());
     let state = Arc::new(AppState::new(
         config,
         signer,
         graph,
         token_backend,
-        secrets.clone(),
+        flaky.clone(),
     ));
     Harness {
         app: build_router(state.clone(), CancellationToken::new()),
@@ -123,6 +128,7 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
         secrets,
         secrets_dir,
         key,
+        flaky,
     }
 }
 
@@ -150,12 +156,13 @@ async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
     let auth = AuthClient::for_test("cid", microsoft.uri()).with_backend(token_backend.clone());
     let graph = GraphClient::for_test(auth, format!("{}/v1.0", microsoft.uri()));
+    let flaky = FlakySecrets::new(secrets.clone());
     let state = Arc::new(AppState::new(
         config,
         signer,
         graph,
         token_backend,
-        secrets.clone(),
+        flaky.clone(),
     ));
     Harness {
         app: build_router(state.clone(), CancellationToken::new()),
@@ -164,6 +171,7 @@ async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
         secrets,
         secrets_dir,
         key,
+        flaky,
     }
 }
 
@@ -1405,4 +1413,73 @@ async fn tokens_without_a_generation_claim_are_generation_zero() {
     let (status, body) = refresh_grant(&h, &client_id, &old_refresh).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn token_generation_lookups_fail_closed_while_the_store_is_down() {
+    let h = harness("jane@example.com").await;
+    // Anna has never been looked up, so her generation isn't cached.
+    let anna = "anna@example.com";
+    let client_id = register(&h.app).await;
+    let access = h.state.signer.issue_access(anna, "mail", 0).unwrap();
+    let refresh = h.state.signer.issue_refresh(anna, &client_id, 0).unwrap();
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let code = h
+        .state
+        .signer
+        .issue_code(anna, &client_id, CLIENT_REDIRECT, &pkce_challenge(verifier))
+        .unwrap();
+    let code_form = format!(
+        "grant_type=authorization_code&client_id={}&code={}&code_verifier={verifier}&redirect_uri={}",
+        urlenc(&client_id),
+        urlenc(&code),
+        urlenc(CLIENT_REDIRECT)
+    );
+
+    h.flaky.fail_reads(true);
+    assert_eq!(
+        mcp_initialize(&h.app, Some(&access)).await,
+        StatusCode::UNAUTHORIZED,
+        "no token is accepted while the generation is unknown"
+    );
+    for (status, body) in [
+        refresh_grant(&h, &client_id, &refresh).await,
+        redeem(&h.app, &code_form).await,
+    ] {
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+        assert_eq!(body["error"], "temporarily_unavailable");
+        assert_eq!(body["error_description"], "try again shortly");
+        assert!(body.get("access_token").is_none());
+    }
+
+    // Recovered: everything works, the code included (it wasn't burnt).
+    h.flaky.fail_reads(false);
+    assert_eq!(mcp_initialize(&h.app, Some(&access)).await, StatusCode::OK);
+    let (status, body) = refresh_grant(&h, &client_id, &refresh).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = redeem(&h.app, &code_form).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Once cached, a store outage no longer matters to the bearer check.
+    h.flaky.fail_reads(true);
+    assert_eq!(mcp_initialize(&h.app, Some(&access)).await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn store_failures_during_the_generation_lookup_log_no_address() {
+    let (logs, _guard) = crate::test_support::LogCapture::start();
+    let h = harness("jane@example.com").await;
+    let access = h
+        .state
+        .signer
+        .issue_access("jane@example.com", "mail", 0)
+        .unwrap();
+    h.flaky.fail_reads(true);
+    assert_eq!(
+        mcp_initialize(&h.app, Some(&access)).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let logged = logs.text();
+    assert!(logged.contains("loading token generation"), "{logged}");
+    crate::test_support::assert_no_address("log", &logged);
 }

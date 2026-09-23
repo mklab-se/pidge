@@ -944,6 +944,15 @@ fn token_response(state: &SharedState, sub: &str, client_id: &str, generation: u
     }
 }
 
+/// The token generation couldn't be read, so no token may be issued.
+fn store_unavailable() -> Response {
+    oauth_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "temporarily_unavailable",
+        "try again shortly",
+    )
+}
+
 async fn token(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1012,6 +1021,10 @@ async fn token(
                     "PKCE verification failed",
                 );
             }
+            // Before burning the code, so a store hiccup leaves it redeemable.
+            let Ok(generation) = state.generation_for(&claims.sub).await else {
+                return store_unavailable();
+            };
             if !state.mark_code_used(&claims.jti, claims.exp) {
                 tracing::warn!(user = %user_hash(&claims.sub), "authorization code replayed");
                 return oauth_error(
@@ -1021,7 +1034,6 @@ async fn token(
                 );
             }
             tracing::info!(user = %user_hash(&claims.sub), "issued tokens (authorization_code)");
-            let generation = state.generation_for(&claims.sub).await;
             token_response(&state, &claims.sub, &client_id, generation)
         }
         Some("refresh_token") => {
@@ -1058,7 +1070,9 @@ async fn token(
                 );
             }
             // `accounts_update sign_out_everywhere` bumped the generation.
-            let generation = state.generation_for(&claims.sub).await;
+            let Ok(generation) = state.generation_for(&claims.sub).await else {
+                return store_unavailable();
+            };
             if claims.r#gen != generation {
                 tracing::info!(user = %user_hash(&claims.sub), "refused signed-out refresh token");
                 return oauth_error(
