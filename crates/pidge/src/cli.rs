@@ -276,9 +276,27 @@ pub enum McpCommands {
         yes: bool,
     },
     /// Show the current hosted MCP connection status
-    Status,
+    Status {
+        /// Base URL of the hosted MCP server. Omit it if you're only
+        /// connected to one — with several, this lists them and asks you
+        /// to pick.
+        url: Option<String>,
+
+        /// Only look for the session in this storage backend, skipping the
+        /// server index (useful if the index is stale or missing)
+        #[arg(long, value_enum)]
+        store: Option<StorageBackendArg>,
+    },
     /// Sign out of the hosted MCP server and delete its stored tokens
-    Logout,
+    Logout {
+        /// Base URL of the hosted MCP server to sign out of
+        url: String,
+
+        /// Only look for the session in this storage backend, skipping the
+        /// server index (useful if the index is stale or missing)
+        #[arg(long, value_enum)]
+        store: Option<StorageBackendArg>,
+    },
 }
 
 #[derive(clap::Subcommand)]

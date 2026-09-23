@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 pub use oauth::{Discovery, discover, refresh, register, sign_in, valid_access_token};
 pub use rpc::{McpRpc, ToolResult};
-pub use store::McpTokenStore;
+pub use store::{McpTokenStore, StoredServer};
 
 use crate::error::ClientError;
 
@@ -82,8 +82,10 @@ impl std::fmt::Debug for McpTokens {
 /// Normalize a server URL down to its origin (`scheme://host[:port]`),
 /// dropping any path. Used both as the keychain account name and as the
 /// basis for the on-disk file name — anything that identifies "which MCP
-/// server" without caring which specific endpoint path was passed in.
-pub(crate) fn normalize_origin(server_url: &str) -> Result<String, ClientError> {
+/// server" without caring which specific endpoint path was passed in. `pub`
+/// so callers (e.g. `pidge mcp logout`) can compare a user-typed url against
+/// [`store::StoredServer::server`], which is always stored in this form.
+pub fn normalize_origin(server_url: &str) -> Result<String, ClientError> {
     let url = url::Url::parse(server_url).map_err(|e| ClientError::Graph {
         status: 400,
         message: format!("invalid MCP server URL: {e}"),

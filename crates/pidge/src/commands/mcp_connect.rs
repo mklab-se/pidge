@@ -308,14 +308,18 @@ async fn try_existing_session(
     Ok(None)
 }
 
-fn candidate_backends(preferred: TokenStorage) -> [TokenStorage; 2] {
+/// The backends to try, in order, when looking for a stored session:
+/// `preferred` first, then the other one as a fallback. Shared with
+/// `mcp_status` and `mcp_logout`, which resolve an explicitly-named
+/// server's session the same way `connect` does.
+pub(crate) fn candidate_backends(preferred: TokenStorage) -> [TokenStorage; 2] {
     match preferred {
         TokenStorage::Keychain => [TokenStorage::Keychain, TokenStorage::File],
         TokenStorage::File => [TokenStorage::File, TokenStorage::Keychain],
     }
 }
 
-fn backend_name(store: TokenStorage) -> &'static str {
+pub(crate) fn backend_name(store: TokenStorage) -> &'static str {
     match store {
         TokenStorage::Keychain => "keychain",
         TokenStorage::File => "file",
@@ -362,7 +366,7 @@ fn check_tool_result(name: &str, result: ToolResult) -> Result<ToolResult> {
 /// [`ClientError::SessionExpired`] so it surfaces through
 /// `commands::mcp::remap_session_expired`'s `pidge mcp connect <url>` hint
 /// instead of a bare Graph error.
-struct RefreshingRpc {
+pub(crate) struct RefreshingRpc {
     http: reqwest::Client,
     inner: McpRpc,
     tokens: McpTokens,
@@ -370,7 +374,12 @@ struct RefreshingRpc {
 }
 
 impl RefreshingRpc {
-    fn new(http: reqwest::Client, inner: McpRpc, tokens: McpTokens, store: TokenStorage) -> Self {
+    pub(crate) fn new(
+        http: reqwest::Client,
+        inner: McpRpc,
+        tokens: McpTokens,
+        store: TokenStorage,
+    ) -> Self {
         Self {
             http,
             inner,
