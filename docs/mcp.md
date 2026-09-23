@@ -67,8 +67,9 @@ signed in, add further mailboxes from inside the harness with the
 ## Migrate from local `pidge`
 
 If you already sign in to Microsoft accounts with the CLI, `pidge mcp
-connect` moves them onto a hosted server without you re-authenticating with
-Microsoft for each one:
+connect` moves them onto a hosted server. Your local Microsoft tokens never
+leave the machine: each account is connected by signing in to Microsoft
+once in the browser.
 
 ```bash
 pidge mcp connect https://<your-server>/mcp
