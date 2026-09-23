@@ -20,6 +20,58 @@ image and `--skip-entra` once the callback is registered. The sign-in
 allowlist is required and has no default: set `PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y`
 (comma-separated) or the script stops before deploying anything.
 
+### Custom domain
+
+Set `PIDGE_MCP_CUSTOM_DOMAIN=pidge.mklab.se` to bind a custom domain to the
+Container App. Its CNAME and `asuid.<subdomain>` TXT record must already
+exist at the DNS provider before running the script — the certificate
+validation checks them. The script then runs a three-phase dance, since a
+managed certificate can only be created after the hostname is bound:
+
+1. **Bind, no certificate.** The app redeploys with the hostname bound as
+   `Disabled` (no TLS yet).
+2. **Create the certificate.** `az containerapp env certificate create
+   --validation-method CNAME` provisions a managed certificate named
+   `pidge-mcp-managed`, if one doesn't already exist. The script polls
+   `provisioningState` every 20 seconds for up to 15 minutes and fails with
+   the last known state if it never reaches `Succeeded`.
+3. **Rebind with the certificate.** The app redeploys again with
+   `customDomainCertificateId` set, switching the binding to `SniEnabled`.
+
+Once the domain is `SniEnabled`, re-running the script repeats the detection
+(via `az containerapp show ... customDomains[?name=='<domain>'].bindingType`)
+and skips straight past steps 1–3. Pass `--skip-certificate` to assert that
+the certificate is already bound and skip that detection outright — the
+script then fails loudly instead of silently doing nothing if it turns out
+not to be `SniEnabled`.
+
+Set `PIDGE_MCP_CUTOVER=1` to make the custom domain the public URL (the OAuth
+issuer, resource identifier and callback base) instead of just an accepted
+alternate host:
+
+- **Without cutover** (default): the Container Apps FQDN stays the public
+  URL, and the custom domain is added to `PIDGE_MCP_ALT_HOSTS` — the server
+  accepts requests addressed to either host, but issues tokens under the FQDN
+  issuer.
+- **With cutover**: the custom domain becomes `PIDGE_MCP_PUBLIC_URL` and the
+  new issuer. The old FQDN is kept as an alt host (still reachable) and as a
+  legacy issuer via `PIDGE_MCP_LEGACY_ISSUERS`, so tokens minted before the
+  cutover keep validating until they expire and get refreshed under the new
+  issuer.
+
+Changing the issuer means every connected client has to re-add the pidge
+connector once — that's unavoidable, since the issuer is baked into the
+client's OAuth discovery. It does **not** mean re-authenticating with
+Microsoft; existing refresh tokens keep working, only the issuer they're
+presented against changes.
+
+Whichever mode is used, the custom domain needs its own callback registered
+on the Entra app (`https://<domain>/callback`) alongside the existing one.
+Phase 4 never runs that registration automatically when a custom domain is
+in play — it only prints the `az ad app update` command, listing every
+existing redirect URI plus both hosts' `/callback`, for the app owner to run
+by hand.
+
 ## Connect a client
 
 Give the harness the MCP URL printed by the script (`https://<fqdn>/mcp`). It
@@ -98,6 +150,9 @@ sent only by draft id, and the agent proposes before sending.
 | `PIDGE_MCP_MARKITDOWN` | no | markitdown executable, default `markitdown` on `PATH`. |
 | `AZURE_CLIENT_ID` | Azure | Client id of the user-assigned managed identity used for Key Vault. |
 | `PIDGE_CLIENT_ID` | no | Overrides the pidge Entra app id compiled into `pidge-client`. |
+| `PIDGE_MCP_ALT_HOSTS` | no | Comma-separated extra hostnames the server accepts requests for, besides the public URL host. Set by the deploy script during a custom-domain cutover. |
+| `PIDGE_MCP_LEGACY_ISSUERS` | no | Comma-separated issuer URLs whose previously issued tokens still validate. Set by the deploy script when cutting over to a new public URL. |
+| `PIDGE_MCP_LOG_FORMAT` | no | `json` or `text`, default `json`. The deploy script always sets `json`. |
 | `RUST_LOG` | no | Log filter, default `info`. |
 
 ## markitdown
@@ -138,6 +193,11 @@ deleting its secret, so the user record stays consistent.
 
 Rotating `jwt-signing-key` invalidates every client registration, token and
 outstanding download link; clients simply re-register and sign in again.
+
+Key Vault purge protection is on and irreversible: a purged vault, and the
+refresh tokens and signing key it held, cannot be recovered. Deleting the
+resource group only soft-deletes the vault; it stays around, unrecoverable
+by design, for the 30-day retention window before Azure purges it itself.
 
 ## Run locally
 
