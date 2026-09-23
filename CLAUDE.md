@@ -30,17 +30,40 @@ crates/
     src/
       auth/             # Browser auth-code+PKCE flow, refresh, JWT, keychain; `TokenBackend` seam
       graph/            # Full mail+calendar Graph surface, $batch, delta, retry seam
-  pidge-mcp/            # Remote MCP server (spike): own OAuth 2.1 AS, Microsoft sign-in,
-    src/                # Key Vault-backed mailbox tokens, bearer-guarded /mcp. `publish = false`.
-      oauth/            # Discovery, DCR, authorize→Microsoft→callback, token, bearer middleware
+  pidge-mcp/            # Remote MCP server: own OAuth 2.1 AS, Microsoft sign-in, bearer-guarded
+    src/                # /mcp with the full mail+calendar tool set. `publish = false`.
+      main.rs           # Startup, `--convert-check <path>` diagnostic, non-dumpable process
+      config.rs         # `Config::from_env`: every env var the server reads
+      app.rs            # Axum router: OAuth endpoints, bearer-guarded /mcp, /dl, health
+      oauth/            # Discovery, DCR, authorize→Microsoft→callback, token, bearer middleware, consent pages
       secrets/          # `SecretStore`: Azure Key Vault (managed identity) or files (dev)
+      users.rs          # UserRecord (sign-in, owned mailboxes, settings) + MailboxRecord { owner, tokens }
+      context.rs        # ToolContext: caller from the bearer, mailbox ownership checks
+      state.rs          # AppState: Graph client, caches, send/download rate limits, conversion slots
+      cache.rs          # Per-user 60 s LRU read cache, cleared on that user's writes
+      contacts.rs       # Per-user contact cache (Outlook people + recent senders) for recipient names
+      render.rs         # Text shapes shared by tools: list items, event lines, untrusted wrapper
+      markitdown.rs     # Hardened markitdown subprocess: attachment → Markdown
+      download.rs       # GET /dl/{token}: signed, 15-minute attachment download links
+      prompts.rs        # MCP prompts: triage_inbox, reply_to, cleanup_inbox
+      tools/            # One file per tool family (accounts, mail_read, mail_write, mail_act,
+                        # calendar, attachments); mod.rs composes routers + server instructions
 deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Container Apps
 ```
 
 - Workspace root `Cargo.toml` defines shared dependencies and version
 - `pidge-core` has no HTTP or auth code — it's safe to depend on from any consumer
 - `pidge-client` knows nothing about clap or terminal output. `AuthClient` persists tokens through an `Arc<dyn TokenBackend>`; the default `LocalBackend` is the CLI's keychain/file behaviour, hosted consumers inject their own (`from_env_with_backend`)
-- `pidge-mcp` never trusts input for identity: the bearer middleware attaches `AuthenticatedUser` to the request and every tool reads the mailbox from there. Design: `docs/superpowers/specs/2026-09-22-remote-mcp-spike-design.md`; ops: `deploy/azure/README.md`
+- `pidge-mcp` reuses `pidge-client` (Graph, token refresh) and `pidge-core` (rendering, flags, time ranges); it never shells out to the CLI. Design: `docs/superpowers/specs/2026-09-22-remote-mcp-full-feature-design.md`; ops and tool list: `deploy/azure/README.md`
+
+### pidge-mcp patterns
+
+- **Bearer identity:** no tool takes a user id. The bearer middleware attaches `AuthenticatedUser`; `ToolContext::from_request` reads it, and tool input can only narrow to one of that user's own mailboxes (`account`).
+- **Ownership:** each mailbox secret holds a `MailboxRecord { owner, tokens }`. A mailbox is usable only if the caller's `UserRecord` lists it *and* the record names the caller as owner. Message and event ids are looked up across the caller's mailboxes only.
+- **Untrusted content:** third-party text (bodies, previews, event text, converted attachments) goes out inside `<untrusted-email-content>` via `render::untrusted`; header fields go through `render::one_line` so they cannot start a line of their own.
+- **Cache invalidation:** every mutating tool (draft, send, act, calendar writes, account changes) calls `cache.invalidate_user` for the caller; reads are cached per user for 60 s.
+- **Sending:** only `mail_send` sends, only by draft id, at most 30 per hour per user (unsubscribe e-mails count too).
+- **markitdown hardening:** scrubbed environment; a fresh per-conversion work dir as `HOME`/`TMPDIR`, removed on every path; 30 s timeout with kill-on-drop; 4 GB address-space limit on Linux; 2 MB output cap; stderr discarded (it can quote the document); at most 2 concurrent conversions. The server marks itself non-dumpable on Linux so the child cannot read its environment.
 
 ## Key Patterns
 

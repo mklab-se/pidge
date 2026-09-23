@@ -1,7 +1,7 @@
 # Remote MCP spike — design
 
 **Date:** 2026-09-22
-**Status:** spike (de-risking), not a product surface yet
+**Status:** superseded by the full-feature design (`2026-09-22-remote-mcp-full-feature-design.md`)
 **Crate:** `crates/pidge-mcp` · **Infra:** `deploy/azure/`
 
 ## Goal

@@ -14,6 +14,7 @@ mod download;
 mod mailbox;
 mod markitdown;
 mod oauth;
+mod prompts;
 mod render;
 mod secrets;
 mod state;
