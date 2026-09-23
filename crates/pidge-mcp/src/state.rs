@@ -13,7 +13,7 @@ use crate::contacts::ContactCaches;
 use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::Signer;
 use crate::secrets::SharedSecrets;
-use crate::users::UserStore;
+use crate::users::{UserStore, log_store_error};
 
 /// The read cache's TTL and per-user LRU bound (spec §1.9).
 const CACHE_TTL: StdDuration = StdDuration::from_secs(60);
@@ -26,6 +26,10 @@ pub const DOWNLOADS_PER_HOUR: usize = 60;
 /// markitdown processes allowed to run at once, across all users.
 pub const CONVERSION_SLOTS: usize = 2;
 const RATE_WINDOW: StdDuration = StdDuration::from_secs(60 * 60);
+/// How long a cached token generation is trusted before it is re-read from
+/// the store, so a sign-out recorded elsewhere (an out-of-band edit, or
+/// another replica if the app ever scales out) is picked up within this.
+pub const GENERATION_TTL: StdDuration = StdDuration::from_secs(5 * 60);
 
 /// What a Microsoft sign-in is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,9 +89,27 @@ pub struct AppState {
     /// `jti` → expiry of authorization codes already redeemed, so a code
     /// can't be replayed inside its two-minute lifetime.
     used_codes: Mutex<HashMap<String, i64>>,
+    /// Sign-in address → that user's current token generation and when it
+    /// was last read from (or written to) the store; see
+    /// [`Self::generation_for`].
+    generations: Mutex<HashMap<String, CachedGeneration>>,
 }
 
 pub type SharedState = Arc<AppState>;
+
+/// One [`AppState::generations`] entry.
+#[derive(Debug, Clone, Copy)]
+struct CachedGeneration {
+    generation: u32,
+    /// When the value was last confirmed by the store (or set by a
+    /// sign-out); trusted for [`GENERATION_TTL`] after that.
+    at: Instant,
+}
+
+/// The secret store failed while looking up a user's token generation
+/// (already logged, redacted, by [`AppState::generation_for`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreFailure;
 
 impl AppState {
     /// `token_backend` must be the backend `graph`'s `AuthClient` was built with.
@@ -111,6 +133,7 @@ impl AppState {
             conversions: tokio::sync::Semaphore::new(CONVERSION_SLOTS),
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
+            generations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -182,6 +205,55 @@ impl AppState {
         }
     }
 
+    /// `signin`'s current token generation: tokens carrying any other one
+    /// have been signed out. Served from memory for [`GENERATION_TTL`]
+    /// after each store read, so the bearer check costs one secret-store
+    /// read per user per five minutes. 0 when the user has no record yet.
+    /// A store failure is logged (redacted) and returned as
+    /// [`StoreFailure`], even if an expired value is still held: callers
+    /// fail closed, since without a fresh read nothing says whether the
+    /// user signed out.
+    pub async fn generation_for(&self, signin: &str) -> Result<u32, StoreFailure> {
+        self.generation_at(signin, Instant::now()).await
+    }
+
+    /// [`Self::generation_for`] as of `now`, so tests can move the clock.
+    async fn generation_at(&self, signin: &str, now: Instant) -> Result<u32, StoreFailure> {
+        let key = signin.to_ascii_lowercase();
+        if let Some(cached) = self.generations.lock().expect("generations lock").get(&key)
+            && now.saturating_duration_since(cached.at) < GENERATION_TTL
+        {
+            return Ok(cached.generation);
+        }
+        let generation = match self.users.load(&key).await {
+            Ok(record) => record.map_or(0, |r| r.token_generation),
+            Err(e) => {
+                log_store_error("loading token generation", &key, &e);
+                return Err(StoreFailure);
+            }
+        };
+        // Don't let a lookup that raced a sign-out overwrite the newer value.
+        Ok(self.remember_generation(key, generation, now))
+    }
+
+    /// Records `signin`'s new token generation (after a sign-out everywhere).
+    /// Like the stored value, the cached one only ever goes up.
+    pub fn set_generation(&self, signin: &str, generation: u32) {
+        self.remember_generation(signin.to_ascii_lowercase(), generation, Instant::now());
+    }
+
+    /// Caches `generation` for `key` as of `at`, never lowering what is
+    /// already cached; returns the cached value.
+    fn remember_generation(&self, key: String, generation: u32, at: Instant) -> u32 {
+        let mut map = self.generations.lock().expect("generations lock");
+        let entry = map
+            .entry(key)
+            .or_insert(CachedGeneration { generation, at });
+        entry.generation = entry.generation.max(generation);
+        entry.at = entry.at.max(at);
+        entry.generation
+    }
+
     /// Returns `false` if this code id was already redeemed.
     pub fn mark_code_used(&self, jti: &str, exp: i64) -> bool {
         let mut map = self.used_codes.lock().expect("used codes lock");
@@ -208,7 +280,14 @@ fn claim_in_window(counter: &Mutex<HashMap<String, Vec<Instant>>>, user: &str, c
 mod tests {
     use crate::tools::tests::ToolHarness;
 
-    use super::{DOWNLOADS_PER_HOUR, MAX_PENDING, PendingAuthorization, PendingKind};
+    use std::time::{Duration, Instant};
+
+    use super::{
+        DOWNLOADS_PER_HOUR, GENERATION_TTL, MAX_PENDING, PendingAuthorization, PendingKind,
+        StoreFailure,
+    };
+    use crate::test_support::{FlakySecrets, LogCapture, assert_no_address};
+    use crate::users::UserStore;
 
     fn pending_at(created_at: chrono::DateTime<chrono::Utc>) -> PendingAuthorization {
         PendingAuthorization {
@@ -254,5 +333,49 @@ mod tests {
         }
         assert!(!h.state.reserve_download("jane@example.com"));
         assert!(h.state.reserve_download("anna@example.com"));
+    }
+
+    #[tokio::test]
+    async fn cached_generations_are_re_read_after_the_ttl() {
+        const JANE: &str = "jane@example.com";
+        // Captured (and checked) like every other test that reaches
+        // `log_store_error`: an uncaptured hit on that callsite would race
+        // tracing's global interest cache with the tests that capture it.
+        let (logs, _guard) = LogCapture::start();
+        let h = ToolHarness::new(&[JANE]).await;
+        let flaky = FlakySecrets::new(h.secrets.clone());
+        let (state, _) = h.over(flaky.clone());
+        let users = UserStore::new(h.secrets.clone());
+        let t0 = Instant::now();
+        let second = Duration::from_secs(1);
+
+        assert_eq!(state.generation_at(JANE, t0).await, Ok(0));
+
+        // Bumped behind this process's back (another replica, a vault edit).
+        let mut record = users.load(JANE).await.unwrap().unwrap();
+        record.token_generation = 2;
+        users.save(&record).await.unwrap();
+        let fresh = t0 + GENERATION_TTL - second;
+        assert_eq!(
+            state.generation_at(JANE, fresh).await,
+            Ok(0),
+            "still cached"
+        );
+        let expired = t0 + GENERATION_TTL + second;
+        assert_eq!(state.generation_at(JANE, expired).await, Ok(2), "re-read");
+
+        // A failed re-read fails closed rather than serving the stale value…
+        flaky.fail_reads(true);
+        let within = expired + GENERATION_TTL - second;
+        assert_eq!(state.generation_at(JANE, within).await, Ok(2));
+        let later = expired + GENERATION_TTL + second;
+        assert_eq!(state.generation_at(JANE, later).await, Err(StoreFailure));
+        assert_eq!(state.generation_at(JANE, later).await, Err(StoreFailure));
+        let logged = logs.text();
+        assert!(logged.contains("loading token generation"), "{logged}");
+        assert_no_address("log", &logged);
+        // …and recovers on the next successful read.
+        flaky.fail_reads(false);
+        assert_eq!(state.generation_at(JANE, later).await, Ok(2));
     }
 }

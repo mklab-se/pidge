@@ -3,7 +3,8 @@
 //! credential, so the route sits outside the bearer layer. The token names
 //! the user and mailbox only by hash; the route resolves the user against
 //! the allowlist, charges their hourly download budget, and finds the
-//! mailbox among those they still own. Every refusal looks the same: a
+//! mailbox among those they still own. A link minted before the user's
+//! last sign-out everywhere is refused. Every refusal looks the same: a
 //! neutral 404.
 
 use axum::body::Body;
@@ -41,8 +42,13 @@ pub async fn download(State(state): State<SharedState>, Path(token): Path<String
     if !state.reserve_download(&signin) {
         return refuse("rate limited");
     }
-    // …and the mailbox among the ones they still own.
+    // …and the mailbox among the ones they still own, as long as they
+    // haven't signed out everywhere since the link was minted (a user with
+    // no record is at generation 0 and owns nothing).
     let account = match state.users.load(&signin).await {
+        Ok(Some(record)) if record.token_generation != claims.r#gen => {
+            return refuse("signed out");
+        }
         Ok(Some(record)) => record
             .mailboxes
             .into_iter()
@@ -157,7 +163,7 @@ pub(crate) mod tests {
     fn token(h: &ToolHarness, sub: &str, account: &str, name: &str) -> String {
         h.state
             .signer
-            .issue_download(sub, account, "M1", &attachment(name))
+            .issue_download(sub, 0, account, "M1", &attachment(name))
             .unwrap()
     }
 
@@ -240,6 +246,7 @@ pub(crate) mod tests {
             .signer
             .issue_download_with_ttl(
                 JANE,
+                0,
                 JANE,
                 "M1",
                 &attachment("a.pdf"),
@@ -260,6 +267,31 @@ pub(crate) mod tests {
 
         let (status, _, body) = get(&h, "/dl/not-a-token").await;
         assert_refused(status, &body);
+    }
+
+    #[tokio::test]
+    async fn a_link_minted_before_a_sign_out_everywhere_is_refused() {
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_bytes(&h, JANE, "M1", "A1", PDF, 1).await;
+        let before = token(&h, JANE, JANE, "a.pdf");
+
+        let users = crate::users::UserStore::new(h.secrets.clone());
+        let mut record = users.load(JANE).await.unwrap().unwrap();
+        record.token_generation = 1;
+        users.save(&record).await.unwrap();
+
+        let (status, _, body) = get(&h, &format!("/dl/{before}")).await;
+        assert_refused(status, &body);
+
+        // A link minted at the new generation is served.
+        let after = h
+            .state
+            .signer
+            .issue_download(JANE, 1, JANE, "M1", &attachment("a.pdf"))
+            .unwrap();
+        let (status, _, body) = get(&h, &format!("/dl/{after}")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, PDF);
     }
 
     #[tokio::test]

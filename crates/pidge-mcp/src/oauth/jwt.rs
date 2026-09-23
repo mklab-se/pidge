@@ -49,6 +49,11 @@ pub struct AccessClaims {
     pub exp: i64,
     pub iat: i64,
     pub scope: String,
+    /// The user's token generation when this was issued; a token whose
+    /// generation is behind the user's record has been signed out. Tokens
+    /// from before generations existed have none and decode as 0.
+    #[serde(default)]
+    pub r#gen: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,6 +63,11 @@ pub struct RefreshClaims {
     pub sub: String,
     pub client_id: String,
     pub exp: i64,
+    /// The user's token generation when this was issued; a token whose
+    /// generation is behind the user's record has been signed out. Tokens
+    /// from before generations existed have none and decode as 0.
+    #[serde(default)]
+    pub r#gen: u32,
 }
 
 /// A `mail_attachment` download link: anyone holding it may fetch this one
@@ -79,6 +89,11 @@ pub struct DownloadClaims {
     pub attachment_id: String,
     pub filename: String,
     pub content_type: String,
+    /// The user's token generation when the link was minted; `/dl` refuses
+    /// a link once the user has signed out everywhere since. Links from
+    /// before this claim existed decode as 0.
+    #[serde(default)]
+    pub r#gen: u32,
 }
 
 #[derive(Clone)]
@@ -87,6 +102,11 @@ pub struct Signer {
     decoding: DecodingKey,
     issuer: String,
     audience: String,
+    /// Origins whose access tokens keep verifying during a domain cutover,
+    /// alongside `issuer`/`audience`. Never used to *issue* tokens — new
+    /// access tokens always carry the current issuer and audience. See
+    /// [`Self::with_legacy_issuers`].
+    legacy_issuers: Vec<String>,
 }
 
 impl Signer {
@@ -98,7 +118,17 @@ impl Signer {
             decoding: DecodingKey::from_secret(key),
             issuer: issuer.into(),
             audience: audience.into(),
+            legacy_issuers: Vec::new(),
         }
+    }
+
+    /// Accept access tokens issued (as `iss`) under any of `issuers`, with
+    /// `<issuer>/mcp` as their audience, in addition to the current
+    /// issuer/audience. For the transition window after a domain cutover:
+    /// tokens minted before the move keep working until they expire.
+    pub fn with_legacy_issuers(mut self, issuers: Vec<String>) -> Self {
+        self.legacy_issuers = issuers;
+        self
     }
 
     /// A fresh 256-bit key, base64url-encoded for storage in a secret store.
@@ -190,7 +220,7 @@ impl Signer {
         self.verify(code, "code", true)
     }
 
-    pub fn issue_access(&self, sub: &str, scope: &str) -> Result<String> {
+    pub fn issue_access(&self, sub: &str, scope: &str, generation: u32) -> Result<String> {
         let now = Utc::now();
         self.sign(&AccessClaims {
             typ: "access".into(),
@@ -201,27 +231,35 @@ impl Signer {
             iat: now.timestamp(),
             exp: (now + ACCESS_TOKEN_TTL).timestamp(),
             scope: scope.into(),
+            r#gen: generation,
         })
     }
 
     pub fn verify_access(&self, token: &str) -> Result<AccessClaims> {
         let claims: AccessClaims = self.verify(token, "access", true)?;
-        if claims.iss != self.issuer {
+        let issuer_ok = claims.iss == self.issuer || self.legacy_issuers.contains(&claims.iss);
+        let audience_ok = claims.aud == self.audience
+            || self
+                .legacy_issuers
+                .iter()
+                .any(|i| format!("{i}/mcp") == claims.aud);
+        if !issuer_ok {
             return Err(anyhow!("issuer mismatch"));
         }
-        if claims.aud != self.audience {
+        if !audience_ok {
             return Err(anyhow!("audience mismatch"));
         }
         Ok(claims)
     }
 
-    pub fn issue_refresh(&self, sub: &str, client_id: &str) -> Result<String> {
+    pub fn issue_refresh(&self, sub: &str, client_id: &str, generation: u32) -> Result<String> {
         self.sign(&RefreshClaims {
             typ: "refresh".into(),
             jti: random_id(),
             sub: sub.into(),
             client_id: client_id.into(),
             exp: (Utc::now() + REFRESH_TOKEN_TTL).timestamp(),
+            r#gen: generation,
         })
     }
 
@@ -229,20 +267,30 @@ impl Signer {
         self.verify(token, "refresh", true)
     }
 
-    /// A [`DOWNLOAD_TTL`] link to `attachment` of `message_id` in `account`.
+    /// A [`DOWNLOAD_TTL`] link to `attachment` of `message_id` in `account`,
+    /// for `sub` at token generation `generation`.
     pub fn issue_download(
         &self,
         sub: &str,
+        generation: u32,
         account: &str,
         message_id: &str,
         attachment: &pidge_core::Attachment,
     ) -> Result<String> {
-        self.issue_download_with_ttl(sub, account, message_id, attachment, DOWNLOAD_TTL)
+        self.issue_download_with_ttl(
+            sub,
+            generation,
+            account,
+            message_id,
+            attachment,
+            DOWNLOAD_TTL,
+        )
     }
 
     pub(crate) fn issue_download_with_ttl(
         &self,
         sub: &str,
+        generation: u32,
         account: &str,
         message_id: &str,
         attachment: &pidge_core::Attachment,
@@ -258,6 +306,7 @@ impl Signer {
             attachment_id: attachment.id.clone(),
             filename: attachment.name.clone(),
             content_type: attachment.content_type.clone(),
+            r#gen: generation,
         })
     }
 
@@ -309,12 +358,39 @@ mod tests {
     #[test]
     fn token_kinds_are_not_interchangeable() {
         let s = signer();
-        let access = s.issue_access("jane@example.com", "mail").unwrap();
+        let access = s.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(s.verify_code(&access).is_err());
         assert!(s.verify_refresh(&access).is_err());
         assert!(s.verify_client(&access).is_err());
-        let refresh = s.issue_refresh("jane@example.com", "cid").unwrap();
+        let refresh = s.issue_refresh("jane@example.com", "cid", 0).unwrap();
         assert!(s.verify_access(&refresh).is_err());
+    }
+
+    #[test]
+    fn tokens_carry_the_generation() {
+        let s = signer();
+        let access = s.issue_access("jane@example.com", "mail", 7).unwrap();
+        assert_eq!(s.verify_access(&access).unwrap().r#gen, 7);
+        let refresh = s.issue_refresh("jane@example.com", "cid", 7).unwrap();
+        assert_eq!(s.verify_refresh(&refresh).unwrap().r#gen, 7);
+    }
+
+    #[test]
+    fn legacy_issuer_tokens_stay_valid() {
+        let key = random_bytes(32);
+        let old = Signer::new(&key, "https://old.test", "https://old.test/mcp");
+        let new = Signer::new(&key, "https://new.test", "https://new.test/mcp")
+            .with_legacy_issuers(vec!["https://old.test".into()]);
+        let token = old.issue_access("jane@example.com", "mail", 0).unwrap();
+        assert!(
+            new.verify_access(&token).is_ok(),
+            "old-issuer token accepted during transition"
+        );
+        let strict = Signer::new(&key, "https://new.test", "https://new.test/mcp");
+        assert!(
+            strict.verify_access(&token).is_err(),
+            "without the legacy list it is refused"
+        );
     }
 
     #[test]
@@ -323,7 +399,7 @@ mod tests {
         let key = random_bytes(32);
         let b = Signer::new(&key, "https://issuer.test", "https://issuer.test/mcp");
         let c = Signer::new(&key, "https://issuer.test", "https://other.test/mcp");
-        let token = b.issue_access("jane@example.com", "mail").unwrap();
+        let token = b.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(b.verify_access(&token).is_ok());
         assert!(a.verify_access(&token).is_err(), "different key");
         assert!(c.verify_access(&token).is_err(), "different audience");
@@ -344,7 +420,13 @@ mod tests {
     fn download_round_trip_carries_the_attachment_and_a_15_minute_expiry() {
         let s = signer();
         let token = s
-            .issue_download("jane@example.com", "work@example.com", "M1", &attachment())
+            .issue_download(
+                "jane@example.com",
+                4,
+                "work@example.com",
+                "M1",
+                &attachment(),
+            )
             .unwrap();
         let c = s.verify_download(&token).unwrap();
         assert_eq!(c.typ, "download");
@@ -355,6 +437,7 @@ mod tests {
         assert_eq!(c.attachment_id, "A1");
         assert_eq!(c.filename, "report.pdf");
         assert_eq!(c.content_type, "application/pdf");
+        assert_eq!(c.r#gen, 4);
         let ttl = c.exp - Utc::now().timestamp();
         assert!((14 * 60..=15 * 60).contains(&ttl), "{ttl}");
     }
@@ -363,7 +446,13 @@ mod tests {
     fn download_tokens_carry_no_address() {
         let s = signer();
         let token = s
-            .issue_download("jane@example.com", "work@example.com", "M1", &attachment())
+            .issue_download(
+                "jane@example.com",
+                4,
+                "work@example.com",
+                "M1",
+                &attachment(),
+            )
             .unwrap();
         let payload = token.split('.').nth(1).unwrap();
         let json = String::from_utf8(URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
@@ -375,16 +464,23 @@ mod tests {
     #[test]
     fn download_tokens_are_their_own_kind_and_expire() {
         let s = signer();
-        let access = s.issue_access("jane@example.com", "mail").unwrap();
+        let access = s.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(s.verify_download(&access).is_err());
         let download = s
-            .issue_download("jane@example.com", "jane@example.com", "M1", &attachment())
+            .issue_download(
+                "jane@example.com",
+                0,
+                "jane@example.com",
+                "M1",
+                &attachment(),
+            )
             .unwrap();
         assert!(s.verify_access(&download).is_err());
         assert!(s.verify_refresh(&download).is_err());
         let expired = s
             .issue_download_with_ttl(
                 "jane@example.com",
+                0,
                 "jane@example.com",
                 "M1",
                 &attachment(),

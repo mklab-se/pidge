@@ -126,9 +126,23 @@ impl UserStore {
     }
 
     /// Persist a user record, keyed by its (already lower-cased) `signin`.
-    pub async fn save(&self, rec: &UserRecord) -> Result<()> {
-        let raw = serde_json::to_string(rec)?;
-        self.secrets.set(&user_secret_name(&rec.signin), &raw).await
+    /// Returns the `token_generation` actually stored: never lower than the
+    /// stored one, so saving a record loaded before a sign-out everywhere
+    /// can't resurrect the revoked tokens.
+    pub async fn save(&self, rec: &UserRecord) -> Result<u32> {
+        let stored = self
+            .load(&rec.signin)
+            .await?
+            .map_or(0, |r| r.token_generation);
+        let rec = UserRecord {
+            token_generation: rec.token_generation.max(stored),
+            ..rec.clone()
+        };
+        let raw = serde_json::to_string(&rec)?;
+        self.secrets
+            .set(&user_secret_name(&rec.signin), &raw)
+            .await?;
+        Ok(rec.token_generation)
     }
 
     /// Load a mailbox record, adopting the legacy bare-`TokenSet` shape if
@@ -268,6 +282,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mailbox.identity, None);
+    }
+
+    #[tokio::test]
+    async fn saving_a_stale_record_never_lowers_the_token_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets: SharedSecrets = Arc::new(FileSecrets::new(dir.path()).unwrap());
+        let store = UserStore::new(secrets);
+        let stale = UserRecord::new("jane@example.com");
+        store
+            .save(&UserRecord {
+                token_generation: 2,
+                ..stale.clone()
+            })
+            .await
+            .unwrap();
+        store
+            .save(&UserRecord {
+                timezone: "Europe/London".into(),
+                ..stale
+            })
+            .await
+            .unwrap();
+        let rec = store.load("jane@example.com").await.unwrap().unwrap();
+        assert_eq!(rec.token_generation, 2, "kept");
+        assert_eq!(rec.timezone, "Europe/London", "the rest is saved");
     }
 
     #[tokio::test]

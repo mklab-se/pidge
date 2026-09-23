@@ -11,6 +11,7 @@ mod config;
 mod contacts;
 mod context;
 mod download;
+mod logging;
 mod mailbox;
 mod markitdown;
 mod oauth;
@@ -28,7 +29,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use pidge_client::{AuthClient, GraphClient};
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
 
 use crate::config::{Config, SecretsBackend};
 use crate::mailbox::SecretTokenBackend;
@@ -64,9 +64,9 @@ async fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    // Picked before `Config::from_env` (which may itself fail) so a startup
+    // error still logs in the chosen format.
+    logging::init(config::log_format_from_env()?);
 
     forbid_core_dumps_and_ptrace();
 
@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
     tracing::info!(
         public_url = %config.public_url,
         allowed = config.allowed_emails.len(),
+        log_format = ?config.log_format,
         "starting pidge-mcp {}",
         env!("CARGO_PKG_VERSION")
     );
@@ -99,7 +100,8 @@ async fn main() -> Result<()> {
         &load_or_create_signing_key(&secrets).await?,
         config.base_url(),
         config.resource_url(),
-    );
+    )
+    .with_legacy_issuers(config.legacy_issuers.clone());
 
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
     let auth = AuthClient::from_env_with_backend(token_backend.clone())?;

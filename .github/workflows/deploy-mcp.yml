@@ -1,0 +1,159 @@
+name: Deploy MCP
+
+# Deploys whenever CI goes green on main (not on every push — a commit that
+# compiles but fails tests or clippy must not deploy), plus a manual trigger
+# for redeploys that don't need a new commit (e.g. after rotating
+# PIDGE_MCP_ALLOWED_EMAILS).
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-mcp
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    # workflow_run fires in THIS repository's context — with id-token: write
+    # and every secret — no matter whose branch triggered the upstream CI
+    # run. A fork PR whose head branch happens to be named `main` produces a
+    # CI run with head_branch == 'main', which would otherwise pass the
+    # branches: [main] filter above and deploy the fork's commit with
+    # production Azure credentials. Every clause here is load-bearing:
+    #   - workflow_dispatch: manual runs have no workflow_run event at all.
+    #   - conclusion == 'success': only deploy a CI run that passed.
+    #   - event == 'push': excludes pull_request (and pull_request_target)
+    #     CI runs, which is what a fork PR produces.
+    #   - head_branch == 'main': belt and suspenders alongside the
+    #     branches: filter above.
+    #   - head_repository.full_name == github.repository: the push landed on
+    #     THIS repository, not a fork — the clause that actually stops the
+    #     fork attack, since a fork's own push to its own main still has
+    #     event == 'push' and head_branch == 'main'.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # Two CI runs on quick successive pushes can complete out of order;
+      # the concurrency group above serializes the deploys but doesn't
+      # reorder them, so a slower older run could otherwise clobber a
+      # faster newer one. Refuse to deploy anything that isn't (still) the
+      # tip of main.
+      - name: Guard against out-of-order completions
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploying="${{ github.event.workflow_run.head_sha || github.sha }}"
+          tip="$(git ls-remote --quiet origin refs/heads/main | cut -f1)"
+          if [[ -n "$tip" && "$tip" != "$deploying" ]]; then
+            echo "superseded by $tip, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Gated like the deploy and smoke steps: a superseded run, or a
+      # workflow_dispatch from a branch other than main (whose OIDC subject
+      # the federated credential doesn't trust), skips cleanly instead of
+      # failing red at login.
+      - name: Azure login (OIDC)
+        if: steps.guard.outputs.skip != 'true'
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # --skip-entra: skips Phase 4 (Entra callback registration) entirely.
+      # The deploy identity has no Microsoft Graph directory-read rights,
+      # which even reading the Entra app's existing redirect URIs requires,
+      # and the callback URI is registered once, by hand, during the
+      # initial deploy. --skip-certificate: the custom-domain certificate
+      # flow is interactive-ish (polls up to 15 minutes) and is run once by
+      # a human; CI asserts the binding is already SniEnabled (and reuses
+      # the live certificate id) instead of trying to create it; with no
+      # custom domain bound or requested it does nothing. --skip-entra always
+      # changes behaviour (it always skips Phase 4, custom domain or not).
+      #
+      # deploy.sh keeps the live custom domain and cutover state when
+      # PIDGE_MCP_CUSTOM_DOMAIN / PIDGE_MCP_CUTOVER are empty, which they are
+      # unless repository variables of those names exist. So a CI deploy
+      # never changes them by omission; see the header of deploy.sh.
+      - name: Deploy pidge-mcp
+        id: deploy
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploy/azure/deploy.sh --skip-entra --skip-certificate | tee deploy-output.log
+
+          url="$(grep -oE 'MCP endpoint *: https://[^[:space:]]+/mcp' deploy-output.log | awk '{print $NF}' || true)"
+          if [[ -z "$url" ]]; then
+            echo "warning: could not parse MCP endpoint from deploy output; re-deriving from the Container App" >&2
+            fqdn="$(az containerapp show --resource-group pidge --name ca-pidge-mcp \
+              --query properties.configuration.ingress.fqdn -o tsv)"
+            url="https://$fqdn/mcp"
+          fi
+          echo "url=${url%/mcp}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
+          PIDGE_MCP_ALLOWED_EMAILS: ${{ secrets.PIDGE_MCP_ALLOWED_EMAILS }}
+          PIDGE_MCP_CUSTOM_DOMAIN: ${{ vars.PIDGE_MCP_CUSTOM_DOMAIN }}
+          PIDGE_MCP_CUTOVER: ${{ vars.PIDGE_MCP_CUTOVER }}
+
+      - name: Smoke test
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          url="$URL"
+          echo "Smoke testing $url"
+
+          curl_retry=(--retry 5 --retry-delay 5 --retry-all-errors --max-time 30)
+
+          health="$(curl -fsS "${curl_retry[@]}" "$url/healthz")"
+          if [[ "$health" != "ok" ]]; then
+            echo "error: /healthz returned '$health', expected 'ok'" >&2
+            exit 1
+          fi
+
+          as_metadata="$(curl -fsS "${curl_retry[@]}" "$url/.well-known/oauth-authorization-server")"
+          issuer="$(jq -r '.issuer // empty' <<<"$as_metadata")"
+          if [[ "$issuer" != "$url" ]]; then
+            echo "error: discovery issuer '$issuer' does not match the deployed URL '$url'" >&2
+            exit 1
+          fi
+
+          resource_metadata="$(curl -fsS "${curl_retry[@]}" "$url/.well-known/oauth-protected-resource")"
+          resource="$(jq -r '.resource // empty' <<<"$resource_metadata")"
+          if [[ "$resource" != "$url/mcp" ]]; then
+            echo "error: protected-resource metadata resource '$resource' does not match '$url/mcp'" >&2
+            exit 1
+          fi
+
+          status="$(curl -s -o /dev/null -w '%{http_code}' "${curl_retry[@]}" -X POST "$url/mcp")"
+          if [[ "$status" != "401" ]]; then
+            echo "error: POST $url/mcp without a bearer token returned $status, expected 401" >&2
+            exit 1
+          fi
+
+          echo "Smoke test passed: healthz ok, issuer=$issuer, resource=$resource, unauthenticated /mcp -> 401"

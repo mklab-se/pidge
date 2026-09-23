@@ -108,7 +108,13 @@ impl PidgeMcp {
                 let token = self
                     .state
                     .signer
-                    .issue_download(&tc.user.email, &message.account, &message.id, &attachment)
+                    .issue_download(
+                        &tc.user.email,
+                        tc.record.token_generation,
+                        &message.account,
+                        &message.id,
+                        &attachment,
+                    )
                     .map_err(|_| {
                         McpError::internal_error("could not create a download link", None)
                     })?;
@@ -508,6 +514,31 @@ pub(crate) mod tests {
         // Not cached: every call mints its own link.
         let again = text(&call(&h, link_args("M1", "A1")).await.unwrap());
         assert_ne!(dl_path(&out), dl_path(&again));
+    }
+
+    #[tokio::test]
+    async fn links_carry_the_callers_token_generation() {
+        let h = ToolHarness::new(&[JANE]).await;
+        let users = crate::users::UserStore::new(h.secrets.clone());
+        let mut record = users.load(JANE).await.unwrap().unwrap();
+        record.token_generation = 7;
+        users.save(&record).await.unwrap();
+        mount_message(&h, JANE, "M1").await;
+        mount_listing(
+            &h,
+            JANE,
+            "M1",
+            vec![listing_row("A1", "a.pdf", "application/pdf", 4)],
+        )
+        .await;
+
+        let out = text(&call(&h, link_args("M1", "A1")).await.unwrap());
+        let claims = h
+            .state
+            .signer
+            .verify_download(dl_path(&out).trim_start_matches("/dl/"))
+            .unwrap();
+        assert_eq!(claims.r#gen, 7);
     }
 
     #[tokio::test]

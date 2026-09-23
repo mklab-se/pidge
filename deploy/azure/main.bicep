@@ -34,6 +34,21 @@ param vaultAdminObjectId string = ''
 @description('Log verbosity for the server (RUST_LOG syntax).')
 param logLevel string = 'info,pidge_mcp=debug'
 
+@description('Custom domain to bind to the Container App ingress, e.g. pidge.mklab.se. Empty skips custom domain binding.')
+param customDomain string = ''
+
+@description('Resource id of a managed certificate already provisioned for customDomain. Empty binds the hostname without TLS (Disabled) until the deploy script creates the certificate and redeploys.')
+param customDomainCertificateId string = ''
+
+@description('External origin the server treats as its OAuth issuer and callback base. Empty derives it from the Container Apps environment default domain.')
+param publicUrlOverride string = ''
+
+@description('Comma-separated additional hostnames the server accepts requests for, besides the public URL host.')
+param altHosts string = ''
+
+@description('Comma-separated issuer URLs whose previously issued tokens the server still accepts, for cutover to a new public URL.')
+param legacyIssuers string = ''
+
 var suffix = uniqueString(resourceGroup().id)
 var tags = {
   project: baseName
@@ -122,9 +137,10 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 30
-    // Purge protection is deliberately off while this is a spike so the
-    // resource group can be torn down cleanly. Turn it on before real use.
-    enablePurgeProtection: null
+    // Purge protection is on: a purged vault (and the refresh tokens and
+    // signing key it held) cannot be recovered. This is irreversible once
+    // set — there is no way to turn it back off for this vault.
+    enablePurgeProtection: true
     publicNetworkAccess: 'Enabled'
     networkAcls: {
       bypass: 'AzureServices'
@@ -182,7 +198,7 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 // The MCP server
 // ---------------------------------------------------------------------------
 
-var publicUrl = 'https://${appName}.${containerEnv.properties.defaultDomain}'
+var publicUrl = empty(publicUrlOverride) ? 'https://${appName}.${containerEnv.properties.defaultDomain}' : publicUrlOverride
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
   name: appName
@@ -204,6 +220,13 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
         targetPort: appPort
         transport: 'auto'
         allowInsecure: false
+        customDomains: empty(customDomain) ? [] : [
+          {
+            name: customDomain
+            bindingType: empty(customDomainCertificateId) ? 'Disabled' : 'SniEnabled'
+            certificateId: empty(customDomainCertificateId) ? null : customDomainCertificateId
+          }
+        ]
       }
       registries: [
         {
@@ -228,6 +251,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
             { name: 'PIDGE_MCP_ALLOWED_EMAILS', value: allowedEmails }
             { name: 'PIDGE_MCP_KEYVAULT_URL', value: vault.properties.vaultUri }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
+            { name: 'PIDGE_MCP_ALT_HOSTS', value: altHosts }
+            { name: 'PIDGE_MCP_LEGACY_ISSUERS', value: legacyIssuers }
+            { name: 'PIDGE_MCP_LOG_FORMAT', value: 'json' }
           ]
           probes: [
             {
@@ -253,9 +279,14 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
         }
       ]
       scale: {
-        // A single replica keeps the short-lived in-memory OAuth state
-        // (pending authorizations, used codes) coherent. Scale-to-zero is
-        // fine: a Rust binary cold-starts in well under a second.
+        // A single replica is required, for two reasons:
+        //  - the short-lived in-memory OAuth state (pending authorizations,
+        //    used codes) must be coherent;
+        //  - token generations (sign-out everywhere) are cached per process
+        //    for up to 5 minutes, so with more replicas a sign-out on one
+        //    would take that long to reach the others.
+        // Scale-to-zero is fine: a Rust binary cold-starts in well under a
+        // second.
         minReplicas: 0
         maxReplicas: 1
       }

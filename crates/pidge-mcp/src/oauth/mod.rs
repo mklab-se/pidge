@@ -298,7 +298,7 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
         );
     }
     if let Some(resource) = p.resource.as_deref()
-        && resource.trim_end_matches('/') != state.config.resource_url()
+        && !state.config.accepts_resource(resource)
     {
         return redirect_with_error(
             redirect_uri,
@@ -913,9 +913,10 @@ fn percent_encoding_decode(s: &str) -> String {
         .unwrap_or_default()
 }
 
-fn token_response(state: &SharedState, sub: &str, client_id: &str) -> Response {
-    let access = state.signer.issue_access(sub, SCOPE);
-    let refresh = state.signer.issue_refresh(sub, client_id);
+/// Issues an access/refresh pair stamped with the user's current token `generation`.
+fn token_response(state: &SharedState, sub: &str, client_id: &str, generation: u32) -> Response {
+    let access = state.signer.issue_access(sub, SCOPE, generation);
+    let refresh = state.signer.issue_refresh(sub, client_id, generation);
     match (access, refresh) {
         (Ok(access_token), Ok(refresh_token)) => (
             StatusCode::OK,
@@ -943,6 +944,15 @@ fn token_response(state: &SharedState, sub: &str, client_id: &str) -> Response {
     }
 }
 
+/// The token generation couldn't be read, so no token may be issued.
+fn store_unavailable() -> Response {
+    oauth_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "temporarily_unavailable",
+        "try again shortly",
+    )
+}
+
 async fn token(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -959,7 +969,7 @@ async fn token(
         return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", "unknown client");
     }
     if let Some(resource) = p.resource.as_deref()
-        && resource.trim_end_matches('/') != state.config.resource_url()
+        && !state.config.accepts_resource(resource)
     {
         return oauth_error(
             StatusCode::BAD_REQUEST,
@@ -1011,6 +1021,10 @@ async fn token(
                     "PKCE verification failed",
                 );
             }
+            // Before burning the code, so a store hiccup leaves it redeemable.
+            let Ok(generation) = state.generation_for(&claims.sub).await else {
+                return store_unavailable();
+            };
             if !state.mark_code_used(&claims.jti, claims.exp) {
                 tracing::warn!(user = %user_hash(&claims.sub), "authorization code replayed");
                 return oauth_error(
@@ -1020,7 +1034,7 @@ async fn token(
                 );
             }
             tracing::info!(user = %user_hash(&claims.sub), "issued tokens (authorization_code)");
-            token_response(&state, &claims.sub, &client_id)
+            token_response(&state, &claims.sub, &client_id, generation)
         }
         Some("refresh_token") => {
             let Some(refresh) = p.refresh_token.as_deref() else {
@@ -1055,8 +1069,20 @@ async fn token(
                     "user is no longer allowed",
                 );
             }
+            // `accounts_update sign_out_everywhere` bumped the generation.
+            let Ok(generation) = state.generation_for(&claims.sub).await else {
+                return store_unavailable();
+            };
+            if claims.r#gen != generation {
+                tracing::info!(user = %user_hash(&claims.sub), "refused signed-out refresh token");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "session was signed out",
+                );
+            }
             tracing::info!(user = %user_hash(&claims.sub), "issued tokens (refresh_token)");
-            token_response(&state, &claims.sub, &client_id)
+            token_response(&state, &claims.sub, &client_id, generation)
         }
         _ => oauth_error(
             StatusCode::BAD_REQUEST,
