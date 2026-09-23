@@ -22,12 +22,13 @@ use colored::Colorize;
 use serde_json::json;
 use tokio::sync::Mutex;
 
-use pidge_client::ClientError;
-use pidge_client::mcp::{
-    McpRpc, McpTokenStore, McpTokens, ToolResult, sign_in, valid_access_token,
-};
+use pidge_client::mcp::{McpRpc, McpTokenStore, McpTokens, sign_in};
 use pidge_core::{Config, TokenStorage};
 
+use crate::commands::mcp_session::{
+    McpCalls, RefreshingRpc, SessionLookup, backend_name, find_stored_tokens, is_session_expired,
+    lookup_session,
+};
 use crate::commands::{account_add, mcp};
 
 pub async fn run(url: String, store: TokenStorage, yes: bool, json_output: bool) -> Result<()> {
@@ -189,15 +190,15 @@ async fn run_inner(url: &str, store: TokenStorage, yes: bool, json_output: bool)
     let http = reqwest::Client::new();
     let (tokens, backend) = ensure_signed_in(&http, url, store).await?;
 
-    let mut raw = McpRpc::new(
+    let raw = McpRpc::new(
         http.clone(),
         tokens.server.clone(),
         tokens.access_token.clone(),
     );
-    raw.initialize()
+    let mut rpc = RefreshingRpc::new(http, raw, tokens.clone(), backend);
+    rpc.initialize()
         .await
         .context("failed to initialize the MCP session")?;
-    let mut rpc = RefreshingRpc::new(http, raw, tokens.clone(), backend);
 
     let config = Config::load()?;
     let local_accounts: Vec<String> = config.accounts.iter().map(|a| a.email.clone()).collect();
@@ -307,210 +308,19 @@ async fn ensure_signed_in(
     Ok((tokens, requested_store))
 }
 
-/// Look for a usable stored session for `url`, preferring `preferred` but
-/// falling back to the other backend on a miss — so `connect --store=file`
-/// after an earlier `connect --store=keychain` reuses that session instead
-/// of silently signing in again and leaving the keychain entry behind.
-/// A session that exists but is irrecoverably expired (`SessionExpired`) is
-/// reported as `None` without trying the other backend. Never triggers an
-/// interactive sign-in itself.
+/// Reuse a stored session if one is valid (or refreshable), reporting
+/// `None` (never triggering an interactive sign-in itself) otherwise —
+/// thin adapter over the shared [`lookup_session`], which `ensure_signed_in`
+/// then falls back to an interactive sign-in for.
 async fn try_existing_session(
     http: &reqwest::Client,
     url: &str,
     preferred: TokenStorage,
 ) -> Result<Option<(McpTokens, TokenStorage)>> {
-    let Some((mut tokens, backend)) = find_stored_tokens(url, preferred)? else {
-        return Ok(None);
-    };
-    match refresh_if_needed(http, &mut tokens, backend).await {
-        Ok(()) => Ok(Some((tokens, backend))),
-        Err(ClientError::SessionExpired { .. }) => Ok(None),
-        Err(e) => Err(e.into()),
+    match lookup_session(http, url, preferred).await? {
+        SessionLookup::Found(tokens, backend) => Ok(Some((tokens, backend))),
+        SessionLookup::Expired | SessionLookup::Absent => Ok(None),
     }
-}
-
-/// Find a stored session for `url` with no network call and no refresh —
-/// just the raw local/keychain lookup, tried in [`candidate_backends`]
-/// order. Used directly by `--dry-run` (which must never refresh) and as
-/// the first step of [`try_existing_session`].
-fn find_stored_tokens(
-    url: &str,
-    preferred: TokenStorage,
-) -> Result<Option<(McpTokens, TokenStorage)>> {
-    Ok(find_first_hit(&candidate_backends(preferred), |backend| {
-        McpTokenStore::load(url, backend)
-    })?)
-}
-
-/// Try `load` against each of `candidates` in order, returning the first
-/// hit (`Ok(Some(_))`). A miss (`Ok(None)`) moves on to the next candidate.
-/// An error only propagates when it comes from the *first* (preferred)
-/// candidate; a load error from a later, fallback candidate is treated as a
-/// miss instead (with a stderr warning) rather than failing the whole
-/// lookup — `--store=file` exists precisely for machines where the
-/// keychain/Secret Service isn't usable, and a fallback probe of it must
-/// not turn into a hard dependency on it. Generic and synchronous so it's
-/// directly unit-testable with no real keychain or network.
-fn find_first_hit<T, E: std::fmt::Display>(
-    candidates: &[TokenStorage],
-    mut load: impl FnMut(TokenStorage) -> Result<Option<T>, E>,
-) -> Result<Option<(T, TokenStorage)>, E> {
-    for (index, &backend) in candidates.iter().enumerate() {
-        match load(backend) {
-            Ok(Some(value)) => return Ok(Some((value, backend))),
-            Ok(None) => continue,
-            Err(e) if index == 0 => return Err(e),
-            Err(e) => {
-                eprintln!(
-                    "warning: could not check the {} backend for a stored session: {e}; trying the next one",
-                    backend_name(backend)
-                );
-                continue;
-            }
-        }
-    }
-    Ok(None)
-}
-
-/// The backends to try, in order, when looking for a stored session:
-/// `preferred` first, then the other one as a fallback. Shared with
-/// `mcp_status` and `mcp_logout`, which resolve an explicitly-named
-/// server's session the same way `connect` does.
-pub(crate) fn candidate_backends(preferred: TokenStorage) -> [TokenStorage; 2] {
-    match preferred {
-        TokenStorage::Keychain => [TokenStorage::Keychain, TokenStorage::File],
-        TokenStorage::File => [TokenStorage::File, TokenStorage::Keychain],
-    }
-}
-
-pub(crate) fn backend_name(store: TokenStorage) -> &'static str {
-    match store {
-        TokenStorage::Keychain => "keychain",
-        TokenStorage::File => "file",
-    }
-}
-
-/// Minimal tool-calling surface [`run_migration`] needs. Implemented for the
-/// real [`McpRpc`] (bails on `ToolResult::is_error` via [`check_tool_result`])
-/// and for [`RefreshingRpc`], and for fakes in tests — so the migration
-/// loop's decision logic (who to skip, who to call `accounts_connect` for)
-/// can be exercised with no network call.
-pub trait McpCalls {
-    async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> Result<ToolResult>;
-}
-
-impl McpCalls for McpRpc {
-    async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> Result<ToolResult> {
-        let result = McpRpc::call_tool(self, name, arguments).await?;
-        check_tool_result(name, result)
-    }
-}
-
-/// Turn a tool-level failure (`ToolResult::is_error`) into an error instead
-/// of letting its text be misparsed as if it were a normal list/link. The
-/// server reports failures as JSON-RPC errors today, so this only guards
-/// against a tool that starts using `isError` for that in the future.
-/// Factored out (pure, no network) so it's directly unit-testable.
-fn check_tool_result(name: &str, result: ToolResult) -> Result<ToolResult> {
-    if result.is_error {
-        Err(anyhow::anyhow!("{name} reported an error: {}", result.text))
-    } else {
-        Ok(result)
-    }
-}
-
-/// Wraps [`McpRpc`] so every [`McpCalls::call_tool`] first makes sure the
-/// access token has more than [`McpTokens::needs_refresh`]'s margin left —
-/// refreshing (and persisting the refresh through `store`) as needed. An
-/// interactive migration can spend up to ten minutes per mailbox waiting on
-/// the user, comfortably long enough to run past a token minted at the
-/// start of the run, so this check happens immediately before every single
-/// call rather than once at the start. A `401` that gets through anyway
-/// (e.g. the server revoked the session between calls) is remapped to
-/// [`ClientError::SessionExpired`] so it surfaces through
-/// `commands::mcp::remap_session_expired`'s `pidge mcp connect <url>` hint
-/// instead of a bare Graph error.
-pub(crate) struct RefreshingRpc {
-    http: reqwest::Client,
-    inner: McpRpc,
-    tokens: McpTokens,
-    store: TokenStorage,
-}
-
-impl RefreshingRpc {
-    pub(crate) fn new(
-        http: reqwest::Client,
-        inner: McpRpc,
-        tokens: McpTokens,
-        store: TokenStorage,
-    ) -> Self {
-        Self {
-            http,
-            inner,
-            tokens,
-            store,
-        }
-    }
-}
-
-impl McpCalls for RefreshingRpc {
-    async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> Result<ToolResult> {
-        let server = self.tokens.server.clone();
-        refresh_if_needed(&self.http, &mut self.tokens, self.store).await?;
-        // Cheap in-memory assignment regardless of whether a refresh just
-        // happened — unlike the token-store write inside
-        // `refresh_if_needed`, there's no reason to guard this one.
-        self.inner
-            .set_access_token(self.tokens.access_token.clone());
-        match <McpRpc as McpCalls>::call_tool(&mut self.inner, name, arguments).await {
-            Ok(result) => Ok(result),
-            Err(e) if is_unauthorized(&e) => {
-                Err(ClientError::SessionExpired { email: server }.into())
-            }
-            Err(e) => Err(e),
-        }
-    }
-}
-
-fn is_unauthorized(err: &anyhow::Error) -> bool {
-    matches!(
-        err.downcast_ref::<ClientError>(),
-        Some(ClientError::Graph { status: 401, .. })
-    )
-}
-
-/// True if `err`'s chain contains either flavor of "this hosted session is
-/// dead, sign in again" — the client's own [`ClientError::SessionExpired`]
-/// (a failed refresh grant) or the CLI-level
-/// [`ClientError::McpSessionExpired`] a caller may already have remapped it
-/// to. Used by the poller to stop retrying immediately instead of spending
-/// its whole deadline re-POSTing a revoked refresh token (see N2).
-fn is_session_expired(err: &anyhow::Error) -> bool {
-    err.chain().any(|cause| {
-        matches!(
-            cause.downcast_ref::<ClientError>(),
-            Some(ClientError::SessionExpired { .. } | ClientError::McpSessionExpired { .. })
-        )
-    })
-}
-
-/// Refresh `tokens` in place if [`McpTokens::needs_refresh`] says it's due,
-/// persisting the new tokens through `store` only when the access token
-/// actually changed — an unconditional save on every call would mean a
-/// keychain write (and on some platforms an access prompt) even when
-/// nothing changed. Shared by [`try_existing_session`] and [`RefreshingRpc`].
-async fn refresh_if_needed(
-    http: &reqwest::Client,
-    tokens: &mut McpTokens,
-    store: TokenStorage,
-) -> Result<(), ClientError> {
-    let server = tokens.server.clone();
-    let previous_access_token = tokens.access_token.clone();
-    let access_token = valid_access_token(http, &server, tokens).await?;
-    if access_token != previous_access_token {
-        McpTokenStore::save(tokens, store)?;
-    }
-    Ok(())
 }
 
 /// The outcome of one [`run_migration`] run.
@@ -764,6 +574,9 @@ pub fn extract_connect_url(text: &str) -> Option<String> {
 mod tests {
     use std::sync::Arc;
 
+    use pidge_client::ClientError;
+    use pidge_client::mcp::ToolResult;
+
     use super::*;
 
     // --- parse_connected_addresses -----------------------------------
@@ -834,112 +647,6 @@ mod tests {
         let line = already_connected_line("jane@example.com");
         assert!(line.contains("jane@example.com"), "{line}");
         assert!(line.to_lowercase().contains("already connected"), "{line}");
-    }
-
-    // --- check_tool_result -------------------------------------------------
-
-    #[test]
-    fn check_tool_result_bails_on_is_error() {
-        let result = ToolResult {
-            text: "boom".into(),
-            is_error: true,
-        };
-        let err = check_tool_result("accounts_list", result).unwrap_err();
-        assert!(err.to_string().contains("boom"), "{err}");
-    }
-
-    #[test]
-    fn check_tool_result_passes_through_ok_results() {
-        let result = ToolResult {
-            text: "fine".into(),
-            is_error: false,
-        };
-        assert_eq!(
-            check_tool_result("accounts_list", result).unwrap().text,
-            "fine"
-        );
-    }
-
-    // --- candidate_backends -----------------------------------------------
-
-    #[test]
-    fn candidate_backends_tries_the_preferred_backend_first() {
-        assert_eq!(
-            candidate_backends(TokenStorage::Keychain),
-            [TokenStorage::Keychain, TokenStorage::File]
-        );
-        assert_eq!(
-            candidate_backends(TokenStorage::File),
-            [TokenStorage::File, TokenStorage::Keychain]
-        );
-    }
-
-    // --- find_first_hit -----------------------------------------------
-
-    #[test]
-    fn find_first_hit_returns_the_first_hit_and_does_not_try_the_rest() {
-        let candidates = [TokenStorage::Keychain, TokenStorage::File];
-        let mut tried = Vec::new();
-        let result = find_first_hit(&candidates, |backend| {
-            tried.push(backend);
-            Ok::<_, anyhow::Error>(if backend == TokenStorage::Keychain {
-                Some(42)
-            } else {
-                None
-            })
-        })
-        .unwrap();
-
-        assert_eq!(result, Some((42, TokenStorage::Keychain)));
-        assert_eq!(tried, vec![TokenStorage::Keychain]);
-    }
-
-    #[test]
-    fn find_first_hit_finds_a_hit_in_the_fallback_backend() {
-        let candidates = [TokenStorage::Keychain, TokenStorage::File];
-        let result = find_first_hit(&candidates, |backend| {
-            Ok::<_, anyhow::Error>(match backend {
-                TokenStorage::Keychain => None,
-                TokenStorage::File => Some("found"),
-            })
-        })
-        .unwrap();
-
-        assert_eq!(result, Some(("found", TokenStorage::File)));
-    }
-
-    #[test]
-    fn find_first_hit_propagates_an_error_from_the_preferred_backend() {
-        let candidates = [TokenStorage::Keychain, TokenStorage::File];
-        let mut tried = Vec::new();
-        let err = find_first_hit(&candidates, |backend| {
-            tried.push(backend);
-            Err::<Option<i32>, _>(anyhow::anyhow!("keychain unavailable"))
-        })
-        .unwrap_err();
-
-        assert!(err.to_string().contains("keychain unavailable"));
-        assert_eq!(
-            tried,
-            vec![TokenStorage::Keychain],
-            "must not try the fallback after a preferred-backend error"
-        );
-    }
-
-    #[test]
-    fn find_first_hit_treats_a_fallback_backend_error_as_a_miss() {
-        let candidates = [TokenStorage::Keychain, TokenStorage::File];
-        let result = find_first_hit(&candidates, |backend| match backend {
-            // miss on the preferred backend
-            TokenStorage::Keychain => Ok::<Option<i32>, anyhow::Error>(None),
-            TokenStorage::File => Err(anyhow::anyhow!("no secret service running")),
-        })
-        .unwrap();
-
-        assert_eq!(
-            result, None,
-            "a fallback-backend error must be reported as an overall miss, not fail the lookup"
-        );
     }
 
     // --- run_migration ---------------------------------------------------

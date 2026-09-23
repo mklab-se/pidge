@@ -282,8 +282,8 @@ pub enum McpCommands {
         /// to pick.
         url: Option<String>,
 
-        /// Only look for the session in this storage backend, skipping the
-        /// server index (useful if the index is stale or missing)
+        /// Look in this backend first (the other is still tried);
+        /// defaults to whichever backend the server index says was used
         #[arg(long, value_enum)]
         store: Option<StorageBackendArg>,
     },
@@ -292,8 +292,8 @@ pub enum McpCommands {
         /// Base URL of the hosted MCP server to sign out of
         url: String,
 
-        /// Only look for the session in this storage backend, skipping the
-        /// server index (useful if the index is stale or missing)
+        /// Look in this backend first (the other is still tried);
+        /// defaults to whichever backend the server index says was used
         #[arg(long, value_enum)]
         store: Option<StorageBackendArg>,
     },

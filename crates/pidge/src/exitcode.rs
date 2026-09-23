@@ -159,18 +159,22 @@ pub fn classify(err: &anyhow::Error) -> (ExitKind, Envelope) {
         }
         if let Some(mcp_usage) = cause.downcast_ref::<crate::commands::mcp::McpUsageError>() {
             use crate::commands::mcp::McpUsageError;
-            let (kind, code) = match mcp_usage {
+            let (kind, code, hint) = match mcp_usage {
                 McpUsageError::NoServerConnected | McpUsageError::NotConnected { .. } => {
-                    (ExitKind::NotFound, "not_found")
+                    (ExitKind::NotFound, "not_found", None)
                 }
-                McpUsageError::AmbiguousServer { .. } => (ExitKind::Usage, "ambiguous"),
+                McpUsageError::AmbiguousServer { example, .. } => (
+                    ExitKind::Usage,
+                    "ambiguous",
+                    Some(format!("run `{example}`")),
+                ),
             };
             return (
                 kind,
                 Envelope {
                     code,
                     message: mcp_usage.to_string(),
-                    hint: None,
+                    hint,
                     account: None,
                     retry_after: None,
                 },

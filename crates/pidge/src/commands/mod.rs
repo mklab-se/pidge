@@ -51,6 +51,7 @@ pub mod mail_unsubscribe;
 pub mod mcp;
 pub mod mcp_connect;
 pub mod mcp_logout;
+pub mod mcp_session;
 pub mod mcp_status;
 pub mod name_resolve;
 pub mod reminder;

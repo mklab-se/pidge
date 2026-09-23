@@ -13,11 +13,13 @@ use colored::Colorize;
 use serde_json::json;
 
 use pidge_client::ClientError;
-use pidge_client::mcp::{McpRpc, McpTokenStore, McpTokens, StoredServer, valid_access_token};
+use pidge_client::mcp::{McpRpc, McpTokenStore, McpTokens, StoredServer};
 use pidge_core::TokenStorage;
 
 use crate::commands::mcp::McpUsageError;
-use crate::commands::mcp_connect::{McpCalls, RefreshingRpc, backend_name, candidate_backends};
+use crate::commands::mcp_session::{
+    McpCalls, RefreshingRpc, SessionLookup, backend_name, indexed_backend, lookup_session,
+};
 
 pub async fn run(
     url: Option<String>,
@@ -25,38 +27,32 @@ pub async fn run(
     json_output: bool,
 ) -> Result<()> {
     let servers = McpTokenStore::list()?;
-    let (server_url, preferred) = match url {
-        Some(u) => (u, TokenStorage::Keychain),
+    let server_url = match url {
+        Some(u) => u,
         None => match resolve_default_server(&servers) {
-            ServerResolution::Only(s) => (s.server.clone(), s.storage),
+            ServerResolution::Only(s) => s.server,
             ServerResolution::None => return Err(McpUsageError::NoServerConnected.into()),
             ServerResolution::Many(list) => {
-                let servers = list
-                    .iter()
-                    .map(|s| s.server.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let example = list[0].server.clone();
-                return Err(McpUsageError::AmbiguousServer { servers, example }.into());
+                return Err(ambiguous_server_error(&list, "pidge mcp status"));
             }
         },
     };
 
+    let preferred = store.unwrap_or_else(|| indexed_backend(&server_url));
     let http = reqwest::Client::new();
-    let (tokens, backend) = load_session(&http, &server_url, store, preferred).await?;
+    let lookup = lookup_session(&http, &server_url, preferred).await?;
+    let (tokens, backend) = session_or_error(lookup, &server_url)
+        .map_err(|e| crate::commands::mcp::remap_session_expired(&server_url, e))?;
 
-    let mut raw = McpRpc::new(
+    let raw = McpRpc::new(
         http.clone(),
         tokens.server.clone(),
         tokens.access_token.clone(),
     );
-    raw.initialize().await?;
     let mut rpc = RefreshingRpc::new(http, raw, tokens.clone(), backend);
-    let list_text = rpc
-        .call_tool("accounts_list", json!({}))
+    let list_text = accounts_list(&mut rpc)
         .await
-        .map_err(|e| crate::commands::mcp::remap_session_expired(&tokens.server, e))?
-        .text;
+        .map_err(|e| crate::commands::mcp::remap_session_expired(&tokens.server, e))?;
 
     if json_output {
         println!(
@@ -86,46 +82,35 @@ pub async fn run(
     Ok(())
 }
 
-/// Load the stored session for `server_url`. If `override_store` is set,
-/// only that backend is consulted (per its `--store` flag doc: it skips the
-/// index entirely); otherwise `preferred` is tried first, falling back to
-/// the other backend, mirroring `mcp_connect`'s own session lookup. A
-/// session that exists but can't be refreshed comes back as
-/// [`ClientError::McpSessionExpired`]; no session in any consulted backend
-/// comes back as [`McpUsageError::NotConnected`].
-async fn load_session(
-    http: &reqwest::Client,
-    server_url: &str,
-    override_store: Option<TokenStorage>,
-    preferred: TokenStorage,
-) -> Result<(McpTokens, TokenStorage)> {
-    let to_try: Vec<TokenStorage> = match override_store {
-        Some(s) => vec![s],
-        None => candidate_backends(preferred).to_vec(),
-    };
+/// Initialize the session and fetch `accounts_list`'s text. A `401` on
+/// either step (the locally-held token looked fresh, but the server had
+/// already revoked it — see [`RefreshingRpc::initialize`]) surfaces as
+/// [`ClientError::SessionExpired`], which the caller remaps the same way as
+/// [`session_or_error`]'s `Expired` case.
+async fn accounts_list(rpc: &mut RefreshingRpc) -> Result<String> {
+    rpc.initialize().await?;
+    Ok(rpc.call_tool("accounts_list", json!({})).await?.text)
+}
 
-    for backend in to_try {
-        let Some(mut tokens) = McpTokenStore::load(server_url, backend)? else {
-            continue;
-        };
-        let server = tokens.server.clone();
-        return match valid_access_token(http, &server, &mut tokens).await {
-            Ok(_) => {
-                McpTokenStore::save(&tokens, backend)?;
-                Ok((tokens, backend))
-            }
-            Err(ClientError::SessionExpired { .. }) => Err(ClientError::McpSessionExpired {
-                server: server_url.to_string(),
-            }
-            .into()),
-            Err(e) => Err(e.into()),
-        };
+/// Turn a [`SessionLookup`] into `status`'s outcome: the found session, or a
+/// typed error for the other two cases — [`ClientError::SessionExpired`]
+/// for `Expired` (so the shared `remap_session_expired` at the call site
+/// turns it into the `pidge mcp connect <url>` hint and exit code 3) and
+/// [`McpUsageError::NotConnected`] for `Absent` (exit code 4). Pure and
+/// synchronous, so this mapping is directly unit-testable without touching
+/// any real backend.
+fn session_or_error(lookup: SessionLookup, server_url: &str) -> Result<(McpTokens, TokenStorage)> {
+    match lookup {
+        SessionLookup::Found(tokens, backend) => Ok((tokens, backend)),
+        SessionLookup::Expired => Err(ClientError::SessionExpired {
+            email: server_url.to_string(),
+        }
+        .into()),
+        SessionLookup::Absent => Err(McpUsageError::NotConnected {
+            server: server_url.to_string(),
+        }
+        .into()),
     }
-
-    Err(McpUsageError::NotConnected {
-        server: server_url.to_string(),
-    }
-    .into())
 }
 
 /// What `pidge mcp status` (with no `url`) should do about which server to
@@ -143,6 +128,21 @@ fn resolve_default_server(servers: &[StoredServer]) -> ServerResolution {
         [only] => ServerResolution::Only(only.clone()),
         many => ServerResolution::Many(many.to_vec()),
     }
+}
+
+/// Build [`McpUsageError::AmbiguousServer`] for `list`, with `example` a
+/// complete, ready-to-run command using the first listed server — `command`
+/// is the caller's own name (`"pidge mcp status"`) rather than hard-coded,
+/// so the message stays correct if another url-less subcommand grows this
+/// same resolution later.
+fn ambiguous_server_error(list: &[StoredServer], command: &str) -> anyhow::Error {
+    let servers = list
+        .iter()
+        .map(|s| s.server.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let example = format!("{command} {}", list[0].server);
+    McpUsageError::AmbiguousServer { servers, example }.into()
 }
 
 /// "in 45m" for a future `target`, "3h ago" for a past one — used for token
@@ -181,6 +181,16 @@ mod tests {
         }
     }
 
+    fn fake_tokens(server: &str) -> McpTokens {
+        McpTokens {
+            server: server.to_string(),
+            access_token: "AT".into(),
+            refresh_token: "RT".into(),
+            expires_at: Utc::now() + Duration::seconds(3600),
+            client_id: "client-jwt".into(),
+        }
+    }
+
     // --- resolve_default_server --------------------------------------
 
     #[test]
@@ -210,6 +220,56 @@ mod tests {
             ServerResolution::Many(list) => assert_eq!(list, entries),
             _ => panic!("expected Many"),
         }
+    }
+
+    // --- ambiguous_server_error ------------------------------------------
+
+    #[test]
+    fn ambiguous_server_error_names_the_calling_command_not_a_hardcoded_one() {
+        let list = vec![
+            server("https://a.example.com", TokenStorage::Keychain),
+            server("https://b.example.com", TokenStorage::File),
+        ];
+        let err = ambiguous_server_error(&list, "pidge mcp logout");
+        let message = err.to_string();
+        assert!(
+            message.contains("pidge mcp logout https://a.example.com"),
+            "{message}"
+        );
+        assert!(message.contains("https://a.example.com"), "{message}");
+        assert!(message.contains("https://b.example.com"), "{message}");
+    }
+
+    // --- session_or_error (M5: expired-vs-absent mapping) -----------------
+
+    #[test]
+    fn session_or_error_passes_through_a_found_session() {
+        let tokens = fake_tokens("https://mcp.example.com");
+        let (out_tokens, backend) = session_or_error(
+            SessionLookup::Found(tokens.clone(), TokenStorage::File),
+            "https://mcp.example.com",
+        )
+        .unwrap();
+        assert_eq!(out_tokens, tokens);
+        assert_eq!(backend, TokenStorage::File);
+    }
+
+    #[test]
+    fn session_or_error_maps_expired_to_session_expired_for_the_remap_hint() {
+        let err = session_or_error(SessionLookup::Expired, "https://mcp.example.com").unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<ClientError>(),
+            Some(ClientError::SessionExpired { .. })
+        ));
+    }
+
+    #[test]
+    fn session_or_error_maps_absent_to_not_connected() {
+        let err = session_or_error(SessionLookup::Absent, "https://mcp.example.com").unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<McpUsageError>(),
+            Some(McpUsageError::NotConnected { .. })
+        ));
     }
 
     // --- format_relative / humanize ------------------------------------

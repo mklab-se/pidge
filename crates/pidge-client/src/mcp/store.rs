@@ -54,32 +54,61 @@ impl McpTokenStore {
     }
 
     /// Save `tokens`, overwriting any existing entry for its server, and
-    /// upsert the server index so it can be discovered by [`Self::list`].
+    /// best-effort upsert the server index so it can be discovered by
+    /// [`Self::list`]. The tokens are the source of truth for whether this
+    /// call succeeded — a failure to update the index (e.g. a permissions
+    /// problem, a concurrent write) is logged and swallowed rather than
+    /// failing a token write that already landed.
     pub fn save(tokens: &McpTokens, storage: TokenStorage) -> Result<(), ClientError> {
         match storage {
             TokenStorage::Keychain => Self::save_keychain(tokens)?,
             TokenStorage::File => Self::save_file(tokens)?,
         }
-        Self::upsert_index(&tokens.server, storage)
+        if let Err(e) = Self::upsert_index(&tokens.server, storage) {
+            tracing::warn!("could not update the MCP server index after saving tokens: {e}");
+        }
+        Ok(())
     }
 
     /// Remove the stored session for `server_url` and its index entry.
-    /// No-op if none exists.
+    /// No-op if none exists. As with [`Self::save`], the token deletion is
+    /// authoritative — a failure to update the index afterwards is logged,
+    /// not propagated.
     pub fn delete(server_url: &str, storage: TokenStorage) -> Result<(), ClientError> {
         match storage {
             TokenStorage::Keychain => Self::delete_keychain(server_url)?,
             TokenStorage::File => Self::delete_file(server_url)?,
         }
-        Self::remove_from_index(server_url)
+        if let Err(e) = Self::remove_from_index(server_url) {
+            tracing::warn!("could not update the MCP server index after deleting tokens: {e}");
+        }
+        Ok(())
     }
 
     /// Every server this user has a stored session with, per the on-disk
     /// index. Empty (not an error) if the index file doesn't exist yet —
-    /// e.g. before the first `pidge mcp connect`.
+    /// e.g. before the first `pidge mcp connect` — or if it exists but
+    /// can't be parsed. The index is only a discovery aid (the keychain and
+    /// token files remain the source of truth for what's actually signed
+    /// in), so a corrupt file must never block `status`, `connect`, or a
+    /// token refresh; it's logged and treated as empty. The next
+    /// [`Self::save`] then rewrites it from scratch, which does mean a
+    /// corrupt index silently drops any *other* servers it used to list —
+    /// an acceptable trade for never wedging sign-in on a damaged file that
+    /// hand-editing (or a crash mid-write) could produce.
     pub fn list() -> Result<Vec<StoredServer>, ClientError> {
         let path = Self::servers_index_path()?;
         match std::fs::read_to_string(&path) {
-            Ok(s) => Ok(serde_json::from_str(&s)?),
+            Ok(s) => match serde_json::from_str(&s) {
+                Ok(entries) => Ok(entries),
+                Err(e) => {
+                    tracing::warn!(
+                        "ignoring corrupt MCP server index at {}: {e}",
+                        path.display()
+                    );
+                    Ok(Vec::new())
+                }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(e.into()),
         }
@@ -156,6 +185,15 @@ impl McpTokenStore {
     fn dir() -> Result<PathBuf, ClientError> {
         let dir = crate::base_config_dir()?.join("pidge").join("mcp");
         std::fs::create_dir_all(&dir)?;
+        // `create_dir_all` leaves the default umask (typically 0755) —
+        // tighten it to user-only. The token and index files inside are
+        // already 0600, so this closes only the smaller exposure of the
+        // directory listing itself revealing which hosts are connected.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
         Ok(dir)
     }
 
@@ -385,6 +423,86 @@ mod tests {
             let path = McpTokenStore::servers_index_path().unwrap();
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "the server index must be user-only readable");
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_dir_is_mode_0700_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        with_temp_config_dir(|| {
+            McpTokenStore::save(
+                &fake_tokens("https://mode.example.com/mcp"),
+                TokenStorage::File,
+            )
+            .unwrap();
+            let dir = McpTokenStore::dir().unwrap();
+            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode, 0o700,
+                "the mcp directory must not be listable by anyone else"
+            );
+        });
+    }
+
+    // --- corrupt index (I1) ------------------------------------------------
+
+    #[test]
+    fn list_treats_a_corrupt_index_file_as_empty_instead_of_erroring() {
+        with_temp_config_dir(|| {
+            let path = McpTokenStore::servers_index_path().unwrap();
+            std::fs::write(&path, "not valid json").unwrap();
+
+            assert_eq!(McpTokenStore::list().unwrap(), Vec::new());
+        });
+    }
+
+    #[test]
+    fn save_succeeds_and_repairs_a_corrupt_index() {
+        with_temp_config_dir(|| {
+            let path = McpTokenStore::servers_index_path().unwrap();
+            std::fs::write(&path, "not valid json").unwrap();
+
+            let tokens = fake_tokens("https://mcp.example.com/mcp");
+            McpTokenStore::save(&tokens, TokenStorage::File).unwrap();
+
+            // The token write itself must not fail, and the index is now
+            // readable again (even though the corrupt file meant any other
+            // servers it might have listed were lost — see `list`'s docs).
+            assert_eq!(
+                McpTokenStore::load(&tokens.server, TokenStorage::File)
+                    .unwrap()
+                    .unwrap(),
+                tokens
+            );
+            assert_eq!(
+                McpTokenStore::list().unwrap(),
+                vec![StoredServer {
+                    server: "https://mcp.example.com".to_string(),
+                    storage: TokenStorage::File,
+                }]
+            );
+        });
+    }
+
+    #[test]
+    fn delete_succeeds_even_with_a_corrupt_index() {
+        with_temp_config_dir(|| {
+            let tokens = fake_tokens("https://mcp.example.com/mcp");
+            McpTokenStore::save(&tokens, TokenStorage::File).unwrap();
+
+            let path = McpTokenStore::servers_index_path().unwrap();
+            std::fs::write(&path, "not valid json").unwrap();
+
+            // The token deletion must succeed regardless of the index being
+            // unreadable.
+            McpTokenStore::delete(&tokens.server, TokenStorage::File).unwrap();
+            assert!(
+                McpTokenStore::load(&tokens.server, TokenStorage::File)
+                    .unwrap()
+                    .is_none()
+            );
         });
     }
 }

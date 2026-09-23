@@ -35,8 +35,12 @@ pub enum McpUsageError {
     #[error("no hosted server connected; run `pidge mcp connect <url>`")]
     NoServerConnected,
 
+    /// `example` is a complete, ready-to-run command built by the caller
+    /// (e.g. `"pidge mcp status https://a.example.com"`) — the message
+    /// itself never hard-codes a subcommand name, since this enum is shared
+    /// by every url-less resolution, not just `status`'s.
     #[error(
-        "connected to multiple hosted servers ({servers}); specify one, e.g. `pidge mcp status {example}`"
+        "connected to multiple hosted servers ({servers}); pass the server url explicitly, e.g. `{example}`"
     )]
     AmbiguousServer { servers: String, example: String },
 
