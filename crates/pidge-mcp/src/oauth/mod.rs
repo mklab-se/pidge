@@ -913,9 +913,10 @@ fn percent_encoding_decode(s: &str) -> String {
         .unwrap_or_default()
 }
 
-fn token_response(state: &SharedState, sub: &str, client_id: &str) -> Response {
-    let access = state.signer.issue_access(sub, SCOPE);
-    let refresh = state.signer.issue_refresh(sub, client_id);
+/// Issues an access/refresh pair stamped with the user's current token `generation`.
+fn token_response(state: &SharedState, sub: &str, client_id: &str, generation: u32) -> Response {
+    let access = state.signer.issue_access(sub, SCOPE, generation);
+    let refresh = state.signer.issue_refresh(sub, client_id, generation);
     match (access, refresh) {
         (Ok(access_token), Ok(refresh_token)) => (
             StatusCode::OK,
@@ -1020,7 +1021,8 @@ async fn token(
                 );
             }
             tracing::info!(user = %user_hash(&claims.sub), "issued tokens (authorization_code)");
-            token_response(&state, &claims.sub, &client_id)
+            let generation = state.generation_for(&claims.sub).await;
+            token_response(&state, &claims.sub, &client_id, generation)
         }
         Some("refresh_token") => {
             let Some(refresh) = p.refresh_token.as_deref() else {
@@ -1055,8 +1057,18 @@ async fn token(
                     "user is no longer allowed",
                 );
             }
+            // `accounts_update sign_out_everywhere` bumped the generation.
+            let generation = state.generation_for(&claims.sub).await;
+            if claims.r#gen != generation {
+                tracing::info!(user = %user_hash(&claims.sub), "refused signed-out refresh token");
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_grant",
+                    "session was signed out",
+                );
+            }
             tracing::info!(user = %user_hash(&claims.sub), "issued tokens (refresh_token)");
-            token_response(&state, &claims.sub, &client_id)
+            token_response(&state, &claims.sub, &client_id, generation)
         }
         _ => oauth_error(
             StatusCode::BAD_REQUEST,

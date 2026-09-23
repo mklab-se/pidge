@@ -33,6 +33,8 @@ struct Harness {
     state: SharedState,
     secrets: SharedSecrets,
     secrets_dir: tempfile::TempDir,
+    /// The key `state.signer` signs with, for hand-built tokens.
+    key: Vec<u8>,
 }
 
 const TENANT: &str = "tenant-1";
@@ -102,7 +104,8 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
         alt_hosts: Vec::new(),
         legacy_issuers: Vec::new(),
     };
-    let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
+    let key = random_bytes(32);
+    let signer = Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp"));
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
     let auth = AuthClient::for_test("cid", microsoft.uri()).with_backend(token_backend.clone());
     let graph = GraphClient::for_test(auth, format!("{}/v1.0", microsoft.uri()));
@@ -119,6 +122,7 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
         state,
         secrets,
         secrets_dir,
+        key,
     }
 }
 
@@ -141,7 +145,8 @@ async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
         alt_hosts,
         legacy_issuers: Vec::new(),
     };
-    let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
+    let key = random_bytes(32);
+    let signer = Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp"));
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
     let auth = AuthClient::for_test("cid", microsoft.uri()).with_backend(token_backend.clone());
     let graph = GraphClient::for_test(auth, format!("{}/v1.0", microsoft.uri()));
@@ -158,6 +163,7 @@ async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
         state,
         secrets,
         secrets_dir,
+        key,
     }
 }
 
@@ -427,7 +433,7 @@ async fn alternate_hosts_are_accepted() {
     let access = h
         .state
         .signer
-        .issue_access("jane@example.com", "mail")
+        .issue_access("jane@example.com", "mail", 0)
         .unwrap();
 
     assert_eq!(
@@ -1262,4 +1268,141 @@ async fn microsoft_error_text_never_reaches_the_log() {
     assert!(!logged.contains("cancelled"), "{logged}");
     assert!(!logged.contains("already redeemed"), "{logged}");
     assert_no_address("logs", &logged);
+}
+
+/// Signs `h`'s user in with a fresh client and redeems the code; returns
+/// `(client_id, access, refresh)`.
+async fn sign_in_and_redeem(h: &Harness) -> (String, String, String) {
+    let client_id = register(&h.app).await;
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let resp = sign_in(h, &client_id, verifier).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers()[header::LOCATION].to_str().unwrap();
+    let code = query(location, "code").expect("code in redirect");
+    let (status, body) = redeem(
+        &h.app,
+        &format!(
+            "grant_type=authorization_code&client_id={}&code={}&code_verifier={verifier}&redirect_uri={}",
+            urlenc(&client_id),
+            urlenc(&code),
+            urlenc(CLIENT_REDIRECT)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    (
+        client_id,
+        body["access_token"].as_str().unwrap().to_string(),
+        body["refresh_token"].as_str().unwrap().to_string(),
+    )
+}
+
+async fn refresh_grant(
+    h: &Harness,
+    client_id: &str,
+    refresh: &str,
+) -> (StatusCode, serde_json::Value) {
+    redeem(
+        &h.app,
+        &format!(
+            "grant_type=refresh_token&client_id={}&refresh_token={}",
+            urlenc(client_id),
+            urlenc(refresh)
+        ),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
+    let h = harness("jane@example.com").await;
+    let (client_id, access, refresh) = sign_in_and_redeem(&h).await;
+    assert_eq!(mcp_initialize(&h.app, Some(&access)).await, StatusCode::OK);
+
+    let mcp = crate::tools::PidgeMcp::new(h.state.clone());
+    let out = mcp
+        .accounts_update(
+            rmcp::handler::server::wrapper::Parameters(crate::tools::accounts::UpdateArgs {
+                sign_out_everywhere: Some(true),
+                ..Default::default()
+            }),
+            crate::tools::tests::request_context("jane@example.com"),
+        )
+        .await
+        .unwrap();
+    let out = crate::tools::tests::text(&out);
+    assert!(out.contains("All sessions signed out"), "{out}");
+
+    assert_eq!(
+        mcp_initialize(&h.app, Some(&access)).await,
+        StatusCode::UNAUTHORIZED,
+        "old access token is revoked"
+    );
+    let (status, body) = refresh_grant(&h, &client_id, &refresh).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_grant");
+    assert_eq!(body["error_description"], "session was signed out");
+
+    // A fresh sign-in gets tokens of the new generation, which work.
+    let (client_id, access, refresh) = sign_in_and_redeem(&h).await;
+    assert_eq!(mcp_initialize(&h.app, Some(&access)).await, StatusCode::OK);
+    let (status, body) = refresh_grant(&h, &client_id, &refresh).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// Signs arbitrary `claims` with `key`, as a server from before token
+/// generations would have.
+fn sign_raw(claims: serde_json::Value, key: &[u8]) -> String {
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(key),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn tokens_without_a_generation_claim_are_generation_zero() {
+    let h = harness("jane@example.com").await;
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+
+    let now = chrono::Utc::now().timestamp();
+    let old_access = sign_raw(
+        serde_json::json!({
+            "typ": "access", "jti": "j1", "iss": PUBLIC, "aud": format!("{PUBLIC}/mcp"),
+            "sub": "jane@example.com", "iat": now, "exp": now + 600, "scope": "mail",
+        }),
+        &h.key,
+    );
+    assert_eq!(
+        mcp_initialize(&h.app, Some(&old_access)).await,
+        StatusCode::OK
+    );
+
+    let client_id = register(&h.app).await;
+    let old_refresh = sign_raw(
+        serde_json::json!({
+            "typ": "refresh", "jti": "j2", "sub": "jane@example.com",
+            "client_id": client_id, "exp": now + 600,
+        }),
+        &h.key,
+    );
+    let (status, body) = refresh_grant(&h, &client_id, &old_refresh).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Once the user's generation moves on, the old-format tokens stop working.
+    let mut rec = UserRecord::new("jane@example.com");
+    rec.token_generation = 1;
+    UserStore::new(h.secrets.clone()).save(&rec).await.unwrap();
+    h.state.set_generation("jane@example.com", 1);
+    assert_eq!(
+        mcp_initialize(&h.app, Some(&old_access)).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, body) = refresh_grant(&h, &client_id, &old_refresh).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_grant");
 }

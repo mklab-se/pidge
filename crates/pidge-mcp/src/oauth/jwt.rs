@@ -49,6 +49,11 @@ pub struct AccessClaims {
     pub exp: i64,
     pub iat: i64,
     pub scope: String,
+    /// The user's token generation when this was issued; a token whose
+    /// generation is behind the user's record has been signed out. Tokens
+    /// from before generations existed have none and decode as 0.
+    #[serde(default)]
+    pub r#gen: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,6 +63,11 @@ pub struct RefreshClaims {
     pub sub: String,
     pub client_id: String,
     pub exp: i64,
+    /// The user's token generation when this was issued; a token whose
+    /// generation is behind the user's record has been signed out. Tokens
+    /// from before generations existed have none and decode as 0.
+    #[serde(default)]
+    pub r#gen: u32,
 }
 
 /// A `mail_attachment` download link: anyone holding it may fetch this one
@@ -205,7 +215,7 @@ impl Signer {
         self.verify(code, "code", true)
     }
 
-    pub fn issue_access(&self, sub: &str, scope: &str) -> Result<String> {
+    pub fn issue_access(&self, sub: &str, scope: &str, generation: u32) -> Result<String> {
         let now = Utc::now();
         self.sign(&AccessClaims {
             typ: "access".into(),
@@ -216,6 +226,7 @@ impl Signer {
             iat: now.timestamp(),
             exp: (now + ACCESS_TOKEN_TTL).timestamp(),
             scope: scope.into(),
+            r#gen: generation,
         })
     }
 
@@ -236,13 +247,14 @@ impl Signer {
         Ok(claims)
     }
 
-    pub fn issue_refresh(&self, sub: &str, client_id: &str) -> Result<String> {
+    pub fn issue_refresh(&self, sub: &str, client_id: &str, generation: u32) -> Result<String> {
         self.sign(&RefreshClaims {
             typ: "refresh".into(),
             jti: random_id(),
             sub: sub.into(),
             client_id: client_id.into(),
             exp: (Utc::now() + REFRESH_TOKEN_TTL).timestamp(),
+            r#gen: generation,
         })
     }
 
@@ -330,12 +342,21 @@ mod tests {
     #[test]
     fn token_kinds_are_not_interchangeable() {
         let s = signer();
-        let access = s.issue_access("jane@example.com", "mail").unwrap();
+        let access = s.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(s.verify_code(&access).is_err());
         assert!(s.verify_refresh(&access).is_err());
         assert!(s.verify_client(&access).is_err());
-        let refresh = s.issue_refresh("jane@example.com", "cid").unwrap();
+        let refresh = s.issue_refresh("jane@example.com", "cid", 0).unwrap();
         assert!(s.verify_access(&refresh).is_err());
+    }
+
+    #[test]
+    fn tokens_carry_the_generation() {
+        let s = signer();
+        let access = s.issue_access("jane@example.com", "mail", 7).unwrap();
+        assert_eq!(s.verify_access(&access).unwrap().r#gen, 7);
+        let refresh = s.issue_refresh("jane@example.com", "cid", 7).unwrap();
+        assert_eq!(s.verify_refresh(&refresh).unwrap().r#gen, 7);
     }
 
     #[test]
@@ -344,7 +365,7 @@ mod tests {
         let old = Signer::new(&key, "https://old.test", "https://old.test/mcp");
         let new = Signer::new(&key, "https://new.test", "https://new.test/mcp")
             .with_legacy_issuers(vec!["https://old.test".into()]);
-        let token = old.issue_access("jane@example.com", "mail").unwrap();
+        let token = old.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(
             new.verify_access(&token).is_ok(),
             "old-issuer token accepted during transition"
@@ -362,7 +383,7 @@ mod tests {
         let key = random_bytes(32);
         let b = Signer::new(&key, "https://issuer.test", "https://issuer.test/mcp");
         let c = Signer::new(&key, "https://issuer.test", "https://other.test/mcp");
-        let token = b.issue_access("jane@example.com", "mail").unwrap();
+        let token = b.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(b.verify_access(&token).is_ok());
         assert!(a.verify_access(&token).is_err(), "different key");
         assert!(c.verify_access(&token).is_err(), "different audience");
@@ -414,7 +435,7 @@ mod tests {
     #[test]
     fn download_tokens_are_their_own_kind_and_expire() {
         let s = signer();
-        let access = s.issue_access("jane@example.com", "mail").unwrap();
+        let access = s.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(s.verify_download(&access).is_err());
         let download = s
             .issue_download("jane@example.com", "jane@example.com", "M1", &attachment())

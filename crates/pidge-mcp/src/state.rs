@@ -13,7 +13,7 @@ use crate::contacts::ContactCaches;
 use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::Signer;
 use crate::secrets::SharedSecrets;
-use crate::users::UserStore;
+use crate::users::{UserStore, log_store_error};
 
 /// The read cache's TTL and per-user LRU bound (spec §1.9).
 const CACHE_TTL: StdDuration = StdDuration::from_secs(60);
@@ -85,6 +85,9 @@ pub struct AppState {
     /// `jti` → expiry of authorization codes already redeemed, so a code
     /// can't be replayed inside its two-minute lifetime.
     used_codes: Mutex<HashMap<String, i64>>,
+    /// Sign-in address → that user's current token generation, loaded from
+    /// their record on first use; see [`Self::generation_for`].
+    generations: Mutex<HashMap<String, u32>>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -111,6 +114,7 @@ impl AppState {
             conversions: tokio::sync::Semaphore::new(CONVERSION_SLOTS),
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
+            generations: Mutex::new(HashMap::new()),
         }
     }
 
@@ -180,6 +184,46 @@ impl AppState {
         if let Some(sent) = map.get_mut(user) {
             sent.pop();
         }
+    }
+
+    /// `signin`'s current token generation: tokens carrying an older one
+    /// have been signed out. Served from memory after the first lookup, so
+    /// the bearer check costs one secret-store read per user per process.
+    /// 0 when the user has no record yet. A store failure also answers 0
+    /// (logged, not cached) so an outage doesn't lock everyone out; the next
+    /// call retries.
+    pub async fn generation_for(&self, signin: &str) -> u32 {
+        if let Some(generation) = self
+            .generations
+            .lock()
+            .expect("generations lock")
+            .get(signin)
+        {
+            return *generation;
+        }
+        let generation = match self.users.load(signin).await {
+            Ok(record) => record.map_or(0, |r| r.token_generation),
+            Err(e) => {
+                log_store_error("loading token generation", signin, &e);
+                return 0;
+            }
+        };
+        // Don't let a lookup that raced a sign-out overwrite the newer value.
+        *self
+            .generations
+            .lock()
+            .expect("generations lock")
+            .entry(signin.to_string())
+            .and_modify(|g| *g = (*g).max(generation))
+            .or_insert(generation)
+    }
+
+    /// Records `signin`'s new token generation (after a sign-out everywhere).
+    pub fn set_generation(&self, signin: &str, generation: u32) {
+        self.generations
+            .lock()
+            .expect("generations lock")
+            .insert(signin.to_string(), generation);
     }
 
     /// Returns `false` if this code id was already redeemed.

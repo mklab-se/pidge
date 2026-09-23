@@ -4,7 +4,7 @@
 //! bearer token the HTTP layer verified (see [`crate::context::ToolContext`]);
 //! nothing in a tool's input can name another user.
 
-mod accounts;
+pub(crate) mod accounts;
 pub(crate) mod attachments;
 mod calendar;
 mod mail_act;

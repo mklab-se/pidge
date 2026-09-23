@@ -57,6 +57,10 @@ pub async fn require_bearer(
     if !state.config.is_allowed(&claims.sub) {
         return challenge(&state, Some("invalid_token"));
     }
+    // Signed out everywhere since this token was issued.
+    if claims.r#gen != state.generation_for(&claims.sub).await {
+        return challenge(&state, Some("invalid_token"));
+    }
 
     req.extensions_mut()
         .insert(AuthenticatedUser { email: claims.sub });

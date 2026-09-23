@@ -42,6 +42,11 @@ pub struct UpdateArgs {
     /// Remove a sender address from the trusted-senders list.
     #[serde(default)]
     pub untrust: Option<String>,
+    /// `true` revokes every access and refresh token issued to this user,
+    /// including the one making this call: every client (this one too)
+    /// must sign in again.
+    #[serde(default)]
+    pub sign_out_everywhere: Option<bool>,
 }
 
 #[tool_router(router = accounts_router, vis = "pub(crate)")]
@@ -100,9 +105,9 @@ impl PidgeMcp {
     }
 
     #[tool(
-        description = "Change account settings: default_sender, timezone, disconnect a mailbox, or trust/untrust a sender. Returns the updated accounts_list."
+        description = "Change account settings: default_sender, timezone, disconnect a mailbox, or trust/untrust a sender. Returns the updated accounts_list. sign_out_everywhere=true instead revokes all of the user's sessions, including this one: every client, this one too, must sign in again afterwards."
     )]
-    async fn accounts_update(
+    pub(crate) async fn accounts_update(
         &self,
         Parameters(args): Parameters<UpdateArgs>,
         ctx: RequestContext<RoleServer>,
@@ -172,6 +177,10 @@ impl PidgeMcp {
                 record.default_sender = record.signin.clone();
             }
         }
+        let sign_out = args.sign_out_everywhere == Some(true);
+        if sign_out {
+            record.token_generation += 1;
+        }
 
         // Save the record first: if deleting the session then fails, the
         // mailbox is already gone from the user's view rather than listed
@@ -190,6 +199,13 @@ impl PidgeMcp {
             self.state.token_backend.forget(mailbox);
         }
         self.state.cache.invalidate_user(&signin);
+        if sign_out {
+            self.state.set_generation(&signin, record.token_generation);
+            tracing::info!(user = %user_hash(&record.signin), "signed out everywhere");
+            return Ok(ok(
+                "All sessions signed out; every client must sign in again".to_string(),
+            ));
+        }
         tracing::info!(user = %user_hash(&record.signin), "account settings updated");
 
         Ok(ok(format!(
@@ -453,6 +469,45 @@ mod tests {
             .await
             .unwrap();
         assert!(h.state.cache.get(JANE, "k").is_none());
+    }
+
+    #[tokio::test]
+    async fn sign_out_everywhere_bumps_the_generation_and_clears_the_cache() {
+        let h = ToolHarness::new(&[JANE, WORK]).await;
+        assert_eq!(h.state.generation_for(JANE).await, 0);
+        h.state.cache.put(JANE, "k".into(), "cached".into());
+        let out = text(
+            &h.mcp
+                .accounts_update(
+                    Parameters(UpdateArgs {
+                        sign_out_everywhere: Some(true),
+                        ..Default::default()
+                    }),
+                    h.ctx(),
+                )
+                .await
+                .unwrap(),
+        );
+        assert!(
+            out.contains("All sessions signed out; every client must sign in again"),
+            "{out}"
+        );
+        assert_eq!(h.record().await.token_generation, 1, "stored");
+        assert_eq!(h.state.generation_for(JANE).await, 1, "cached");
+        assert!(h.state.cache.get(JANE, "k").is_none(), "cache invalidated");
+
+        // `false` changes nothing.
+        h.mcp
+            .accounts_update(
+                Parameters(UpdateArgs {
+                    sign_out_everywhere: Some(false),
+                    ..Default::default()
+                }),
+                h.ctx(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(h.record().await.token_generation, 1);
     }
 
     #[tokio::test]
