@@ -541,8 +541,9 @@ Registry as `ghcr.io/mklab-se/pidge-mcp:<version>` and `:latest` (linux/amd64,
 built from `deploy/azure/Dockerfile` by the `image` job in
 `.github/workflows/release.yml`; `latest` never moves to a prerelease). The
 Azure deployment does not use it: `deploy.sh` builds into the private ACR
-from the commit being deployed. The GHCR image is for running the server
-elsewhere; see `docs/mcp.md`, "Running the container anywhere".
+from the commit being deployed. The GHCR package is private and stays so;
+anyone else who wants to run the server builds the image themselves from
+`deploy/azure/Dockerfile` (see `docs/mcp.md`, "Run the container anywhere").
 
 ## Run locally
 
