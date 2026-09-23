@@ -111,7 +111,7 @@ pub fn one_line(text: &str) -> String {
 }
 
 /// Like [`cap`], but keeps the result on one line.
-fn cap_inline(text: &str, max_chars: usize) -> String {
+pub fn cap_inline(text: &str, max_chars: usize) -> String {
     match text.char_indices().nth(max_chars) {
         Some((cut, _)) => format!("{}…", &text[..cut]),
         None => text.to_string(),

@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use super::PidgeMcp;
 use super::mail_read::{check_id, folder_id};
 use crate::context::{ToolContext, tool_error};
-use crate::render::one_line;
+use crate::render::{cap_inline, one_line};
 use crate::state::SENDS_PER_HOUR;
 use crate::users::user_hash;
 
@@ -58,6 +58,11 @@ pub struct ActArgs {
     #[serde(default)]
     pub account: Option<String>,
 }
+
+/// Characters of a manual unsubscribe link shown.
+const MANUAL_URL_CAP: usize = 500;
+
+const NOT_FOUND: &str = "not found in any of your mailboxes";
 
 /// How one id fared.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +111,10 @@ impl PidgeMcp {
         let accounts = tc.accounts(args.account.as_deref())?;
 
         let mut outcomes: HashMap<String, Outcome> = HashMap::new();
-        let owners = if accounts.len() == 1 {
+        // With one candidate mailbox the lookup is skipped, so a 404 from
+        // the action itself is how a missing id shows up.
+        let lookup_skipped = accounts.len() == 1;
+        let owners = if lookup_skipped {
             vec![(accounts[0].clone(), ids.clone())]
         } else {
             self.locate(&accounts, &ids, &mut outcomes).await
@@ -140,11 +148,19 @@ impl PidgeMcp {
                 }
                 Outcome::Failed(reason) => {
                     failed += 1;
+                    let reason = if args.account.is_none() && lookup_skipped && reason == "404" {
+                        NOT_FOUND.to_string()
+                    } else {
+                        reason
+                    };
                     format!("failed: {reason}")
                 }
                 Outcome::Manual(url) => {
                     manual += 1;
-                    format!("manual: open {}", one_line(&url))
+                    format!(
+                        "manual: open {}",
+                        cap_inline(&one_line(&url), MANUAL_URL_CAP)
+                    )
                 }
             };
             out.push_str(&format!("{} {line}\n", one_line(id)));
@@ -221,7 +237,7 @@ impl PidgeMcp {
             pending = rest.into_iter().map(|(_, id)| id).collect();
         }
         let reason = if unsearched.is_empty() {
-            "not found in any of your mailboxes".to_string()
+            NOT_FOUND.to_string()
         } else {
             format!("not found; {}", unsearched.join("; "))
         };
@@ -715,6 +731,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn with_one_mailbox_a_missing_id_reads_not_found_and_the_rest_proceed() {
+        let h = ToolHarness::new(&[JANE]).await;
+        Mock::given(method("POST"))
+            .and(path("/v1.0/$batch"))
+            .respond_with(BatchReply(
+                |_, url| if url.contains("M2") { 404 } else { 200 },
+            ))
+            .mount(&h.graph)
+            .await;
+        let out = act(&h, args(&["M1", "M2", "M3"], ActAction::Archive))
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            "M1 ok\nM2 failed: not found in any of your mailboxes\nM3 ok\ndone: 2 ok, 1 failed"
+        );
+        // The lookup is skipped: only the action batch went out.
+        assert!(batched(&h, JANE).await.iter().all(|(m, _, _)| m == "POST"));
+
+        let out = act(&h, args(&["M5"], ActAction::Unsubscribe))
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            "M5 failed: not found in any of your mailboxes\ndone: 0 ok, 1 failed"
+        );
+    }
+
+    #[tokio::test]
     async fn an_id_missing_where_a_mailbox_could_not_be_searched_says_so() {
         let h = ToolHarness::new(&[JANE, WORK]).await;
         Mock::given(method("POST"))
@@ -894,6 +939,19 @@ mod tests {
             .unwrap();
         assert_eq!(out, "M1 failed: 403\ndone: 0 ok, 1 failed");
         assert!(h.state.sends.lock().unwrap()[JANE].is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_manual_link_is_capped_at_500_characters() {
+        let h = ToolHarness::new(&[JANE]).await;
+        let long = format!("https://news.example.com/u?t={}", "x".repeat(600));
+        mount_headers(&h, "M1", &[("List-Unsubscribe", &format!("<{long}>"))]).await;
+        let out = act(&h, args(&["M1"], ActAction::Unsubscribe))
+            .await
+            .unwrap();
+        let line = out.lines().next().unwrap();
+        let url = line.strip_prefix("M1 manual: open ").unwrap();
+        assert_eq!(url, format!("{}…", &long[..500]));
     }
 
     #[tokio::test]
