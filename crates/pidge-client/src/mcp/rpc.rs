@@ -82,8 +82,20 @@ impl McpRpc {
             "capabilities": {},
             "clientInfo": {"name": "pidge", "version": env!("CARGO_PKG_VERSION")},
         });
-        self.request("initialize", params).await?;
-        self.notify("notifications/initialized", json!({})).await
+        self.request_once("initialize", params).await?;
+        self.notify_once("notifications/initialized", json!({}))
+            .await
+    }
+
+    /// Drop the current session and run the handshake again. Called when the
+    /// server answers 404 to a request carrying our `Mcp-Session-Id`: MCP
+    /// 2025-06-18 (Transport, Session Management) says the client MUST then
+    /// start a new session. `pidge-mcp` drops sessions idle for 5 minutes and
+    /// on every redeploy, so a long interactive wait hits this routinely.
+    async fn reinitialize(&mut self) -> Result<(), ClientError> {
+        tracing::debug!("MCP session expired on the server (404); starting a new one");
+        self.session_id = None;
+        self.initialize().await
     }
 
     /// List the names of the tools this server exposes.
@@ -126,8 +138,22 @@ impl McpRpc {
     }
 
     /// Send a JSON-RPC request and return its `result` value. Errors on a
-    /// JSON-RPC `error` response or a non-2xx HTTP status.
+    /// JSON-RPC `error` response or a non-2xx HTTP status. If the request
+    /// carried a session id and the server answers 404 (session expired),
+    /// re-runs the handshake and retries once; a second 404 is returned.
     async fn request(&mut self, method: &str, params: Value) -> Result<Value, ClientError> {
+        let had_session = self.session_id.is_some();
+        match self.request_once(method, params.clone()).await {
+            Err(err) if had_session && is_session_gone(&err) => {
+                self.reinitialize().await?;
+                self.request_once(method, params).await
+            }
+            other => other,
+        }
+    }
+
+    /// One attempt at a JSON-RPC request, with no session recovery.
+    async fn request_once(&mut self, method: &str, params: Value) -> Result<Value, ClientError> {
         let id = self.next_id;
         self.next_id += 1;
         let body = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
@@ -155,7 +181,11 @@ impl McpRpc {
     }
 
     /// Send a JSON-RPC notification (no `id`, no response body expected).
-    async fn notify(&mut self, method: &str, params: Value) -> Result<(), ClientError> {
+    /// The only notification pidge sends is `notifications/initialized`,
+    /// which is part of the handshake itself, so it gets no session
+    /// recovery of its own: a 404 there right after `initialize` is not an
+    /// idle expiry and is returned as is.
+    async fn notify_once(&mut self, method: &str, params: Value) -> Result<(), ClientError> {
         let body = json!({"jsonrpc": "2.0", "method": method, "params": params});
         let (session_id, _) = self.send(&body, None).await?;
         if session_id.is_some() {
@@ -224,6 +254,12 @@ impl McpRpc {
     }
 }
 
+/// Whether `err` is the server's "unknown session" answer: HTTP 404 on a
+/// request that carried an `Mcp-Session-Id`.
+fn is_session_gone(err: &ClientError) -> bool {
+    matches!(err, ClientError::Graph { status: 404, .. })
+}
+
 fn header_to_str(v: &HeaderValue) -> Option<&str> {
     v.to_str().ok()
 }
@@ -284,7 +320,7 @@ fn select_sse_response(text: &str, expected_id: Option<u64>) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use wiremock::matchers::{headers, method, path};
+    use wiremock::matchers::{body_partial_json, headers, method, path};
     use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
     use super::*;
@@ -478,5 +514,183 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.text, "picked");
+    }
+
+    fn no_session_header() -> impl wiremock::Match {
+        |req: &Request| req.headers.get(SESSION_HEADER).is_none()
+    }
+
+    fn rpc_method(name: &'static str) -> impl wiremock::Match {
+        body_partial_json(json!({"method": name}))
+    }
+
+    /// Mount an `initialize` answer that hands out `session` (only for a
+    /// request carrying no session id, as a fresh handshake must), plus a
+    /// 202 for the `notifications/initialized` that follows on `session`.
+    async fn mount_handshake(server: &MockServer, session: &'static str, times: u64) {
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(rpc_method("initialize"))
+            .and(no_session_header())
+            .respond_with(move |req: &Request| {
+                let id = serde_json::from_slice::<Value>(&req.body).unwrap()["id"].clone();
+                ResponseTemplate::new(200)
+                    .insert_header(CONTENT_TYPE.as_str(), "application/json")
+                    .insert_header(SESSION_HEADER, session)
+                    .set_body_json(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {}}
+                    }))
+            })
+            .up_to_n_times(times)
+            .expect(times)
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(rpc_method("notifications/initialized"))
+            .and(session_header_matcher(session))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(times)
+            .mount(server)
+            .await;
+    }
+
+    fn echo_result(result: Value) -> impl Fn(&Request) -> ResponseTemplate {
+        move |req: &Request| {
+            let id = serde_json::from_slice::<Value>(&req.body).unwrap()["id"].clone();
+            ResponseTemplate::new(200)
+                .insert_header(CONTENT_TYPE.as_str(), "application/json")
+                .set_body_json(json!({"jsonrpc": "2.0", "id": id, "result": result.clone()}))
+        }
+    }
+
+    fn session_not_found() -> ResponseTemplate {
+        ResponseTemplate::new(404).set_body_string("Not Found: Session not found")
+    }
+
+    #[tokio::test]
+    async fn call_tool_starts_a_new_session_and_retries_once_after_a_404() {
+        let server = MockServer::start().await;
+        mount_handshake(&server, "sess-old", 1).await;
+        mount_handshake(&server, "sess-new", 1).await;
+        // The idle-expired session answers 404, as rmcp's LocalSessionManager
+        // does for an unknown `Mcp-Session-Id`.
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(rpc_method("tools/call"))
+            .and(session_header_matcher("sess-old"))
+            .respond_with(session_not_found())
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(rpc_method("tools/call"))
+            .and(session_header_matcher("sess-new"))
+            .respond_with(echo_result(json!({
+                "content": [{"type": "text", "text": "after retry"}],
+                "isError": false
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut rpc = McpRpc::new(
+            reqwest::Client::new(),
+            format!("{}/mcp", server.uri()),
+            "AT",
+        );
+        rpc.initialize().await.unwrap();
+        let result = rpc.call_tool("accounts_list", json!({})).await.unwrap();
+
+        assert_eq!(result.text, "after retry");
+        assert_eq!(rpc.session_id(), Some("sess-new"));
+    }
+
+    #[tokio::test]
+    async fn list_tools_starts_a_new_session_and_retries_once_after_a_404() {
+        let server = MockServer::start().await;
+        mount_handshake(&server, "sess-old", 1).await;
+        mount_handshake(&server, "sess-new", 1).await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(rpc_method("tools/list"))
+            .and(session_header_matcher("sess-old"))
+            .respond_with(session_not_found())
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(rpc_method("tools/list"))
+            .and(session_header_matcher("sess-new"))
+            .respond_with(echo_result(json!({"tools": [{"name": "accounts_list"}]})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut rpc = McpRpc::new(
+            reqwest::Client::new(),
+            format!("{}/mcp", server.uri()),
+            "AT",
+        );
+        rpc.initialize().await.unwrap();
+        let tools = rpc.list_tools().await.unwrap();
+
+        assert_eq!(tools, vec!["accounts_list".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_second_404_after_the_new_session_is_returned() {
+        let server = MockServer::start().await;
+        mount_handshake(&server, "sess-old", 1).await;
+        mount_handshake(&server, "sess-new", 1).await;
+        // Both sessions 404: the client re-initializes exactly once (the
+        // handshake mocks' `expect(1)`) and then surfaces the error.
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(rpc_method("tools/call"))
+            .respond_with(session_not_found())
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let mut rpc = McpRpc::new(
+            reqwest::Client::new(),
+            format!("{}/mcp", server.uri()),
+            "AT",
+        );
+        rpc.initialize().await.unwrap();
+        let err = rpc.call_tool("accounts_list", json!({})).await.unwrap_err();
+
+        assert!(
+            matches!(err, ClientError::Graph { status: 404, .. }),
+            "{err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_404_without_a_session_is_not_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(session_not_found())
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut rpc = McpRpc::new(
+            reqwest::Client::new(),
+            format!("{}/mcp", server.uri()),
+            "AT",
+        );
+        let err = rpc.call_tool("accounts_list", json!({})).await.unwrap_err();
+
+        assert!(
+            matches!(err, ClientError::Graph { status: 404, .. }),
+            "{err:?}"
+        );
     }
 }
