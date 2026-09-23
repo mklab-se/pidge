@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **The AI harness is told to route mail to pidge.** The MCP server's instructions now open by
+  saying pidge *is* the user's e-mail and calendar and that no other mail or calendar connector
+  should be used; every tool description leads with "E-mail:" or "Calendar:"; `pidge mcp connect`
+  prints a one-line instruction to paste into the harness's memory; and `docs/mcp.md` has a
+  "Make sure the agent picks pidge" section. Before, a harness with an idle Gmail connector could
+  pick that for "send an e-mail".
+- **Provider-neutral wording.** Nothing in pidge is named or described as Outlook any more (the
+  server info, instructions, the emitted CLI skill, reminders): pidge is the user's e-mail and
+  calendar, which today means Microsoft 365 and personal Microsoft accounts.
+
 ## [1.4.1] - 2026-09-23
 
 ### Security

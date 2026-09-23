@@ -120,7 +120,7 @@ pidge calendar new \
   --start "next mon 09:00" --end "+30m" \
   --repeat weekly --on mon --until 2026-12-31
 
-# Appointment with a real Outlook reminder the day before
+# Appointment with a real calendar reminder the day before
 pidge calendar new \
   --title "Car service" \
   --start "2026-10-07T11:25" --end "+35m" \

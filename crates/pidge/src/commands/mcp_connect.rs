@@ -40,10 +40,24 @@ pub async fn run(url: String, store: TokenStorage, yes: bool, json_output: bool)
         if let Some(note) = note {
             eprintln!("{note}");
         }
-        run_inner(&url, store, yes, json_output).await
+        let result = run_inner(&url, store, yes, json_output).await;
+        if result.is_ok() && !json_output {
+            eprintln!();
+            eprintln!("{}", ROUTING_HINT);
+        }
+        result
     };
     result.map_err(|e| mcp::remap_session_expired(&url, e))
 }
+
+/// Printed after a successful connect: a harness with several connectors
+/// picks by name, and an idle Gmail or Google Calendar connector can win a
+/// "send an e-mail" request. One line in the harness's instructions or
+/// memory settles it; see docs/mcp.md "Make sure the agent picks pidge".
+const ROUTING_HINT: &str = "Tip: so your AI harness always uses pidge for mail, add this line to its instructions \
+or memory (CLAUDE.md, AGENTS.md, project instructions):\n\
+  E-mail and calendar go through the pidge MCP tools (mail_*, calendar_*, accounts_*), \
+never another mail connector.";
 
 /// Whether to poll for each mailbox rather than wait for Enter. Without a
 /// terminal on stdin (an agent, a pipe, `< /dev/null`), waiting for Enter

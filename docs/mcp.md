@@ -64,6 +64,26 @@ Only addresses on the server's allowlist get past the callback. Once
 signed in, add further mailboxes from inside the harness with the
 `accounts_connect` tool rather than reconnecting the client.
 
+### Make sure the agent picks pidge
+
+A harness with several connectors chooses by tool names, descriptions and
+the server's instructions, often before it has looked at any of them
+closely. pidge's instructions state that it *is* the user's e-mail and
+calendar and that no other mail or calendar connector should be used, and
+its tool descriptions lead with "E-mail:" or "Calendar:". Two things on the
+client side help further:
+
+- **Disconnect mail and calendar connectors you don't use.** An idle Gmail
+  or Google Calendar connector is a decoy: asked to "send an e-mail", a
+  harness may reach for the one whose name says "mail".
+- **Tell the harness once.** One line in the project's `CLAUDE.md`,
+  `AGENTS.md`, claude.ai project instructions, or the harness's memory:
+
+  > E-mail and calendar go through the pidge MCP tools (`mail_*`,
+  > `calendar_*`, `accounts_*`), never another mail connector.
+
+  `pidge mcp connect` prints this line when it finishes, ready to paste.
+
 ## Migrate from local `pidge`
 
 If you already sign in to Microsoft accounts with the CLI, `pidge mcp

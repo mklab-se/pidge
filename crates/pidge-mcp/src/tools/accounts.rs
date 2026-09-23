@@ -52,7 +52,7 @@ pub struct UpdateArgs {
 #[tool_router(router = accounts_router, vis = "pub(crate)")]
 impl PidgeMcp {
     #[tool(
-        description = "The user's connected mailboxes with their health (ok / needs reconnect), the sign-in address, the default sender for new mail and events, the timezone, and trusted senders."
+        description = "E-mail accounts: the user's connected mailboxes with their health (ok / needs reconnect), the sign-in address, the default sender for new mail and events, the timezone, and trusted senders."
     )]
     async fn accounts_list(
         &self,
@@ -63,7 +63,7 @@ impl PidgeMcp {
     }
 
     #[tool(
-        description = "Start connecting another mailbox the user can sign in to at Microsoft. Returns a link, valid 10 minutes, for the user to open in a browser; after they finish, call accounts_list to confirm."
+        description = "E-mail accounts: start connecting another mailbox the user can sign in to at Microsoft. Returns a link, valid 10 minutes, for the user to open in a browser; after they finish, call accounts_list to confirm."
     )]
     async fn accounts_connect(
         &self,
@@ -108,7 +108,7 @@ impl PidgeMcp {
     }
 
     #[tool(
-        description = "Change account settings: default_sender, timezone, disconnect a mailbox, or trust/untrust a sender. Returns the updated accounts_list. With sign_out_everywhere=true, any other settings in the same call are applied and saved first; then every session of the user is revoked, including this one, and every client (this one too) must sign in again."
+        description = "E-mail accounts: change settings: default_sender, timezone, disconnect a mailbox, or trust/untrust a sender. Returns the updated accounts_list. With sign_out_everywhere=true, any other settings in the same call are applied and saved first; then every session of the user is revoked, including this one, and every client (this one too) must sign in again."
     )]
     pub(crate) async fn accounts_update(
         &self,
