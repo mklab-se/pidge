@@ -192,6 +192,16 @@ pub(crate) struct CallbackParams {
 /// or `"MCP sign-in"`) — it prefixes the error message when the remote party
 /// reports `error`/`error_description`, so an MCP-server error isn't
 /// misattributed to Microsoft.
+/// A timeout for the user to read: whole minutes as "5 min", else seconds.
+fn timeout_label(timeout: Duration) -> String {
+    let secs = timeout.as_secs();
+    if secs >= 60 && secs % 60 == 0 {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
 pub(crate) async fn wait_for_callback(
     listener: TcpListener,
     timeout: Duration,
@@ -201,8 +211,8 @@ pub(crate) async fn wait_for_callback(
     let timed_out = || ClientError::Graph {
         status: 408,
         message: format!(
-            "timed out waiting for browser sign-in ({}s)",
-            timeout.as_secs()
+            "timed out waiting for browser sign-in ({})",
+            timeout_label(timeout)
         ),
     };
 
@@ -417,6 +427,13 @@ async fn exchange_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_label_uses_minutes_when_whole() {
+        assert_eq!(timeout_label(Duration::from_secs(300)), "5 min");
+        assert_eq!(timeout_label(Duration::from_secs(600)), "10 min");
+        assert_eq!(timeout_label(Duration::from_secs(45)), "45s");
+    }
 
     #[test]
     fn code_verifier_is_64_alphanumerics() {
