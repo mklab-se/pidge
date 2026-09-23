@@ -59,9 +59,12 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 ### 7. Commit, push, and tag
 
 - Stage all changed files: `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and any updated docs
-- Commit with message: `Release v{NEW_VERSION}`
-- Push to main: `git push`
-- Create and push tag: `git tag v{NEW_VERSION} && git push origin v{NEW_VERSION}`
+- Commit with message: `Release v{NEW_VERSION}` on a branch `release/v{NEW_VERSION}` — the
+  `main` ruleset requires the four CI checks, so a direct push to `main` is declined
+- Push the branch and open a PR: `gh pr create --title "Release v{NEW_VERSION}" --body "..."`;
+  wait for CI with `gh pr checks <n> --watch`, then `gh pr merge <n> --merge --delete-branch`
+- Tag the merged result: `git checkout main && git pull`, then
+  `git tag v{NEW_VERSION} && git push origin v{NEW_VERSION}` (tags are not covered by the ruleset)
 
 ### 8. Watch and verify
 
