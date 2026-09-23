@@ -264,10 +264,10 @@ pub enum AccountCommands {
 pub enum McpCommands {
     /// Sign in to a hosted pidge MCP server and migrate local accounts to it
     Connect {
-        /// Base URL of the hosted MCP server (e.g. https://mcp.example.com)
+        /// URL of the hosted MCP server (e.g. https://<host>/mcp)
         url: String,
 
-        /// Where to store the MCP session tokens (`keychain` = OS-native, `file` = plaintext JSON at ~/.config/pidge/mcp/)
+        /// Where to store the MCP session tokens (`keychain` = OS-native, `file` = plaintext JSON in pidge's config dir; see docs/mcp.md)
         #[arg(long, value_enum, default_value_t = StorageBackendArg::Keychain)]
         store: StorageBackendArg,
 
@@ -277,7 +277,7 @@ pub enum McpCommands {
     },
     /// Show the current hosted MCP connection status
     Status {
-        /// Base URL of the hosted MCP server. Omit it if you're only
+        /// URL of the hosted MCP server (e.g. https://<host>/mcp). Omit it if you're only
         /// connected to one — with several, this lists them and asks you
         /// to pick.
         url: Option<String>,
@@ -291,7 +291,7 @@ pub enum McpCommands {
     /// To revoke sessions on the server, call its `accounts_update` tool
     /// with `sign_out_everywhere`
     Logout {
-        /// Base URL of the hosted MCP server whose stored session to forget
+        /// URL of the hosted MCP server whose stored session to forget
         url: String,
 
         /// Look in this backend first (the other is still tried);
