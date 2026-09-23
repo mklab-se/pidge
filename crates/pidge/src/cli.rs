@@ -322,9 +322,9 @@ pub enum DefaultCommands {
 pub enum StorageBackendArg {
     /// OS-native credential store (macOS Keychain / Windows Credential Manager / libsecret)
     Keychain,
-    /// Plaintext JSON file (mode 0600 on Unix); the exact path depends on
-    /// the command (e.g. `~/.config/pidge/tokens/<email>.json` for
-    /// `account add`, `~/.config/pidge/mcp/<host>.json` for `mcp connect`)
+    /// Plaintext JSON file (mode 0600 on Unix) in pidge's config dir:
+    /// `tokens/<email>.json` for `account add`, `mcp/<host>.json` for
+    /// `mcp connect` (see docs/mcp.md for the per-platform location)
     File,
 }
 
