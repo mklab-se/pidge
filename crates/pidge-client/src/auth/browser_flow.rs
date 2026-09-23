@@ -195,7 +195,7 @@ pub(crate) struct CallbackParams {
 /// A timeout for the user to read: whole minutes as "5 min", else seconds.
 fn timeout_label(timeout: Duration) -> String {
     let secs = timeout.as_secs();
-    if secs >= 60 && secs % 60 == 0 {
+    if secs >= 60 && secs.is_multiple_of(60) {
         format!("{} min", secs / 60)
     } else {
         format!("{secs}s")
