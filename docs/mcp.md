@@ -168,14 +168,20 @@ for you:
 
 ## Run the container anywhere
 
-Every tagged release publishes a container image to
-`ghcr.io/mklab-se/pidge-mcp`, built from
+The server ships as a container built from
 [`deploy/azure/Dockerfile`](../deploy/azure/Dockerfile) (an unprivileged
-user, listening on port 8080, `pidge-mcp` as the entrypoint). `:latest`
-always points at the newest non-prerelease version; a version tag like
-`:1.5.0` pins to that release. The package is private until the repository
-owner makes it public in GHCR's package settings. Until then, pulling it
-needs a GitHub token with read access.
+user, listening on port 8080, `pidge-mcp` as the entrypoint). Build it
+yourself from a checkout of the tag you want to run:
+
+```bash
+git clone https://github.com/mklab-se/pidge.git && cd pidge
+git checkout v1.5.0   # or any release tag
+docker build -f deploy/azure/Dockerfile -t pidge-mcp:1.5.0 .
+```
+
+The release workflow also pushes the same image to
+`ghcr.io/mklab-se/pidge-mcp`, but that package is private and used only by
+the maintainer; there is no plan to make it public, so do not depend on it.
 
 ```bash
 docker run -d \
@@ -185,7 +191,7 @@ docker run -d \
   -e PIDGE_MCP_SECRETS_DIR=/data/secrets \
   -e PIDGE_CLIENT_ID=<your Entra app id> \
   -v pidge-mcp-secrets:/data/secrets \
-  ghcr.io/mklab-se/pidge-mcp:latest
+  pidge-mcp:1.5.0
 ```
 
 Users sign in to Microsoft through the Entra app that `PIDGE_CLIENT_ID`
