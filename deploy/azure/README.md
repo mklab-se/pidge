@@ -212,6 +212,24 @@ It then always sets the GitHub repository configuration the workflow reads:
 | `PIDGE_MCP_ALLOWED_EMAILS` | secret | from the environment variable of the same name (required; the script refuses to run without it, and never echoes the value) |
 | `PIDGE_MCP_CUSTOM_DOMAIN` | variable | from the environment variable of the same name, only if set |
 
+**Resources outside `main.bicep`.** Everything the server runs on is
+declared in `main.bicep`, with three exceptions, all created by scripts:
+
+- **The deploy identity**, `id-pidge-deploy`, with its federated credential
+  and its two role assignments (`setup-github-oidc.sh`). It is what runs
+  the Bicep deployment from CI, so it has to exist before the first CI
+  run. Declaring it in the template it deploys would also mean the
+  identity re-applies its own federated credential and its own
+  Contributor and RBAC Administrator grants on every run, and the RBAC
+  condition deliberately forbids it from assigning those roles. It
+  carries the same tags as the Bicep resources, with
+  `managed-by=script`.
+- **The managed certificate**, `pidge-mcp-managed` (`deploy.sh`, Phase
+  3b). A managed certificate can only be issued after the hostname is
+  bound to the app, and issuing it takes minutes of polling, so the
+  script creates it between two Bicep deployments and passes its id back
+  in as `customDomainCertificateId`.
+
 `PIDGE_MCP_CUTOVER` isn't set by the script — it's a plain repository
 variable to flip by hand (`gh variable set PIDGE_MCP_CUTOVER --body 1`) when
 you're ready to make the custom domain the public URL, per
