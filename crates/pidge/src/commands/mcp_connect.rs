@@ -320,6 +320,11 @@ async fn ensure_signed_in(
             "{}",
             "(opening your browser…  Ctrl-C here to cancel)".dimmed()
         );
+        eprintln!(
+            "{}",
+            "If the browser shows an error page, press Ctrl-C: the server does not redirect refusals back here."
+                .dimmed()
+        );
         let _ = account_add::open_browser(authorize_url);
     })
     .await
