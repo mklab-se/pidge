@@ -27,14 +27,16 @@ fn local_midnight(tz: Tz, date: NaiveDate) -> Result<DateTime<Utc>, String> {
         })
 }
 
-/// Parse a single timestamp: RFC 3339, a naive `YYYY-MM-DDTHH:MM:SS` (interpreted
-/// in `tz`), or a bare `YYYY-MM-DD` date (interpreted as local midnight, or the
+/// Parse a single timestamp: RFC 3339, a naive `YYYY-MM-DDTHH:MM:SS` or
+/// `YYYY-MM-DDTHH:MM` (interpreted in `tz`), or a bare `YYYY-MM-DD` date (interpreted as local midnight, or the
 /// following local midnight when `end_of_day` is set, making the date inclusive).
 pub fn parse_point(s: &str, tz: Tz, end_of_day: bool) -> Result<DateTime<Utc>, String> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Ok(dt.with_timezone(&Utc));
     }
-    if let Ok(naive) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
+    let naive = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
+        .or_else(|_| NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M"));
+    if let Ok(naive) = naive {
         return tz
             .from_local_datetime(&naive)
             .earliest()
@@ -220,6 +222,20 @@ mod tests {
         );
         assert!(result.is_err());
     }
+    #[test]
+    fn parse_point_accepts_a_local_time_without_seconds() {
+        let tz = chrono_tz::Europe::Stockholm;
+        let expected = Utc.with_ymd_and_hms(2026, 9, 24, 12, 0, 0).unwrap();
+        assert_eq!(
+            parse_point("2026-09-24T14:00", tz, false).unwrap(),
+            expected
+        );
+        assert_eq!(
+            parse_point("2026-09-24T14:00", tz, false),
+            parse_point("2026-09-24T14:00:00", tz, false)
+        );
+    }
+
     #[test]
     fn parse_point_errors_on_a_nonexistent_local_time() {
         let err =
