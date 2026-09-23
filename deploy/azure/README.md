@@ -415,8 +415,10 @@ token already issued to that user carries the old generation and is
 rejected from that point on — the bearer check on `/mcp` and the OAuth
 refresh grant both compare the token's generation against the stored one
 and fail with `invalid_token` / `invalid_grant` on a mismatch, regardless
-of expiry. Every client of that user, including the one that made the
-call, must sign in again.
+of expiry. Outstanding `mail_attachment` download links carry the
+generation too, and `/dl` refuses one minted before the sign-out with the
+same 404 as an expired link. Every client of that user, including the one
+that made the call, must sign in again.
 
 The generation lookup is checked in-memory first; the secret store is only
 read on a cache miss (the first lookup for that user in this process's

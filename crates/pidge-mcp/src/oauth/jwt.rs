@@ -89,6 +89,11 @@ pub struct DownloadClaims {
     pub attachment_id: String,
     pub filename: String,
     pub content_type: String,
+    /// The user's token generation when the link was minted; `/dl` refuses
+    /// a link once the user has signed out everywhere since. Links from
+    /// before this claim existed decode as 0.
+    #[serde(default)]
+    pub r#gen: u32,
 }
 
 #[derive(Clone)]
@@ -262,20 +267,30 @@ impl Signer {
         self.verify(token, "refresh", true)
     }
 
-    /// A [`DOWNLOAD_TTL`] link to `attachment` of `message_id` in `account`.
+    /// A [`DOWNLOAD_TTL`] link to `attachment` of `message_id` in `account`,
+    /// for `sub` at token generation `generation`.
     pub fn issue_download(
         &self,
         sub: &str,
+        generation: u32,
         account: &str,
         message_id: &str,
         attachment: &pidge_core::Attachment,
     ) -> Result<String> {
-        self.issue_download_with_ttl(sub, account, message_id, attachment, DOWNLOAD_TTL)
+        self.issue_download_with_ttl(
+            sub,
+            generation,
+            account,
+            message_id,
+            attachment,
+            DOWNLOAD_TTL,
+        )
     }
 
     pub(crate) fn issue_download_with_ttl(
         &self,
         sub: &str,
+        generation: u32,
         account: &str,
         message_id: &str,
         attachment: &pidge_core::Attachment,
@@ -291,6 +306,7 @@ impl Signer {
             attachment_id: attachment.id.clone(),
             filename: attachment.name.clone(),
             content_type: attachment.content_type.clone(),
+            r#gen: generation,
         })
     }
 
@@ -404,7 +420,13 @@ mod tests {
     fn download_round_trip_carries_the_attachment_and_a_15_minute_expiry() {
         let s = signer();
         let token = s
-            .issue_download("jane@example.com", "work@example.com", "M1", &attachment())
+            .issue_download(
+                "jane@example.com",
+                4,
+                "work@example.com",
+                "M1",
+                &attachment(),
+            )
             .unwrap();
         let c = s.verify_download(&token).unwrap();
         assert_eq!(c.typ, "download");
@@ -415,6 +437,7 @@ mod tests {
         assert_eq!(c.attachment_id, "A1");
         assert_eq!(c.filename, "report.pdf");
         assert_eq!(c.content_type, "application/pdf");
+        assert_eq!(c.r#gen, 4);
         let ttl = c.exp - Utc::now().timestamp();
         assert!((14 * 60..=15 * 60).contains(&ttl), "{ttl}");
     }
@@ -423,7 +446,13 @@ mod tests {
     fn download_tokens_carry_no_address() {
         let s = signer();
         let token = s
-            .issue_download("jane@example.com", "work@example.com", "M1", &attachment())
+            .issue_download(
+                "jane@example.com",
+                4,
+                "work@example.com",
+                "M1",
+                &attachment(),
+            )
             .unwrap();
         let payload = token.split('.').nth(1).unwrap();
         let json = String::from_utf8(URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
@@ -438,13 +467,20 @@ mod tests {
         let access = s.issue_access("jane@example.com", "mail", 0).unwrap();
         assert!(s.verify_download(&access).is_err());
         let download = s
-            .issue_download("jane@example.com", "jane@example.com", "M1", &attachment())
+            .issue_download(
+                "jane@example.com",
+                0,
+                "jane@example.com",
+                "M1",
+                &attachment(),
+            )
             .unwrap();
         assert!(s.verify_access(&download).is_err());
         assert!(s.verify_refresh(&download).is_err());
         let expired = s
             .issue_download_with_ttl(
                 "jane@example.com",
+                0,
                 "jane@example.com",
                 "M1",
                 &attachment(),
