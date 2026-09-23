@@ -80,5 +80,6 @@ fn allowed_hosts(state: &SharedState) -> Vec<String> {
     let port = state.config.port;
     hosts.push(format!("localhost:{port}"));
     hosts.push(format!("127.0.0.1:{port}"));
+    hosts.extend(state.config.alt_hosts.iter().cloned());
     hosts
 }

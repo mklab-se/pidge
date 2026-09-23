@@ -87,6 +87,11 @@ pub struct Signer {
     decoding: DecodingKey,
     issuer: String,
     audience: String,
+    /// Origins whose access tokens keep verifying during a domain cutover,
+    /// alongside `issuer`/`audience`. Never used to *issue* tokens — new
+    /// access tokens always carry the current issuer and audience. See
+    /// [`Self::with_legacy_issuers`].
+    legacy_issuers: Vec<String>,
 }
 
 impl Signer {
@@ -98,7 +103,17 @@ impl Signer {
             decoding: DecodingKey::from_secret(key),
             issuer: issuer.into(),
             audience: audience.into(),
+            legacy_issuers: Vec::new(),
         }
+    }
+
+    /// Accept access tokens issued (as `iss`) under any of `issuers`, with
+    /// `<issuer>/mcp` as their audience, in addition to the current
+    /// issuer/audience. For the transition window after a domain cutover:
+    /// tokens minted before the move keep working until they expire.
+    pub fn with_legacy_issuers(mut self, issuers: Vec<String>) -> Self {
+        self.legacy_issuers = issuers;
+        self
     }
 
     /// A fresh 256-bit key, base64url-encoded for storage in a secret store.
@@ -206,10 +221,16 @@ impl Signer {
 
     pub fn verify_access(&self, token: &str) -> Result<AccessClaims> {
         let claims: AccessClaims = self.verify(token, "access", true)?;
-        if claims.iss != self.issuer {
+        let issuer_ok = claims.iss == self.issuer || self.legacy_issuers.contains(&claims.iss);
+        let audience_ok = claims.aud == self.audience
+            || self
+                .legacy_issuers
+                .iter()
+                .any(|i| format!("{i}/mcp") == claims.aud);
+        if !issuer_ok {
             return Err(anyhow!("issuer mismatch"));
         }
-        if claims.aud != self.audience {
+        if !audience_ok {
             return Err(anyhow!("audience mismatch"));
         }
         Ok(claims)
@@ -315,6 +336,24 @@ mod tests {
         assert!(s.verify_client(&access).is_err());
         let refresh = s.issue_refresh("jane@example.com", "cid").unwrap();
         assert!(s.verify_access(&refresh).is_err());
+    }
+
+    #[test]
+    fn legacy_issuer_tokens_stay_valid() {
+        let key = random_bytes(32);
+        let old = Signer::new(&key, "https://old.test", "https://old.test/mcp");
+        let new = Signer::new(&key, "https://new.test", "https://new.test/mcp")
+            .with_legacy_issuers(vec!["https://old.test".into()]);
+        let token = old.issue_access("jane@example.com", "mail").unwrap();
+        assert!(
+            new.verify_access(&token).is_ok(),
+            "old-issuer token accepted during transition"
+        );
+        let strict = Signer::new(&key, "https://new.test", "https://new.test/mcp");
+        assert!(
+            strict.verify_access(&token).is_err(),
+            "without the legacy list it is refused"
+        );
     }
 
     #[test]

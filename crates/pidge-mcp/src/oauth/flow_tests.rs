@@ -99,6 +99,47 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
             dir: secrets_dir.path().to_path_buf(),
         },
         markitdown: "markitdown".into(),
+        alt_hosts: Vec::new(),
+        legacy_issuers: Vec::new(),
+    };
+    let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
+    let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
+    let auth = AuthClient::for_test("cid", microsoft.uri()).with_backend(token_backend.clone());
+    let graph = GraphClient::for_test(auth, format!("{}/v1.0", microsoft.uri()));
+    let state = Arc::new(AppState::new(
+        config,
+        signer,
+        graph,
+        token_backend,
+        secrets.clone(),
+    ));
+    Harness {
+        app: build_router(state.clone(), CancellationToken::new()),
+        microsoft,
+        state,
+        secrets,
+        secrets_dir,
+    }
+}
+
+/// Like [`harness`], but the router's `Host` allowlist also accepts
+/// `alt_hosts` (see `PIDGE_MCP_ALT_HOSTS`). No sign-in flow is needed for
+/// this harness's tests, so access tokens are minted directly from
+/// `h.state.signer`.
+async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
+    let microsoft = MockServer::start().await;
+    let secrets_dir = tempfile::tempdir().unwrap();
+    let secrets: SharedSecrets = Arc::new(FileSecrets::new(secrets_dir.path()).unwrap());
+    let config = Config {
+        port: 8080,
+        public_url: Url::parse(PUBLIC).unwrap(),
+        allowed_emails: HashSet::from(["jane@example.com".to_string()]),
+        secrets: SecretsBackend::File {
+            dir: secrets_dir.path().to_path_buf(),
+        },
+        markitdown: "markitdown".into(),
+        alt_hosts,
+        legacy_issuers: Vec::new(),
     };
     let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
@@ -253,8 +294,12 @@ async fn redeem(app: &Router, form: &str) -> (StatusCode, serde_json::Value) {
 }
 
 async fn mcp_initialize(app: &Router, bearer: Option<&str>) -> StatusCode {
+    mcp_initialize_with_host(app, bearer, "localhost:8080").await
+}
+
+async fn mcp_initialize_with_host(app: &Router, bearer: Option<&str>, host: &str) -> StatusCode {
     let mut req = Request::post("/mcp")
-        .header(header::HOST, "localhost:8080")
+        .header(header::HOST, host)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::ACCEPT, "application/json, text/event-stream");
     if let Some(b) = bearer {
@@ -374,6 +419,27 @@ async fn full_flow_for_allowed_user() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "invalid_grant");
+}
+
+#[tokio::test]
+async fn alternate_hosts_are_accepted() {
+    let h = harness_with_alt_hosts(vec!["alt.test".into()]).await;
+    let access = h
+        .state
+        .signer
+        .issue_access("jane@example.com", "mail")
+        .unwrap();
+
+    assert_eq!(
+        mcp_initialize_with_host(&h.app, Some(&access), "alt.test").await,
+        StatusCode::OK,
+        "an alt host is accepted"
+    );
+    let blocked = mcp_initialize_with_host(&h.app, Some(&access), "evil.test").await;
+    assert!(
+        blocked.is_client_error(),
+        "a host outside the allowlist is rejected: {blocked}"
+    );
 }
 
 #[tokio::test]

@@ -99,7 +99,8 @@ async fn main() -> Result<()> {
         &load_or_create_signing_key(&secrets).await?,
         config.base_url(),
         config.resource_url(),
-    );
+    )
+    .with_legacy_issuers(config.legacy_issuers.clone());
 
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
     let auth = AuthClient::from_env_with_backend(token_backend.clone())?;

@@ -185,6 +185,8 @@ pub(crate) mod tests {
                 dir: secrets_dir.to_path_buf(),
             },
             markitdown: crate::markitdown::tests::FAKE.into(),
+            alt_hosts: Vec::new(),
+            legacy_issuers: Vec::new(),
         };
         let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
         let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));

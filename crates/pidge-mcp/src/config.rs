@@ -1,6 +1,6 @@
 //! Process configuration, read once from the environment at startup.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -30,6 +30,17 @@ pub struct Config {
     /// The markitdown executable `mail_attachment` converts documents with.
     /// `PIDGE_MCP_MARKITDOWN`, default `markitdown` (looked up on `PATH`).
     pub markitdown: PathBuf,
+    /// Additional `Host` values rmcp accepts, alongside `public_url`'s host,
+    /// for a domain cutover where both the old and new hostnames must keep
+    /// working. `PIDGE_MCP_ALT_HOSTS`, comma-separated `host` or `host:port`,
+    /// default empty.
+    pub alt_hosts: Vec<String>,
+    /// Origins whose previously issued access tokens must keep verifying
+    /// after `public_url` (the issuer) changes. `PIDGE_MCP_LEGACY_ISSUERS`,
+    /// comma-separated absolute `http`/`https` origins with no trailing
+    /// slash, default empty. New access tokens are always issued under the
+    /// current issuer only.
+    pub legacy_issuers: Vec<String>,
 }
 
 /// `PIDGE_MCP_MARKITDOWN`, default `markitdown` (looked up on `PATH`).
@@ -43,12 +54,19 @@ pub fn markitdown_from_env() -> PathBuf {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let port = match std::env::var("PORT") {
-            Ok(v) => v.parse().context("PORT must be a number")?,
-            Err(_) => 8080,
+        let vars: HashMap<String, String> = std::env::vars().collect();
+        Self::from_map(&vars)
+    }
+
+    /// All the parsing `from_env` does, over an explicit map instead of the
+    /// process environment, so tests can exercise it without `set_var`.
+    pub fn from_map(vars: &HashMap<String, String>) -> Result<Self> {
+        let port = match vars.get("PORT") {
+            Some(v) => v.parse().context("PORT must be a number")?,
+            None => 8080,
         };
 
-        let public_url = std::env::var("PIDGE_MCP_PUBLIC_URL").context(
+        let public_url = vars.get("PIDGE_MCP_PUBLIC_URL").context(
             "PIDGE_MCP_PUBLIC_URL is required (e.g. https://host or http://localhost:8080)",
         )?;
         let public_url: Url = public_url
@@ -59,7 +77,8 @@ impl Config {
             bail!("PIDGE_MCP_PUBLIC_URL must use https (http is only allowed for localhost)");
         }
 
-        let allowed_emails: HashSet<String> = std::env::var("PIDGE_MCP_ALLOWED_EMAILS")
+        let allowed_emails: HashSet<String> = vars
+            .get("PIDGE_MCP_ALLOWED_EMAILS")
             .context("PIDGE_MCP_ALLOWED_EMAILS is required (comma-separated)")?
             .split(',')
             .map(|s| s.trim().to_ascii_lowercase())
@@ -70,8 +89,8 @@ impl Config {
         }
 
         let secrets = match (
-            std::env::var("PIDGE_MCP_KEYVAULT_URL").ok(),
-            std::env::var("PIDGE_MCP_SECRETS_DIR").ok(),
+            vars.get("PIDGE_MCP_KEYVAULT_URL"),
+            vars.get("PIDGE_MCP_SECRETS_DIR"),
         ) {
             (Some(vault), None) => SecretsBackend::KeyVault {
                 vault_url: vault
@@ -87,7 +106,40 @@ impl Config {
             }
         };
 
-        let markitdown = markitdown_from_env();
+        let markitdown = vars
+            .get("PIDGE_MCP_MARKITDOWN")
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| PathBuf::from("markitdown"), PathBuf::from);
+
+        let alt_hosts: Vec<String> = vars
+            .get("PIDGE_MCP_ALT_HOSTS")
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let legacy_issuers: Vec<String> = vars
+            .get("PIDGE_MCP_LEGACY_ISSUERS")
+            .map(|v| {
+                v.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.trim_end_matches('/').to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for issuer in &legacy_issuers {
+            let parsed: Url = issuer.parse().with_context(|| {
+                format!("PIDGE_MCP_LEGACY_ISSUERS: {issuer:?} is not an absolute URL")
+            })?;
+            if parsed.scheme() != "http" && parsed.scheme() != "https" {
+                bail!("PIDGE_MCP_LEGACY_ISSUERS: {issuer:?} must be an http or https URL");
+            }
+        }
 
         Ok(Self {
             markitdown,
@@ -95,6 +147,8 @@ impl Config {
             public_url,
             allowed_emails,
             secrets,
+            alt_hosts,
+            legacy_issuers,
         })
     }
 
@@ -115,5 +169,71 @@ impl Config {
 
     pub fn is_allowed(&self, email: &str) -> bool {
         self.allowed_emails.contains(&email.to_ascii_lowercase())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_map() -> HashMap<String, String> {
+        HashMap::from([
+            (
+                "PIDGE_MCP_PUBLIC_URL".to_string(),
+                "http://localhost:8080".to_string(),
+            ),
+            (
+                "PIDGE_MCP_ALLOWED_EMAILS".to_string(),
+                "jane@example.com".to_string(),
+            ),
+            (
+                "PIDGE_MCP_SECRETS_DIR".to_string(),
+                "/tmp/pidge-mcp-secrets".to_string(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn from_map_parses_alt_hosts_and_legacy_issuers() {
+        let mut vars = base_map();
+        vars.insert(
+            "PIDGE_MCP_ALT_HOSTS".to_string(),
+            "ca-x.example.io, pidge.mklab.se:443".to_string(),
+        );
+        vars.insert(
+            "PIDGE_MCP_LEGACY_ISSUERS".to_string(),
+            "https://old.test/".to_string(),
+        );
+
+        let config = Config::from_map(&vars).unwrap();
+        assert_eq!(
+            config.alt_hosts,
+            vec![
+                "ca-x.example.io".to_string(),
+                "pidge.mklab.se:443".to_string()
+            ]
+        );
+        assert_eq!(config.legacy_issuers, vec!["https://old.test".to_string()]);
+    }
+
+    #[test]
+    fn from_map_defaults_alt_hosts_and_legacy_issuers_to_empty() {
+        let config = Config::from_map(&base_map()).unwrap();
+        assert!(config.alt_hosts.is_empty());
+        assert!(config.legacy_issuers.is_empty());
+    }
+
+    #[test]
+    fn from_map_rejects_a_legacy_issuer_that_is_not_an_absolute_url() {
+        let mut vars = base_map();
+        vars.insert(
+            "PIDGE_MCP_LEGACY_ISSUERS".to_string(),
+            "not-a-url".to_string(),
+        );
+        let err = Config::from_map(&vars).unwrap_err();
+        assert!(
+            err.to_string().contains("not-a-url"),
+            "error should name the bad value: {err}"
+        );
     }
 }
