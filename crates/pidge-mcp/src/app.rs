@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::MatchedPath;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -42,7 +43,7 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
             get(|| async { "pidge-mcp: connect your MCP client to /mcp" }),
         )
         // The signed link is its own credential: outside the bearer layer.
-        .route("/dl/{token}", get(download::download))
+        .route(DOWNLOAD_ROUTE, get(download::download))
         .merge(oauth::router())
         .merge(mcp_routes)
         .layer(tower_http::trace::TraceLayer::new_for_http().make_span_with(request_span))
@@ -50,22 +51,32 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
         .with_state(state)
 }
 
-/// Method and redacted route for a request, shared by the debug-level
-/// [`request_span`] and the structured `http_request` log line. The query
-/// string is never included: on `/callback` it carries Microsoft's
-/// authorization code and free-text `error_description`, on `/authorize`
-/// the client's state. A `/dl/` path is redacted to `/dl/<redacted>`: its
-/// token is a bearer credential.
+/// The download route's template. Its `{token}` is a bearer credential, so
+/// it is logged as [`DOWNLOAD_ROUTE_LOGGED`], never with the real path.
+const DOWNLOAD_ROUTE: &str = "/dl/{token}";
+const DOWNLOAD_ROUTE_LOGGED: &str = "/dl/<redacted>";
+
+/// Method and route for a request, shared by the debug-level
+/// [`request_span`] and the structured `http_request` log line. The route
+/// is axum's matched route template ([`MatchedPath`]), never the request
+/// path: no query string (on `/callback` it carries Microsoft's
+/// authorization code, on `/authorize` the client's state), no path
+/// segment a caller chose, and no download token. The download route is
+/// `/dl/<redacted>`; a request that matched no route is `<unmatched>`.
 fn method_and_route(req: &Request<Body>) -> (String, String) {
-    let route = if req.uri().path().starts_with("/dl/") {
-        "/dl/<redacted>".to_string()
-    } else {
-        req.uri().path().to_string()
+    let route = match req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+    {
+        Some(DOWNLOAD_ROUTE) => DOWNLOAD_ROUTE_LOGGED.to_string(),
+        Some(template) => template.to_string(),
+        None => "<unmatched>".to_string(),
     };
     (req.method().to_string(), route)
 }
 
-/// The request's span: method and path only.
+/// The request's span: method and route template only.
 fn request_span(req: &Request<Body>) -> tracing::Span {
     let (method, uri) = method_and_route(req);
     tracing::debug_span!(
@@ -76,8 +87,8 @@ fn request_span(req: &Request<Body>) -> tracing::Span {
     )
 }
 
-/// One `info`-level `http_request` event per request: method, redacted
-/// route, status and latency. No query string and no headers.
+/// One `info`-level `http_request` event per request: method, route
+/// template, status and latency. No query string and no headers.
 async fn log_http_request(req: Request<Body>, next: Next) -> Response {
     let (method, route) = method_and_route(&req);
     let start = Instant::now();

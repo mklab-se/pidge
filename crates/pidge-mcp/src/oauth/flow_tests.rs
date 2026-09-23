@@ -1634,3 +1634,38 @@ async fn http_request_log_line_redacts_download_tokens() {
     assert!(!logged.contains("some-signed-token"), "{logged}");
     assert!(logged.contains("/dl/<redacted>"), "{logged}");
 }
+
+#[tokio::test]
+async fn http_request_log_line_names_the_route_template_or_unmatched() {
+    let (logs, _guard) = crate::test_support::LogCapture::start();
+    let h = harness("jane@example.com").await;
+
+    // Variants axum doesn't route to `/dl/{token}`, and a path the caller
+    // made up: none of them may reach the log verbatim.
+    for path in [
+        "/DL/secret-token-1",
+        "/%64l/secret-token-2",
+        "/dl",
+        "/made-up/secret-token-3",
+    ] {
+        let status = get(&h, path).await.status();
+        assert!(!status.is_success(), "{path}: {status}");
+    }
+    // A matched route with a query string, and the nested MCP service.
+    let _ = get(&h, "/authorize?client_id=secret-token-4").await;
+    assert_eq!(mcp_initialize(&h.app, None).await, StatusCode::UNAUTHORIZED);
+
+    let logged = logs.text();
+    let lines: Vec<&str> = logged
+        .lines()
+        .filter(|l| l.contains("http_request"))
+        .collect();
+    assert_eq!(lines.len(), 6, "{logged}");
+    for line in &lines[..4] {
+        assert!(line.contains("<unmatched>"), "{line}");
+    }
+    assert!(lines[4].contains("route=/authorize "), "{}", lines[4]);
+    assert!(lines[5].contains("route=/mcp "), "{}", lines[5]);
+    assert!(!logged.contains("secret-token"), "{logged}");
+    assert!(!logged.contains("made-up"), "{logged}");
+}

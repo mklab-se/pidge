@@ -229,10 +229,14 @@ A JSON line is a flat object: `timestamp`, `level`, `target`, `message`
 (the event name), plus that event's own fields at the top level — there is
 no nested `fields` object. Two structured events, one line per occurrence:
 
-- **`http_request`**, one per HTTP request: `method`, `route` (path only —
-  no query string, since `/authorize` and `/callback` carry OAuth state and
-  codes there; a `/dl/<token>` path is redacted to `/dl/<redacted>` because
-  the token is a bearer credential), `status`, `latency_ms`.
+- **`http_request`**, one per HTTP request: `method`, `route`, `status`,
+  `latency_ms`. `route` is the route template the request matched (for
+  example `/authorize`, `/mcp`, `/.well-known/oauth-protected-resource`),
+  never the raw path: no query string, since `/authorize` and `/callback`
+  carry OAuth state and codes there, and nothing a caller typed into the
+  path. The download route is logged as `/dl/<redacted>` because its token
+  is a bearer credential. A request that matched no route is logged as
+  `<unmatched>`.
 - **`tool_call`**, one per MCP tool invocation: `tool` (the tool name),
   `user` (an 8-hex-character hash of the caller's sign-in address, stable
   across restarts — never the address), `duration_ms`, `outcome` (`ok`,
