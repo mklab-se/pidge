@@ -79,7 +79,11 @@ impl Config {
     /// Save to a specific path. Useful for tests.
     pub fn save_to(&self, path: &Path) -> Result<(), CoreError> {
         let text = serde_yaml::to_string(self)?;
-        std::fs::write(path, text)?;
+        // Written whole or not at all: a crash mid-write must not leave a
+        // half file that later fails to parse (guardrails then fail closed).
+        let tmp = path.with_extension("yaml.tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, path)?;
         Ok(())
     }
 

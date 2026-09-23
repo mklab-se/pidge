@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Security
+
+Findings of a full security review of the CLI and the hosted MCP server (`docs/security-review-2026-09-23.md`
+has the report: what was checked, what was found, what was fixed, what to consider next).
+
+- **pidge-mcp: a Microsoft sign-in URL lifted from one browser no longer completes in another.** The
+  Continue step of both the sign-in and the connect flow now sets a cookie that `/callback` requires.
+  Before, anyone could start a sign-in for their own OAuth client (or a connect link for their own
+  pidge account), take the Microsoft URL it redirected to, and hand it to a victim as a "sign in to
+  pidge" link: the victim's Microsoft sign-in would have issued the starter's client a token for the
+  victim's mailbox, or bound the victim's mailbox to the starter's account.
+- **pidge-mcp: Graph ids are confined to their token alphabet.** `..\..\users\<address>\messages\<id>`
+  passed the old denylist (only `/`, `?`, `#`, `%` and whitespace were refused) and the URL parser
+  folds `\` to `/`, so a prompt-injected agent could have addressed shared or delegated mailboxes
+  the Microsoft account can reach but never connected to pidge.
+- **pidge-mcp: calendar invitations, attendee changes, cancellation notes and RSVP messages count
+  against the 30-per-hour send cap**, and the server instructions say they are e-mails needing the
+  same approval as a send. They were an uncapped, preview-free outbound channel.
+- **pidge-mcp: the draft preview keeps a reply's recipients and subject inside the untrusted
+  block** with the body, since on a reply they are the original sender's text.
+- **pidge-mcp: mailbox secret names carry a hash suffix**, so two addresses that differ only in
+  punctuation (`jane.doe@` / `jane-doe@`) no longer share one Key Vault secret; a second allowlisted
+  user could otherwise have locked the first out of signing in. Secrets stored under the old name
+  are still read and move to the new name on their next refresh.
+- **CLI: e-mail content can no longer drive the terminal.** Control characters (ESC, C1, …) are
+  stripped from subjects, sender names, bodies, previews, attachment and folder names, event text
+  and attendee names where Graph data becomes pidge types, and again from rendered HTML (where
+  `&#27;` decodes late). A message could otherwise forge OSC 8 hyperlinks, overwrite earlier lines
+  or retitle the window in `pidge mail`/`mail show`.
+- **CLI: `mail unsubscribe` by `mailto:` is a send.** It is now gated by `guardrails.send` as well
+  as `guardrails.unsubscribe`, always sends the body `unsubscribe`, and uses at most 100 characters
+  of the header's subject. A `List-Unsubscribe: <mailto:anyone?subject=…&body=…>` header could
+  otherwise have made the user send attacker-written mail to an attacker-chosen address with `-y`.
+- **CLI: guardrails fail closed.** A `config.yaml` that cannot be read now refuses the action
+  instead of treating every policy as `allow`; `config.yaml` is also written atomically.
+- **CLI: the browser opener only accepts plain http(s) links**, and on Windows quotes the URL as
+  one raw `cmd.exe` argument. A connect link in a hostile MCP server's reply could otherwise have
+  run commands (`&calc.exe`), and legitimate URLs with `&` were cut short there.
+- **CLI: `pidge mcp connect` requires an https server** (http only for localhost), and the local
+  `--store=file` token directory is created `0700`.
+
 ## [1.4.0] - 2026-09-22
 
 ### Added

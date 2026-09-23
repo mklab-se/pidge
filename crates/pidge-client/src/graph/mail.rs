@@ -49,9 +49,23 @@ struct GraphFlag {
 
 fn recipient_from(addr: GraphFromAddress) -> MessageFrom {
     MessageFrom {
-        name: addr.name.unwrap_or_default(),
-        address: addr.address.unwrap_or_default(),
+        name: clean(addr.name),
+        address: clean(addr.address),
     }
+}
+
+/// Third-party text as pidge-core types carry it: control characters
+/// removed (see [`pidge_core::render::strip_controls`]), `None` as empty.
+pub(crate) fn clean(text: Option<String>) -> String {
+    text.as_deref()
+        .map(pidge_core::render::strip_controls)
+        .unwrap_or_default()
+}
+
+/// `serde(deserialize_with)` form of [`clean`] for fields Graph always sends.
+pub(crate) fn clean_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let s = <String as serde::Deserialize>::deserialize(d)?;
+    Ok(pidge_core::render::strip_controls(&s))
 }
 
 fn unwrap_recipients(rs: Vec<GraphFromWrapper>) -> Vec<MessageFrom> {
@@ -478,7 +492,7 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
             } else {
                 pidge_core::BodyContentType::Text
             };
-            (b.content, kind)
+            (clean(Some(b.content)), kind)
         }
         None => (String::new(), pidge_core::BodyContentType::Text),
     };
@@ -487,25 +501,21 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
         id: g.id,
         conversation_id: g.conversation_id.unwrap_or_default(),
         from: MessageFrom {
-            name: g
-                .from
-                .as_ref()
-                .and_then(|f| f.email_address.name.clone())
-                .unwrap_or_default(),
-            address: g
-                .from
-                .as_ref()
-                .and_then(|f| f.email_address.address.clone())
-                .unwrap_or_default(),
+            name: clean(g.from.as_ref().and_then(|f| f.email_address.name.clone())),
+            address: clean(
+                g.from
+                    .as_ref()
+                    .and_then(|f| f.email_address.address.clone()),
+            ),
         },
-        subject: g.subject.unwrap_or_default(),
+        subject: clean(g.subject),
         received_at: g.received_date_time,
         is_read: g.is_read.unwrap_or(true),
         // `preview` keeps the 255-char plain-text snippet Graph computes
         // (bodyPreview). It's used as a cheap fallback when body is absent
         // and as the plain-text source for `--json` output (AI agents and
         // scripts that don't want to deal with HTML).
-        preview: g.body_preview.unwrap_or_default(),
+        preview: clean(g.body_preview),
         flag_status: flag_status_from(g.flag),
         has_attachments: g.has_attachments.unwrap_or(false),
         body,
@@ -565,12 +575,12 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId,isD
         to: unwrap_recipients(g.to_recipients),
         cc: unwrap_recipients(g.cc_recipients),
         bcc: unwrap_recipients(g.bcc_recipients),
-        subject: g.subject.unwrap_or_default(),
+        subject: clean(g.subject),
         received_at: g.received_date_time,
         sent_at: g.sent_date_time,
         is_read: g.is_read.unwrap_or(true),
         body_content_type: content_type,
-        body_content: g.body.content,
+        body_content: clean(Some(g.body.content)),
         has_attachments: g.has_attachments.unwrap_or(false),
         flag_status: flag_status_from(g.flag),
         is_invite,
@@ -803,8 +813,8 @@ pub async fn list_attachments(
         })
         .map(|a| pidge_core::Attachment {
             id: a.id,
-            name: a.name.unwrap_or_default(),
-            content_type: a.content_type.unwrap_or_default(),
+            name: clean(a.name),
+            content_type: clean(a.content_type),
             size_bytes: a.size.unwrap_or(0),
             is_inline: a.is_inline.unwrap_or(false),
             content_id: a.content_id,
@@ -1508,7 +1518,7 @@ pub async fn move_message(
 #[derive(Debug, Clone, Deserialize)]
 pub struct MailFolder {
     pub id: String,
-    #[serde(rename = "displayName")]
+    #[serde(rename = "displayName", deserialize_with = "clean_string")]
     pub display_name: String,
     /// Total message count, present when selected. `None` if Graph omitted it.
     #[serde(rename = "totalItemCount", default)]
@@ -1666,6 +1676,29 @@ pub async fn delete_mail_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn third_party_text_loses_its_control_characters_at_the_graph_boundary() {
+        assert_eq!(
+            clean(Some("Re: \x1b[2K\x1b[1Ahidden\u{9b}x".into())),
+            "Re: [2K[1Ahiddenx"
+        );
+        assert_eq!(
+            clean(Some("keeps\nlines\tand tabs".into())),
+            "keeps\nlines\tand tabs"
+        );
+        assert_eq!(clean(None), "");
+        let folder: MailFolder = serde_json::from_value(serde_json::json!({
+            "id": "F1", "displayName": "Inbox\u{1b}]0;pwned\u{7}"
+        }))
+        .unwrap();
+        assert_eq!(folder.display_name, "Inbox]0;pwned");
+        let from = recipient_from(GraphFromAddress {
+            name: Some("Eve\u{1b}[31m".into()),
+            address: Some("eve@example.com".into()),
+        });
+        assert_eq!(from.name, "Eve[31m");
+    }
     use wiremock::matchers::{body_string, header, method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 

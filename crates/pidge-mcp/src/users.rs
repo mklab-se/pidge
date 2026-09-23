@@ -10,7 +10,7 @@ use pidge_client::auth::TokenSet;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::secrets::{SharedSecrets, mailbox_secret_name};
+use crate::secrets::{SharedSecrets, legacy_mailbox_secret_name, mailbox_secret_name};
 
 /// The immutable identity of a Microsoft account: its tenant and object id,
 /// from the ID token of the sign-in. Pinned on first use, so a later sign-in
@@ -147,9 +147,21 @@ impl UserStore {
 
     /// Load a mailbox record, adopting the legacy bare-`TokenSet` shape if
     /// that's what's stored. `None` if unset or deleted (empty secret).
+    /// A mailbox stored under its pre-hash-suffix name (see
+    /// [`legacy_mailbox_secret_name`]) is found there until its next save
+    /// moves it; a legacy name that another address also folds to is only
+    /// consulted when the current name is unset.
     pub async fn load_mailbox(&self, mailbox: &str) -> Result<Option<MailboxRecord>> {
-        let Some(raw) = self.secrets.get(&mailbox_secret_name(mailbox)).await? else {
-            return Ok(None);
+        let raw = match self.secrets.get(&mailbox_secret_name(mailbox)).await? {
+            Some(raw) => raw,
+            None => match self
+                .secrets
+                .get(&legacy_mailbox_secret_name(mailbox))
+                .await?
+            {
+                Some(raw) => raw,
+                None => return Ok(None),
+            },
         };
         if raw.trim().is_empty() {
             return Ok(None);
@@ -199,7 +211,14 @@ impl UserStore {
     /// string rather than a real delete: Key Vault soft-delete makes true
     /// deletion slow, and the name space is per-mailbox anyway.
     pub async fn delete_mailbox(&self, mailbox: &str) -> Result<()> {
-        self.secrets.set(&mailbox_secret_name(mailbox), "").await
+        self.secrets.set(&mailbox_secret_name(mailbox), "").await?;
+        // Only if something is there: a blank legacy secret would otherwise
+        // shadow nothing but still be created for every disconnect.
+        let legacy = legacy_mailbox_secret_name(mailbox);
+        if self.secrets.get(&legacy).await?.is_some() {
+            self.secrets.set(&legacy, "").await?;
+        }
+        Ok(())
     }
 }
 
@@ -369,7 +388,7 @@ mod tests {
         })
         .unwrap();
         secrets
-            .set(&mailbox_secret_name("old@example.com"), &legacy)
+            .set(&legacy_mailbox_secret_name("old@example.com"), &legacy)
             .await
             .unwrap();
         let rec = store
@@ -378,6 +397,16 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(rec.owner, "old@example.com");
+        // A save moves it to the current name; the legacy one is not read
+        // while the current one is set, and a delete blanks both.
+        store.save_mailbox(&rec, "old@example.com").await.unwrap();
+        assert!(
+            secrets
+                .get(&mailbox_secret_name("old@example.com"))
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert!(
             store
                 .check_binding("old@example.com", "old@example.com", None)
@@ -397,6 +426,72 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+        assert_eq!(
+            secrets
+                .get(&legacy_mailbox_secret_name("old@example.com"))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mailbox_whose_address_folds_to_anothers_legacy_name_is_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets: SharedSecrets = Arc::new(FileSecrets::new(dir.path()).unwrap());
+        let store = UserStore::new(secrets.clone());
+        let tokens = TokenSet {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: chrono::Utc::now(),
+        };
+        store
+            .save_mailbox(
+                &MailboxRecord {
+                    owner: "jane.doe@example.com".into(),
+                    tokens: tokens.clone(),
+                    identity: None,
+                },
+                "jane.doe@example.com",
+            )
+            .await
+            .unwrap();
+        // jane-doe@ is a different Microsoft account; it must not see or
+        // shadow jane.doe@'s record.
+        assert!(
+            store
+                .load_mailbox("jane-doe@example.com")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .check_binding("jane-doe@example.com", "mallory@example.com", None)
+                .await
+                .is_ok()
+        );
+        store
+            .save_mailbox(
+                &MailboxRecord {
+                    owner: "mallory@example.com".into(),
+                    tokens,
+                    identity: None,
+                },
+                "jane-doe@example.com",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .load_mailbox("jane.doe@example.com")
+                .await
+                .unwrap()
+                .unwrap()
+                .owner,
+            "jane.doe@example.com"
         );
     }
 }

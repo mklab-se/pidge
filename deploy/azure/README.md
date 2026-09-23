@@ -417,6 +417,10 @@ sent only by draft id, and the agent proposes before sending.
 - **Sign-in consent.** A client's `/authorize` shows a page naming the client
   and the host the sign-in goes back to. Only its Continue, from the same
   browser, goes to Microsoft.
+- **One browser per flow.** The Continue step of either flow sets a cookie
+  that `/callback` requires, so a Microsoft sign-in URL lifted from one
+  browser and opened in another (say, sent to someone as a "sign in here"
+  link) completes nothing: no code is issued and no mailbox is bound.
 - **Account identity.** An account is its Microsoft principal name, never the
   editable `mail` attribute. The tenant and object id from the ID token are
   pinned on first sign-in, and a later sign-in or connect under the same name

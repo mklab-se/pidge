@@ -35,6 +35,18 @@ pub type SharedSecrets = Arc<dyn SecretStore>;
 /// two-person allowlist, but the allowlist is the authority anyway: a
 /// mailbox is only ever written after its owner signed in.
 pub fn mailbox_secret_name(email: &str) -> String {
+    format!(
+        "{}-{}",
+        legacy_mailbox_secret_name(email),
+        &crate::users::user_hash_long(email)[..8]
+    )
+}
+
+/// The name mailbox secrets had before the hash suffix: the address with
+/// every non-alphanumeric character folded to `-`, so `jane.doe@` and
+/// `jane-doe@` shared a name. Read as a fallback so existing deployments
+/// keep their sessions; never written.
+pub fn legacy_mailbox_secret_name(email: &str) -> String {
     let sanitized: String = email
         .to_ascii_lowercase()
         .chars()
@@ -50,7 +62,31 @@ mod tests {
     #[test]
     fn mailbox_secret_name_is_key_vault_safe() {
         let name = mailbox_secret_name("Jane.Doe+tag@Example.com");
-        assert_eq!(name, "mailbox-jane-doe-tag-example-com");
+        assert!(
+            name.starts_with("mailbox-jane-doe-tag-example-com-"),
+            "{name}"
+        );
+        assert_eq!(name.len(), "mailbox-jane-doe-tag-example-com-".len() + 8);
         assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+        assert_eq!(name, mailbox_secret_name("jane.doe+tag@example.com"));
+        assert_eq!(
+            legacy_mailbox_secret_name("Jane.Doe+tag@Example.com"),
+            "mailbox-jane-doe-tag-example-com"
+        );
+    }
+
+    #[test]
+    fn addresses_that_differ_only_in_punctuation_get_distinct_names() {
+        let a = mailbox_secret_name("jane.doe@example.com");
+        let b = mailbox_secret_name("jane-doe@example.com");
+        let c = mailbox_secret_name("jane+doe@example.com");
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(b, c);
+        // Which the legacy scheme did not.
+        assert_eq!(
+            legacy_mailbox_secret_name("jane.doe@example.com"),
+            legacy_mailbox_secret_name("jane-doe@example.com")
+        );
     }
 }

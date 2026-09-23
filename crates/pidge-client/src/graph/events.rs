@@ -11,6 +11,8 @@ use pidge_core::{
 };
 use serde::Deserialize;
 
+use super::mail::clean;
+
 use crate::error::ClientError;
 
 const PREFER_UTC: &str = "outlook.timezone=\"UTC\"";
@@ -667,13 +669,14 @@ fn to_event(g: GraphEvent, account: &str, calendar_hint: Option<&str>) -> Event 
             .calendar_id
             .unwrap_or_else(|| calendar_hint.unwrap_or("").to_string()),
         id: g.id,
-        subject: g.subject.unwrap_or_default(),
+        subject: clean(g.subject),
         start: parse_event_time(g.start),
         end: parse_event_time(g.end),
         all_day: g.is_all_day.unwrap_or(false),
         location: g
             .location
             .and_then(|l| l.display_name)
+            .map(|s| clean(Some(s)))
             .filter(|s| !s.is_empty()),
         organizer,
         attendees: g
@@ -681,13 +684,16 @@ fn to_event(g: GraphEvent, account: &str, calendar_hint: Option<&str>) -> Event 
             .into_iter()
             .map(graph_attendee_to_attendee)
             .collect(),
-        body_preview: g.body_preview.unwrap_or_default(),
-        body_content,
+        body_preview: clean(g.body_preview),
+        body_content: clean(Some(body_content)),
         body_content_type,
         recurrence: g.recurrence.map(parse_recurrence),
         is_organizer: g.is_organizer.unwrap_or(false),
         response_status: parse_response(g.response_status.and_then(|r| r.response).as_deref()),
-        online_meeting_url: g.online_meeting.and_then(|m| m.join_url),
+        online_meeting_url: g
+            .online_meeting
+            .and_then(|m| m.join_url)
+            .map(|u| clean(Some(u))),
         series_master_id: g.series_master_id,
         reminder_minutes: match g.is_reminder_on {
             Some(true) => g.reminder_minutes_before_start,
@@ -712,8 +718,8 @@ fn parse_event_time(g: GraphDateTime) -> EventTime {
 
 fn graph_attendee_to_attendee(g: GraphAttendee) -> Attendee {
     Attendee {
-        name: g.email_address.name.unwrap_or_default(),
-        address: g.email_address.address.unwrap_or_default(),
+        name: clean(g.email_address.name),
+        address: clean(g.email_address.address),
         kind: match g.kind.as_deref() {
             Some("optional") => AttendeeKind::Optional,
             Some("resource") => AttendeeKind::Resource,

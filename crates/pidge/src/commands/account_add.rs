@@ -97,9 +97,27 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
     Ok(())
 }
 
+/// Whether `url` may be handed to the platform's URL opener: an absolute
+/// http(s) URL with no control characters or double quotes. On Windows the
+/// URL is placed on a `cmd.exe` command line, where a quote would end the
+/// argument and let `&`, `|` or `^` start another command; a link from an
+/// MCP server's reply (`pidge mcp connect`) must never get that far.
+pub(crate) fn browser_url_is_safe(url: &str) -> bool {
+    (url.starts_with("https://") || url.starts_with("http://"))
+        && !url
+            .chars()
+            .any(|c| c.is_control() || c == '"' || c.is_whitespace())
+}
+
 /// Best-effort open `url` in the user's default browser. Shared with `pidge
 /// mcp connect`, which reuses the same sign-in UX.
 pub(crate) fn open_browser(url: &str) -> std::io::Result<()> {
+    if !browser_url_is_safe(url) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "refusing to open a URL that is not a plain http(s) link",
+        ));
+    }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
@@ -118,12 +136,42 @@ pub(crate) fn open_browser(url: &str) -> std::io::Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        // `start` is a cmd.exe built-in, not a standalone executable.
+        // `start` is a cmd.exe built-in, not a standalone executable. The
+        // URL goes on the command line in double quotes (as one raw
+        // argument: Rust only quotes arguments containing whitespace, and
+        // an unquoted `&` in a query string would end the command), which
+        // `browser_url_is_safe` guarantees it cannot close early.
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
+            .args(["/c", "start", ""])
+            .raw_arg(format!("\"{url}\""))
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_url_is_safe;
+
+    #[test]
+    fn only_plain_http_links_are_opened() {
+        assert!(browser_url_is_safe(
+            "https://login.microsoftonline.com/x/oauth2/v2.0/authorize?client_id=a&state=b%2Bc"
+        ));
+        assert!(browser_url_is_safe("http://localhost:6274/oauth/callback"));
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "https://x.test/connect?state=a\"&calc.exe",
+            "https://x.test/a b",
+            "https://x.test/\x1b]0;t\x07",
+            "ftp://x.test/",
+            "",
+        ] {
+            assert!(!browser_url_is_safe(bad), "{bad:?}");
+        }
+    }
 }

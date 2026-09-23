@@ -549,10 +549,10 @@ fn is_reply_or_forward(draft: &FullMessage) -> bool {
 /// Recipients in `unconfirmed` came from a name that only matched a
 /// recent sender, and are marked for the user to confirm.
 fn preview(account: &str, draft: &FullMessage, unconfirmed: &[String]) -> String {
-    let mut out = format!(
-        "draft_id: {id}\naccount: {account}\npreview:\nfrom: {account}\n",
-        id = draft.id
-    );
+    // Everything the user approves is one untrusted block: a reply's
+    // recipients and subject are the original sender's text, and this is
+    // the output that gates mail_send.
+    let mut out = format!("from: {account}\n");
     let show = |r: &MessageFrom| {
         let mut s = who(r);
         if unconfirmed
@@ -575,15 +575,15 @@ fn preview(account: &str, draft: &FullMessage, unconfirmed: &[String]) -> String
         }
     }
     out.push_str(&format!("subject: {}\n", one_line(&draft.subject)));
-    out.push_str(&untrusted(&cap(
+    out.push_str(&cap(
         &body_text(&draft.body_content, draft.body_content_type),
         PREVIEW_BODY_CAP,
-    )));
-    out.push_str(&format!(
-        "\nnext: mail_send draft_id={} (only after the user has approved this preview)",
-        draft.id
     ));
-    out
+    format!(
+        "draft_id: {id}\naccount: {account}\npreview:\n{}\nnext: mail_send draft_id={id} (only after the user has approved this preview)",
+        untrusted(&out),
+        id = draft.id
+    )
 }
 
 #[cfg(test)]
@@ -800,11 +800,12 @@ mod tests {
             out.starts_with("draft_id: D1\naccount: work@example.com\npreview:\n"),
             "{out}"
         );
-        assert!(out.contains("from: work@example.com\n"), "{out}");
-        assert!(out.contains("to: Bob <bob@example.com>\n"), "{out}");
-        assert!(out.contains("subject: Lunch\n"), "{out}");
+        // Recipients and subject sit inside the untrusted block with the
+        // body: on a reply they are the original sender's text.
         assert!(
-            out.contains("<untrusted-email-content>\nSee you at noon?\n</untrusted-email-content>"),
+            out.contains(
+                "preview:\n<untrusted-email-content>\nfrom: work@example.com\nto: Bob <bob@example.com>\nsubject: Lunch\nSee you at noon?\n</untrusted-email-content>\n"
+            ),
             "{out}"
         );
         assert!(

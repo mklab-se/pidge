@@ -66,7 +66,23 @@ pub struct PendingAuthorization {
     /// Microsoft redirect only happens in a browser that saw the owner.
     /// `None` until that page is shown, and always for sign-ins.
     pub consent_nonce: Option<String>,
+    /// The nonce set as a cookie by the Continue step (`/authorize/go`,
+    /// `/connect/go`) when it sends the browser to Microsoft; `/callback`
+    /// requires the same browser to present it. `None` until then, so a
+    /// Microsoft sign-in URL lifted from one browser and opened in another
+    /// (a victim's) completes nothing.
+    pub callback_nonce: Option<String>,
     pub created_at: DateTime<Utc>,
+}
+
+impl PendingAuthorization {
+    /// A short label for the flow's kind, for logs.
+    pub fn kind_name(&self) -> &'static str {
+        match self.kind {
+            PendingKind::SignIn => "sign-in",
+            PendingKind::Connect { .. } => "connect",
+        }
+    }
 }
 
 pub const PENDING_TTL: Duration = Duration::minutes(10);
@@ -179,6 +195,18 @@ impl AppState {
             .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
         {
             p.consent_nonce = Some(nonce);
+        }
+    }
+
+    /// Records the Continue step's cookie nonce on a live pending entry,
+    /// replacing any earlier one. No-op if the entry is gone or expired.
+    pub fn set_callback_nonce(&self, state: &str, nonce: String) {
+        let mut map = self.pending.lock().expect("pending lock");
+        if let Some(p) = map
+            .get_mut(state)
+            .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
+        {
+            p.callback_nonce = Some(nonce);
         }
     }
 
@@ -305,6 +333,7 @@ mod tests {
             code_challenge: String::new(),
             microsoft_verifier: String::new(),
             consent_nonce: None,
+            callback_nonce: None,
             created_at,
         }
     }

@@ -9,7 +9,8 @@ use colored::Colorize;
 use inquire::Confirm;
 
 use pidge_client::{
-    AuthClient, ClientError, GraphClient, Outgoing, UnsubscribeMethod, parse_unsubscribe,
+    AuthClient, ClientError, GraphClient, Outgoing, UnsubscribeMethod, mailto_subject,
+    parse_unsubscribe,
 };
 
 use crate::commands::mail_fragment::resolve;
@@ -81,13 +82,24 @@ pub async fn run(fragment: String, yes: bool) -> Result<()> {
             );
             Ok(())
         }
+        // The header's `body` is ignored and its subject capped: the sender
+        // chooses them, and the e-mail goes out as the user. Which also
+        // makes this a send, so `guardrails.send` applies on top.
         UnsubscribeMethod::Mailto {
-            address,
-            subject,
-            body,
+            address, subject, ..
         } => {
-            let subject = subject.unwrap_or_else(|| "unsubscribe".to_string());
-            let body = body.unwrap_or_default();
+            let subject = mailto_subject(subject.as_deref());
+            let body = "unsubscribe".to_string();
+            if crate::guardrail::gate(
+                crate::guardrail::GuardrailAction::Send,
+                &format!(
+                    "send unsubscribe e-mail to <{address}> from {}",
+                    msg.account
+                ),
+            )? == crate::guardrail::Gate::DryRun
+            {
+                return Ok(());
+            }
             if !confirm(
                 yes,
                 &format!(
