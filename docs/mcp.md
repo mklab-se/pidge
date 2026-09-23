@@ -179,9 +179,18 @@ docker run -d \
   -e PIDGE_MCP_PUBLIC_URL=https://your-host.example.com \
   -e PIDGE_MCP_ALLOWED_EMAILS=you@example.com,teammate@example.com \
   -e PIDGE_MCP_SECRETS_DIR=/data/secrets \
+  -e PIDGE_CLIENT_ID=<your Entra app id> \
   -v pidge-mcp-secrets:/data/secrets \
   ghcr.io/mklab-se/pidge-mcp:latest
 ```
+
+Users sign in to Microsoft through the Entra app that `PIDGE_CLIENT_ID`
+names, and Microsoft only redirects to callback URLs registered on it, so
+add `https://<host>/callback` as a public-client redirect URI on an app you
+control. [`scripts/register-pidge-app.sh`](../scripts/register-pidge-app.sh)
+creates such an app, and [Cutover](../deploy/azure/README.md#cutover) in the
+deploy README shows the `az ad app update` command that registers a
+callback. Without it, sign-in fails with `AADSTS50011`.
 
 Put a TLS-terminating reverse proxy in front of it: `PIDGE_MCP_PUBLIC_URL`
 must be `https` (only `http://localhost` is exempt, for local testing).
