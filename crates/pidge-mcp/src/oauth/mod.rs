@@ -17,7 +17,7 @@ pub mod bearer;
 #[cfg(test)]
 mod flow_tests;
 pub mod jwt;
-mod pages;
+pub(crate) mod pages;
 
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};

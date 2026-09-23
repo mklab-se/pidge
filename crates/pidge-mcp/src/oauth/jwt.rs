@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
 pub const REFRESH_TOKEN_TTL: Duration = Duration::days(30);
 pub const AUTH_CODE_TTL: Duration = Duration::minutes(2);
+pub const DOWNLOAD_TTL: Duration = Duration::minutes(15);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClientClaims {
@@ -55,6 +56,24 @@ pub struct RefreshClaims {
     pub sub: String,
     pub client_id: String,
     pub exp: i64,
+}
+
+/// A `mail_attachment` download link: anyone holding it may fetch this one
+/// attachment until `exp`, as long as `sub` still owns `account`. The
+/// content type rides along so serving it needs no extra Graph call.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DownloadClaims {
+    pub typ: String,
+    pub jti: String,
+    pub exp: i64,
+    /// The signed-in user the link was minted for.
+    pub sub: String,
+    /// The mailbox holding the message.
+    pub account: String,
+    pub message_id: String,
+    pub attachment_id: String,
+    pub filename: String,
+    pub content_type: String,
 }
 
 #[derive(Clone)]
@@ -204,6 +223,42 @@ impl Signer {
     pub fn verify_refresh(&self, token: &str) -> Result<RefreshClaims> {
         self.verify(token, "refresh", true)
     }
+
+    /// A [`DOWNLOAD_TTL`] link to `attachment` of `message_id` in `account`.
+    pub fn issue_download(
+        &self,
+        sub: &str,
+        account: &str,
+        message_id: &str,
+        attachment: &pidge_core::Attachment,
+    ) -> Result<String> {
+        self.issue_download_with_ttl(sub, account, message_id, attachment, DOWNLOAD_TTL)
+    }
+
+    pub(crate) fn issue_download_with_ttl(
+        &self,
+        sub: &str,
+        account: &str,
+        message_id: &str,
+        attachment: &pidge_core::Attachment,
+        ttl: Duration,
+    ) -> Result<String> {
+        self.sign(&DownloadClaims {
+            typ: "download".into(),
+            jti: random_id(),
+            exp: (Utc::now() + ttl).timestamp(),
+            sub: sub.into(),
+            account: account.into(),
+            message_id: message_id.into(),
+            attachment_id: attachment.id.clone(),
+            filename: attachment.name.clone(),
+            content_type: attachment.content_type.clone(),
+        })
+    }
+
+    pub fn verify_download(&self, token: &str) -> Result<DownloadClaims> {
+        self.verify(token, "download", true)
+    }
 }
 
 pub fn random_bytes(n: usize) -> Vec<u8> {
@@ -267,6 +322,57 @@ mod tests {
         assert!(b.verify_access(&token).is_ok());
         assert!(a.verify_access(&token).is_err(), "different key");
         assert!(c.verify_access(&token).is_err(), "different audience");
+    }
+
+    fn attachment() -> pidge_core::Attachment {
+        pidge_core::Attachment {
+            id: "A1".into(),
+            name: "report.pdf".into(),
+            content_type: "application/pdf".into(),
+            size_bytes: 10,
+            is_inline: false,
+            content_id: None,
+        }
+    }
+
+    #[test]
+    fn download_round_trip_carries_the_attachment_and_a_15_minute_expiry() {
+        let s = signer();
+        let token = s
+            .issue_download("jane@example.com", "work@example.com", "M1", &attachment())
+            .unwrap();
+        let c = s.verify_download(&token).unwrap();
+        assert_eq!(c.typ, "download");
+        assert_eq!(c.sub, "jane@example.com");
+        assert_eq!(c.account, "work@example.com");
+        assert_eq!(c.message_id, "M1");
+        assert_eq!(c.attachment_id, "A1");
+        assert_eq!(c.filename, "report.pdf");
+        assert_eq!(c.content_type, "application/pdf");
+        let ttl = c.exp - Utc::now().timestamp();
+        assert!((14 * 60..=15 * 60).contains(&ttl), "{ttl}");
+    }
+
+    #[test]
+    fn download_tokens_are_their_own_kind_and_expire() {
+        let s = signer();
+        let access = s.issue_access("jane@example.com", "mail").unwrap();
+        assert!(s.verify_download(&access).is_err());
+        let download = s
+            .issue_download("jane@example.com", "jane@example.com", "M1", &attachment())
+            .unwrap();
+        assert!(s.verify_access(&download).is_err());
+        assert!(s.verify_refresh(&download).is_err());
+        let expired = s
+            .issue_download_with_ttl(
+                "jane@example.com",
+                "jane@example.com",
+                "M1",
+                &attachment(),
+                Duration::minutes(-5),
+            )
+            .unwrap();
+        assert!(s.verify_download(&expired).is_err());
     }
 
     #[test]

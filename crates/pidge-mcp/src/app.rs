@@ -8,6 +8,7 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use tokio_util::sync::CancellationToken;
 
+use crate::download;
 use crate::oauth;
 use crate::state::SharedState;
 use crate::tools::PidgeMcp;
@@ -34,6 +35,8 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
             "/",
             get(|| async { "pidge-mcp: connect your MCP client to /mcp" }),
         )
+        // The signed link is its own credential: outside the bearer layer.
+        .route("/dl/{token}", get(download::download))
         .merge(oauth::router())
         .merge(mcp_routes)
         .layer(tower_http::trace::TraceLayer::new_for_http())

@@ -5,6 +5,7 @@
 //! nothing in a tool's input can name another user.
 
 mod accounts;
+pub(crate) mod attachments;
 mod calendar;
 mod mail_act;
 mod mail_read;
@@ -36,6 +37,7 @@ impl PidgeMcp {
         Self {
             state,
             tool_router: Self::accounts_router()
+                + Self::attachments_router()
                 + Self::calendar_router()
                 + Self::mail_act_router()
                 + Self::mail_read_router()

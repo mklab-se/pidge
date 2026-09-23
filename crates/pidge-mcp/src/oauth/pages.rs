@@ -9,6 +9,16 @@ pub fn error(status: StatusCode, message: &str) -> Response {
     page(status, "pidge could not sign you in", message)
 }
 
+/// The one answer `/dl/…` gives for every refusal, so a link's holder
+/// learns nothing about why it stopped working.
+pub fn link_unavailable() -> Response {
+    page(
+        StatusCode::NOT_FOUND,
+        "Download unavailable",
+        "This download link is invalid or has expired. Ask your assistant for a new one.",
+    )
+}
+
 /// A 200 page confirming something finished, for flows with no client to
 /// redirect back to.
 pub fn done(message: &str) -> Response {

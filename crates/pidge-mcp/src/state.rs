@@ -21,7 +21,9 @@ const CACHE_PER_USER: usize = 256;
 
 /// Sends allowed per user in any rolling hour (spec §1.3, `mail_send`).
 pub const SENDS_PER_HOUR: usize = 30;
-const SEND_WINDOW: StdDuration = StdDuration::from_secs(60 * 60);
+/// Attachment downloads (`GET /dl/…`) allowed per user in any rolling hour.
+pub const DOWNLOADS_PER_HOUR: usize = 60;
+const RATE_WINDOW: StdDuration = StdDuration::from_secs(60 * 60);
 
 /// What a Microsoft sign-in is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +72,8 @@ pub struct AppState {
     pub contacts: ContactCaches,
     /// Sign-in address → instants of that user's sends in the last hour.
     pub sends: Mutex<HashMap<String, Vec<Instant>>>,
+    /// Sign-in address → instants of that user's downloads in the last hour.
+    pub downloads: Mutex<HashMap<String, Vec<Instant>>>,
     pending: Mutex<HashMap<String, PendingAuthorization>>,
     /// `jti` → expiry of authorization codes already redeemed, so a code
     /// can't be replayed inside its two-minute lifetime.
@@ -96,6 +100,7 @@ impl AppState {
             cache: ReadCache::new(CACHE_TTL, CACHE_PER_USER),
             contacts: ContactCaches::default(),
             sends: Mutex::new(HashMap::new()),
+            downloads: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
         }
@@ -141,14 +146,14 @@ impl AppState {
     /// `false` when they are used up. Claiming before sending (rather than
     /// counting afterwards) keeps concurrent sends from overshooting the cap.
     pub fn reserve_send(&self, user: &str) -> bool {
-        let mut map = self.sends.lock().expect("sends lock");
-        let sent = map.entry(user.to_string()).or_default();
-        sent.retain(|at| at.elapsed() < SEND_WINDOW);
-        if sent.len() >= SENDS_PER_HOUR {
-            return false;
-        }
-        sent.push(Instant::now());
-        true
+        claim_in_window(&self.sends, user, SENDS_PER_HOUR)
+    }
+
+    /// Claims one of `user`'s [`DOWNLOADS_PER_HOUR`] downloads in the
+    /// rolling hour; `false` when they are used up. Every attempt with a
+    /// valid link counts, served or not.
+    pub fn reserve_download(&self, user: &str) -> bool {
+        claim_in_window(&self.downloads, user, DOWNLOADS_PER_HOUR)
     }
 
     /// Returns the claim [`Self::reserve_send`] made for a send that failed.
@@ -166,4 +171,17 @@ impl AppState {
         map.retain(|_, e| *e > now);
         map.insert(jti.to_string(), exp).is_none()
     }
+}
+
+/// Records one event for `user` unless they already had `cap` in the last
+/// [`RATE_WINDOW`]; `false` when refused.
+fn claim_in_window(counter: &Mutex<HashMap<String, Vec<Instant>>>, user: &str, cap: usize) -> bool {
+    let mut map = counter.lock().expect("rate counter lock");
+    let events = map.entry(user.to_string()).or_default();
+    events.retain(|at| at.elapsed() < RATE_WINDOW);
+    if events.len() >= cap {
+        return false;
+    }
+    events.push(Instant::now());
+    true
 }
