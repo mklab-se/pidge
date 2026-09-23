@@ -52,16 +52,43 @@ managed certificate can only be created after the hostname is bound:
 3. **Rebind with the certificate.** The app redeploys again with
    `customDomainCertificateId` set, switching the binding to `SniEnabled`.
 
-Once the domain is `SniEnabled`, re-running the script repeats the detection
-(via `az containerapp show ... customDomains[?name=='<domain>'].bindingType`)
-and skips straight past steps 1–3. Pass `--skip-certificate` to assert that
-the certificate is already bound and skip that detection outright — the
-script then fails loudly instead of silently doing nothing if it turns out
-not to be `SniEnabled`.
+Once the domain is `SniEnabled`, re-running the script sees that on the
+live app and skips straight past steps 1–3, reusing the live certificate id.
+Pass `--skip-certificate` to assert that: the script then fails loudly,
+instead of starting the certificate flow, if the domain turns out not to be
+`SniEnabled`.
 
-Set `PIDGE_MCP_CUTOVER=1` to make the custom domain the public URL (the OAuth
-issuer, resource identifier and callback base) instead of just an accepted
-alternate host:
+**The script preserves live state.** Before changing anything it reads the
+live app (`az containerapp show`): the bound custom domain, its binding type
+and certificate id, and the `PIDGE_MCP_PUBLIC_URL` and
+`PIDGE_MCP_LEGACY_ISSUERS` env values. An input you leave unset keeps what
+is deployed; only an explicit value changes it.
+
+| Input | Unset or empty | Explicit values |
+|---|---|---|
+| `PIDGE_MCP_CUSTOM_DOMAIN` | Keeps the bound domain and its certificate ("keeping bound custom domain X"), or none if none is bound | `<domain>` binds it (it must match the bound domain, if any). `-` unbinds the bound domain |
+| `PIDGE_MCP_CUTOVER` | Stays cut over if the live public URL is `https://<custom domain>`, otherwise stays on the FQDN | `1` cuts over. `0` uses the FQDN, reverting a cutover if there was one |
+
+The script refuses, with an error and before touching anything, to:
+
+- unbind the domain that is the live public URL without also getting
+  `PIDGE_MCP_CUTOVER=0`;
+- bind a domain other than the one already bound (unbind it first);
+- cut over with no custom domain;
+- take any `PIDGE_MCP_CUTOVER` value other than `1`, `0` or unset.
+
+`PIDGE_MCP_LEGACY_ISSUERS` is carried over from the live app on every run,
+plus the issuer the run retires, if any. The current public URL is never
+listed as its own legacy issuer. So a grace given by an earlier cutover or
+revert survives later deploys. CI sets neither input, so it can never
+change the domain or the cutover state.
+
+### Cutover
+
+Run the script once with `PIDGE_MCP_CUTOVER=1` to make the custom domain
+the public URL (the OAuth issuer, resource identifier and callback base)
+instead of just an accepted alternate host. Later runs, CI included, stay
+cut over without the variable:
 
 - **Without cutover** (default): the Container Apps FQDN stays the public
   URL, and the custom domain is added to `PIDGE_MCP_ALT_HOSTS` — the server
@@ -69,15 +96,30 @@ alternate host:
   issuer.
 - **With cutover**: the custom domain becomes `PIDGE_MCP_PUBLIC_URL` and the
   new issuer. The old FQDN is kept as an alt host (still reachable) and as a
-  legacy issuer via `PIDGE_MCP_LEGACY_ISSUERS`, so tokens minted before the
-  cutover keep validating until they expire and get refreshed under the new
-  issuer.
+  legacy issuer via `PIDGE_MCP_LEGACY_ISSUERS`.
 
-Changing the issuer means every connected client has to re-add the pidge
-connector once — that's unavoidable, since the issuer is baked into the
-client's OAuth discovery. It does **not** mean re-authenticating with
-Microsoft; existing refresh tokens keep working, only the issuer they're
-presented against changes.
+What the legacy-issuer grace covers, for a connector added before the
+cutover (configured with `https://<fqdn>/mcp`):
+
+- **Access tokens** minted under the old issuer keep validating at `/mcp`
+  until they expire (at most one hour).
+- **Refresh keeps working.** `/token` (and `/authorize`) accept the old
+  `resource` value, `https://<fqdn>/mcp`, as well as the current one, for
+  every configured legacy issuer. The tokens they hand back are always
+  minted for the *current* issuer and resource, and those validate too.
+  So a connector that just keeps refreshing keeps working for as long as
+  the FQDN stays in `PIDGE_MCP_LEGACY_ISSUERS`, with no re-add and no new
+  Microsoft sign-in.
+
+What still needs the connector re-added with the new URL: a client that
+re-runs OAuth discovery against the old host. The protected-resource
+metadata served there names the *new* resource (`https://<domain>/mcp`),
+and a client that follows RFC 9728 rejects metadata whose `resource`
+differs from the URL it was configured with. That happens when the
+client's refresh token is gone (expired after 30 days unused, revoked by
+a sign-out everywhere, or discarded by the client) and it has to start a
+fresh authorization. Re-adding the connector with `https://<domain>/mcp`
+fixes it for good.
 
 Whichever mode is used, the custom domain needs its own callback registered
 on the Entra app (`https://<domain>/callback`) alongside the existing one,
@@ -90,18 +132,22 @@ shape (every URI already on the app, plus the missing one(s) appended):
 
 ```bash
 az ad app update --id <entra-app-id> --public-client-redirect-uris \
-  https://<container-apps-fqdn>/callback https://<custom-domain>/callback
+  https://<container-apps-fqdn>/callback <any-other-already-registered-uri> \
+  https://<custom-domain>/callback
 ```
 
-**Rollback.** Unset `PIDGE_MCP_CUTOVER` (or set it to anything other than
-`1`) and rerun the script: the Container Apps FQDN becomes the public URL
-and issuer again, and the custom domain reverts to an accepted alt host —
-it keeps resolving and serving traffic throughout. One gotcha: the script
-computes `PIDGE_MCP_LEGACY_ISSUERS` fresh on every run rather than merging
-with what's deployed, and only populates it in the cutover branch. So a
-client holding a token minted under the custom-domain issuer during the
-cutover window is not grandfathered in on rollback — it gets a 401 and has
-to sign in again, the same as any other issuer change.
+The first two are already registered and only being re-listed (Entra
+replaces the whole set on every `update`, so anything left out would be
+removed); the custom domain's `/callback` is the one actually being added.
+
+**Rollback.** Run the script with `PIDGE_MCP_CUTOVER=0`. Leaving it unset
+keeps the cutover. The Container Apps FQDN becomes the public URL and issuer
+again, and the custom domain reverts to an accepted alt host, so it keeps
+resolving and serving traffic throughout. The custom-domain origin is added
+to `PIDGE_MCP_LEGACY_ISSUERS`, so tokens minted under it during the cutover
+keep validating, and clients configured with `https://<domain>/mcp` can
+still refresh. To unbind the domain as well, pass
+`PIDGE_MCP_CUSTOM_DOMAIN=-` in the same run.
 
 ## CI/CD
 
@@ -145,8 +191,12 @@ the callback URI is registered once, by hand, during the initial deploy.
 `--skip-certificate` asserts the custom domain (if any) already has a
 `SniEnabled` certificate binding instead of trying to provision one from CI —
 that flow polls for up to 15 minutes and is meant to be run interactively by
-a human once, per [Custom domain](#custom-domain); it's a no-op when
-`PIDGE_MCP_CUSTOM_DOMAIN` is unset.
+a human once, per [Custom domain](#custom-domain). With a live
+`SniEnabled` binding the script reuses its certificate id, and with no
+custom domain bound or requested the flag does nothing. Since CI leaves
+`PIDGE_MCP_CUSTOM_DOMAIN` and `PIDGE_MCP_CUTOVER` unset (unless you create
+repository variables for them), every CI deploy keeps the live domain,
+certificate and cutover state as they are.
 
 ### One-time setup
 
@@ -182,6 +232,30 @@ missing:
   replaces an older, unconditioned assignment from before this condition
   existed.
 
+**What the condition does and doesn't limit.** The condition limits which
+*roles* the deploy identity can grant. It does not limit what the identity
+can *reach*. With Contributor on the resource group it can reach
+everything in it: the Key Vault, the app's identity `id-pidge-mcp`, its own
+identity `id-pidge-deploy`, and the container app. Concretely, it can:
+
+- deploy any image to run as `id-pidge-mcp`, which can read every user's
+  Microsoft refresh token and the signing key from the vault;
+- add a federated credential to itself;
+- switch the vault's access model;
+- grant AcrPull or Key Vault Secrets Officer to any principal, since the
+  condition restricts role ids, not who receives them.
+
+So whoever can push to `main` can deploy, and through the deploy can read
+production mailbox tokens. That includes any tool or agent session
+holding a GitHub credential with write access to the repository. The
+intended boundary is a branch ruleset on `main` that requires the CI
+status checks (Check, Clippy, Format, Test) to pass on a commit before it
+can land, and blocks force-pushes and deletion. Such a ruleset exists on
+this repository ("main: CI must pass", no review requirement, no bypass
+list); `gh api repos/mklab-se/pidge/rulesets` lists it. Add a
+pull-request or review requirement there when more than one person has
+write access.
+
 It then always sets the GitHub repository configuration the workflow reads:
 
 | Name | Kind | Value |
@@ -192,10 +266,31 @@ It then always sets the GitHub repository configuration the workflow reads:
 | `PIDGE_MCP_ALLOWED_EMAILS` | secret | from the environment variable of the same name (required; the script refuses to run without it, and never echoes the value) |
 | `PIDGE_MCP_CUSTOM_DOMAIN` | variable | from the environment variable of the same name, only if set |
 
-`PIDGE_MCP_CUTOVER` isn't set by the script — it's a plain repository
-variable to flip by hand (`gh variable set PIDGE_MCP_CUTOVER --body 1`) when
-you're ready to make the custom domain the public URL, per
-[Custom domain](#custom-domain).
+**Resources outside `main.bicep`.** Everything the server runs on is
+declared in `main.bicep`, with three exceptions, all created by scripts:
+
+- **The deploy identity**, `id-pidge-deploy`, with its federated credential
+  and its two role assignments (`setup-github-oidc.sh`). It is what runs
+  the Bicep deployment from CI, so it has to exist before the first CI
+  run. Declaring it in the template it deploys would also mean the
+  identity re-applies its own federated credential and its own
+  Contributor and RBAC Administrator grants on every run, and the RBAC
+  condition deliberately forbids it from assigning those roles. It
+  carries the same tags as the Bicep resources, with
+  `managed-by=script`.
+- **The managed certificate**, `pidge-mcp-managed` (`deploy.sh`, Phase
+  3b). A managed certificate can only be issued after the hostname is
+  bound to the app, and issuing it takes minutes of polling, so the
+  script creates it between two Bicep deployments and passes its id back
+  in as `customDomainCertificateId`.
+
+`PIDGE_MCP_CUTOVER` isn't set by the script, and doesn't need to be a
+repository variable at all: cut over (or back) with one local run of
+`deploy.sh`, and CI keeps that state from then on. If you do create
+`PIDGE_MCP_CUTOVER` or `PIDGE_MCP_CUSTOM_DOMAIN` as repository variables,
+the workflow passes them on and every CI deploy applies them, including a
+stale `0` that reverts a cutover. The `PIDGE_MCP_CUSTOM_DOMAIN` variable the
+setup script sets is harmless as long as it names the bound domain.
 
 ## Logs
 
@@ -209,10 +304,14 @@ A JSON line is a flat object: `timestamp`, `level`, `target`, `message`
 (the event name), plus that event's own fields at the top level — there is
 no nested `fields` object. Two structured events, one line per occurrence:
 
-- **`http_request`**, one per HTTP request: `method`, `route` (path only —
-  no query string, since `/authorize` and `/callback` carry OAuth state and
-  codes there; a `/dl/<token>` path is redacted to `/dl/<redacted>` because
-  the token is a bearer credential), `status`, `latency_ms`.
+- **`http_request`**, one per HTTP request: `method`, `route`, `status`,
+  `latency_ms`. `route` is the route template the request matched (for
+  example `/authorize`, `/mcp`, `/.well-known/oauth-protected-resource`),
+  never the raw path: no query string, since `/authorize` and `/callback`
+  carry OAuth state and codes there, and nothing a caller typed into the
+  path. The download route is logged as `/dl/<redacted>` because its token
+  is a bearer credential. A request that matched no route is logged as
+  `<unmatched>`.
 - **`tool_call`**, one per MCP tool invocation: `tool` (the tool name),
   `user` (an 8-hex-character hash of the caller's sign-in address, stable
   across restarts — never the address), `duration_ms`, `outcome` (`ok`,
@@ -395,15 +494,33 @@ token already issued to that user carries the old generation and is
 rejected from that point on — the bearer check on `/mcp` and the OAuth
 refresh grant both compare the token's generation against the stored one
 and fail with `invalid_token` / `invalid_grant` on a mismatch, regardless
-of expiry. Every client of that user, including the one that made the
-call, must sign in again.
+of expiry. Outstanding `mail_attachment` download links carry the
+generation too, and `/dl` refuses one minted before the sign-out with the
+same 404 as an expired link. Every client of that user, including the one
+that made the call, must sign in again.
 
-The generation check fails closed: if the secret store can't be read (a
-transient Key Vault error, for example), the server can't prove the caller
-*wasn't* signed out, so it rejects the token rather than let a stale
-in-memory value pass one through. A client sees this as a normal 401 and
-retries or re-authenticates; it does not distinguish "signed out" from
-"store unavailable".
+The generation lookup is checked in-memory first. A cached value is
+trusted for 5 minutes after the store last confirmed it; after that, or on
+a miss, the secret store is read again. So a generation changed outside
+this process (an edit in Key Vault, or another replica if the app were
+ever scaled out, which `main.bicep` rules out with `maxReplicas: 1`) takes
+effect within 5 minutes. A sign-out through `accounts_update` takes effect
+at once. It's a failing store read (a transient Key Vault error, say) that
+the server can't tell apart from an actual sign-out, and an expired cached
+value is not used as a fallback. Each of the three places that check it
+fails closed, but not identically:
+
+- **The bearer check on `/mcp`** (`oauth/bearer.rs`) returns 401
+  `invalid_token` either way — on a real generation mismatch or on a store
+  read failure. A client just sees an expired-looking token and
+  re-authenticates.
+- **A refresh grant with a stale generation** (`oauth/mod.rs`) returns 400
+  `invalid_grant`, `"session was signed out"` — an unambiguous "sign in
+  again", since the store read succeeded and confirmed the mismatch.
+- **A store-read failure during either grant type** (`authorization_code`
+  or `refresh_token`, `oauth/mod.rs`) returns 503
+  `temporarily_unavailable` before the mismatch can even be checked — a
+  signal to retry shortly, not to re-authenticate.
 
 ### Key Vault purge protection
 

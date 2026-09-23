@@ -75,15 +75,71 @@ impl SecretStore for FlakySecrets {
 #[derive(Clone, Default)]
 pub struct LogCapture(Arc<Mutex<Vec<u8>>>);
 
+/// Serialises every test that installs a tracing subscriber, so two
+/// captures never interleave and each full interest rebuild sees exactly
+/// the subscriber whose test is running.
+static LOG_LOCK: Mutex<()> = Mutex::new(());
+
+/// Keeps one dispatcher registered with `tracing` for the whole test
+/// process.
+///
+/// `tracing` caches each callsite's interest globally. When a callsite is
+/// hit for the first time while at most one dispatcher is registered,
+/// `tracing-core` computes its interest from the *hitting thread's* default
+/// dispatcher. Test threads without a subscriber report "never", and that
+/// verdict is cached, so a capturing test running at the same time silently
+/// loses every event from that callsite until the next full rebuild. With a
+/// second, permanently registered dispatcher the cache is instead computed
+/// from the registered subscribers, all of which enable every level.
+fn keep_registry_populated() {
+    static KEEP_ALIVE: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    KEEP_ALIVE.get_or_init(|| {
+        let sink = tracing_subscriber::fmt()
+            .with_writer(std::io::sink)
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        // `Dispatch::new` registers the dispatcher; forgetting it keeps the
+        // registration alive for the rest of the process.
+        std::mem::forget(tracing::Dispatch::new(sink));
+    });
+}
+
+/// Keeps a captured subscriber installed (and the [`LOG_LOCK`] held) until
+/// dropped. Field order matters: the subscriber guard drops first, then the
+/// lock is released.
+pub struct LogGuard {
+    _subscriber: tracing::subscriber::DefaultGuard,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
 impl LogCapture {
-    pub fn start() -> (Self, tracing::subscriber::DefaultGuard) {
+    pub fn start() -> (Self, LogGuard) {
         let capture = Self::default();
         let subscriber = tracing_subscriber::fmt()
             .with_writer(capture.clone())
             .with_ansi(false)
             .with_max_level(tracing::Level::TRACE)
             .finish();
-        (capture, tracing::subscriber::set_default(subscriber))
+        let guard = Self::install(subscriber);
+        (capture, guard)
+    }
+
+    /// Installs `subscriber` as this thread's default under [`LOG_LOCK`],
+    /// with the process-wide keep-alive dispatcher registered first.
+    pub fn install<S>(subscriber: S) -> LogGuard
+    where
+        S: tracing::Subscriber + Send + Sync + 'static,
+    {
+        let lock = LOG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        keep_registry_populated();
+        // Registering a dispatcher rebuilds every cached interest from the
+        // registered subscribers, which now always include the keep-alive.
+        let subscriber = tracing::subscriber::set_default(subscriber);
+        LogGuard {
+            _subscriber: subscriber,
+            _lock: lock,
+        }
     }
 
     pub fn text(&self) -> String {

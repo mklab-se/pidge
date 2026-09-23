@@ -115,7 +115,7 @@ tempfile = "3.27"
 
 # Remote MCP server (pidge-mcp)
 rmcp = { version = "3.4", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "form", "query"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "form", "query", "matched-path"] }
 http = "1"
 tower-http = { version = "0.7", features = ["trace"] }
 tokio-util = "0.7"

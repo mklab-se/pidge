@@ -200,6 +200,20 @@ impl Config {
         format!("{}/mcp", self.base_url())
     }
 
+    /// Whether a client's RFC 8707 `resource` names this server: the
+    /// current [`Self::resource_url`], or `<legacy issuer>/mcp` for any of
+    /// [`Self::legacy_issuers`], so a client configured before a domain
+    /// cutover can still authorize and refresh. A trailing slash is
+    /// ignored. Tokens are always minted for the current resource.
+    pub fn accepts_resource(&self, resource: &str) -> bool {
+        let resource = resource.trim_end_matches('/');
+        resource == self.resource_url()
+            || self
+                .legacy_issuers
+                .iter()
+                .any(|issuer| resource == format!("{issuer}/mcp"))
+    }
+
     /// Where Microsoft sends the user back after sign-in.
     pub fn microsoft_callback_url(&self) -> String {
         format!("{}/callback", self.base_url())
@@ -252,6 +266,25 @@ mod tests {
             ]
         );
         assert_eq!(config.legacy_issuers, vec!["https://old.test".to_string()]);
+    }
+
+    #[test]
+    fn accepts_the_current_resource_and_legacy_issuers_resources_only() {
+        let mut vars = base_map();
+        vars.insert(
+            "PIDGE_MCP_LEGACY_ISSUERS".to_string(),
+            "https://old.test".to_string(),
+        );
+        let config = Config::from_map(&vars).unwrap();
+        assert!(config.accepts_resource("http://localhost:8080/mcp"));
+        assert!(config.accepts_resource("http://localhost:8080/mcp/"));
+        assert!(config.accepts_resource("https://old.test/mcp"));
+        assert!(!config.accepts_resource("https://old.test"));
+        assert!(!config.accepts_resource("https://old.test/mcp/extra"));
+        assert!(!config.accepts_resource("https://evil.test/mcp"));
+
+        let config = Config::from_map(&base_map()).unwrap();
+        assert!(!config.accepts_resource("https://old.test/mcp"));
     }
 
     #[test]

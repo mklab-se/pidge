@@ -7,7 +7,8 @@
 #
 # Idempotent: safe to re-run after the identity or role assignments already
 # exist. Creates, if missing:
-#   - user-assigned identity `id-pidge-deploy` in the resource group
+#   - user-assigned identity `id-pidge-deploy` in the resource group, tagged
+#     like main.bicep's resources (managed-by=script)
 #   - a federated credential trusting GitHub Actions runs from `main`
 #   - a Contributor role assignment for that identity, scoped to the
 #     resource group
@@ -43,6 +44,10 @@ ROLE_ACR_PULL="7f951dda-4ed3-4680-a7ca-43fe172d538d"
 ROLE_KV_SECRETS_OFFICER="b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
 RBAC_CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}}))"
 RBAC_CONDITION_DESCRIPTION="pidge CI: may only assign AcrPull and Key Vault Secrets Officer"
+# The same tags main.bicep puts on everything it declares, except
+# managed-by: this identity is created here, not by Bicep (see the README's
+# "One-time setup" for why).
+IDENTITY_TAGS=(project=pidge environment=spike managed-by=script repository=github.com/mklab-se/pidge)
 ALLOWED_EMAILS="${PIDGE_MCP_ALLOWED_EMAILS:?set PIDGE_MCP_ALLOWED_EMAILS (comma-separated) before running this script}"
 CUSTOM_DOMAIN="${PIDGE_MCP_CUSTOM_DOMAIN:-}"
 
@@ -53,12 +58,19 @@ TENANT_ID="$(az account show --query tenantId -o tsv)"
 
 log "Identity '$IDENTITY_NAME' in resource group '$RESOURCE_GROUP'"
 if az identity show --resource-group "$RESOURCE_GROUP" --name "$IDENTITY_NAME" &>/dev/null; then
-  log "  already exists"
+  # Merged in so an identity created by an older run of this script picks
+  # up the tags it was missing (existing tags are kept).
+  az tag update \
+    --resource-id "$(az identity show --resource-group "$RESOURCE_GROUP" --name "$IDENTITY_NAME" --query id -o tsv)" \
+    --operation Merge \
+    --tags "${IDENTITY_TAGS[@]}" \
+    >/dev/null
+  log "  already exists (tags merged)"
 else
   az identity create \
     --resource-group "$RESOURCE_GROUP" \
     --name "$IDENTITY_NAME" \
-    --tags project=pidge environment=spike managed-by=script \
+    --tags "${IDENTITY_TAGS[@]}" \
     >/dev/null
   log "  created"
 fi

@@ -138,6 +138,13 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
 /// this harness's tests, so access tokens are minted directly from
 /// `h.state.signer`.
 async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
+    harness_with_hosts(alt_hosts, Vec::new()).await
+}
+
+/// Like [`harness_with_alt_hosts`], also accepting tokens and `resource`
+/// values of `legacy_issuers` (see `PIDGE_MCP_LEGACY_ISSUERS`), wired the
+/// way `main` wires them.
+async fn harness_with_hosts(alt_hosts: Vec<String>, legacy_issuers: Vec<String>) -> Harness {
     let microsoft = MockServer::start().await;
     let secrets_dir = tempfile::tempdir().unwrap();
     let secrets: SharedSecrets = Arc::new(FileSecrets::new(secrets_dir.path()).unwrap());
@@ -150,11 +157,12 @@ async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
         },
         markitdown: "markitdown".into(),
         alt_hosts,
-        legacy_issuers: Vec::new(),
+        legacy_issuers: legacy_issuers.clone(),
         log_format: crate::config::LogFormat::Text,
     };
     let key = random_bytes(32);
-    let signer = Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp"));
+    let signer =
+        Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp")).with_legacy_issuers(legacy_issuers);
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
     let auth = AuthClient::for_test("cid", microsoft.uri()).with_backend(token_backend.clone());
     let graph = GraphClient::for_test(auth, format!("{}/v1.0", microsoft.uri()));
@@ -1417,6 +1425,99 @@ async fn tokens_without_a_generation_claim_are_generation_zero() {
     assert_eq!(body["error"], "invalid_grant");
 }
 
+const LEGACY: &str = "https://ca-old.example.test";
+
+/// After a domain cutover a client configured with the old resource keeps
+/// working: its old access token is accepted at `/mcp`, and it can refresh
+/// (and authorize) naming the old resource, getting tokens for the new one.
+#[tokio::test]
+async fn legacy_issuer_tokens_and_resource_keep_working_after_cutover() {
+    let h = harness_with_hosts(Vec::new(), vec![LEGACY.to_string()]).await;
+    let jane = "jane@example.com";
+
+    // (2) An access token minted before the cutover: legacy iss and aud.
+    let now = chrono::Utc::now().timestamp();
+    let legacy_access = sign_raw(
+        serde_json::json!({
+            "typ": "access", "jti": "j1", "iss": LEGACY, "aud": format!("{LEGACY}/mcp"),
+            "sub": jane, "iat": now, "exp": now + 600, "scope": "mail", "gen": 0,
+        }),
+        &h.key,
+    );
+    assert_eq!(
+        mcp_initialize(&h.app, Some(&legacy_access)).await,
+        StatusCode::OK
+    );
+    // An issuer that was never configured is still refused.
+    let foreign_access = sign_raw(
+        serde_json::json!({
+            "typ": "access", "jti": "j2", "iss": "https://evil.test",
+            "aud": "https://evil.test/mcp", "sub": jane, "iat": now, "exp": now + 600,
+            "scope": "mail", "gen": 0,
+        }),
+        &h.key,
+    );
+    assert_eq!(
+        mcp_initialize(&h.app, Some(&foreign_access)).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // (1) A refresh naming the legacy resource succeeds, and the new access
+    // token is for the current issuer and resource.
+    let client_id = register(&h.app).await;
+    let refresh = h.state.signer.issue_refresh(jane, &client_id, 0).unwrap();
+    let (status, body) = redeem(
+        &h.app,
+        &format!(
+            "grant_type=refresh_token&client_id={}&refresh_token={}&resource={}",
+            urlenc(&client_id),
+            urlenc(&refresh),
+            urlenc(&format!("{LEGACY}/mcp"))
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let access = body["access_token"].as_str().unwrap();
+    let claims = h.state.signer.verify_access(access).unwrap();
+    assert_eq!(claims.iss, PUBLIC);
+    assert_eq!(claims.aud, format!("{PUBLIC}/mcp"));
+    assert_eq!(mcp_initialize(&h.app, Some(access)).await, StatusCode::OK);
+
+    // Any other resource is still refused.
+    let (status, body) = redeem(
+        &h.app,
+        &format!(
+            "grant_type=refresh_token&client_id={}&refresh_token={}&resource={}",
+            urlenc(&client_id),
+            urlenc(&refresh),
+            urlenc("https://evil.test/mcp")
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_target");
+
+    // /authorize accepts the legacy resource too (the consent page, not an
+    // error redirect).
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let uri = format!(
+        "{}&resource={}",
+        authorize_uri(&client_id, verifier),
+        urlenc(&format!("{LEGACY}/mcp"))
+    );
+    let resp = get(&h, &uri).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let uri = format!(
+        "{}&resource={}",
+        authorize_uri(&client_id, verifier),
+        urlenc("https://evil.test/mcp")
+    );
+    let resp = get(&h, &uri).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers()[header::LOCATION].to_str().unwrap();
+    assert_eq!(query(location, "error").as_deref(), Some("invalid_target"));
+}
+
 #[tokio::test]
 async fn token_generation_lookups_fail_closed_while_the_store_is_down() {
     let h = harness("jane@example.com").await;
@@ -1532,4 +1633,39 @@ async fn http_request_log_line_redacts_download_tokens() {
     let logged = logs.text();
     assert!(!logged.contains("some-signed-token"), "{logged}");
     assert!(logged.contains("/dl/<redacted>"), "{logged}");
+}
+
+#[tokio::test]
+async fn http_request_log_line_names_the_route_template_or_unmatched() {
+    let (logs, _guard) = crate::test_support::LogCapture::start();
+    let h = harness("jane@example.com").await;
+
+    // Variants axum doesn't route to `/dl/{token}`, and a path the caller
+    // made up: none of them may reach the log verbatim.
+    for path in [
+        "/DL/secret-token-1",
+        "/%64l/secret-token-2",
+        "/dl",
+        "/made-up/secret-token-3",
+    ] {
+        let status = get(&h, path).await.status();
+        assert!(!status.is_success(), "{path}: {status}");
+    }
+    // A matched route with a query string, and the nested MCP service.
+    let _ = get(&h, "/authorize?client_id=secret-token-4").await;
+    assert_eq!(mcp_initialize(&h.app, None).await, StatusCode::UNAUTHORIZED);
+
+    let logged = logs.text();
+    let lines: Vec<&str> = logged
+        .lines()
+        .filter(|l| l.contains("http_request"))
+        .collect();
+    assert_eq!(lines.len(), 6, "{logged}");
+    for line in &lines[..4] {
+        assert!(line.contains("<unmatched>"), "{line}");
+    }
+    assert!(lines[4].contains("route=/authorize "), "{}", lines[4]);
+    assert!(lines[5].contains("route=/mcp "), "{}", lines[5]);
+    assert!(!logged.contains("secret-token"), "{logged}");
+    assert!(!logged.contains("made-up"), "{logged}");
 }

@@ -366,7 +366,9 @@ pub(crate) mod tests {
         );
         let line = lines[0];
         assert!(line.contains("mail_overview"), "{line}");
-        assert!(line.contains("error"), "{line}");
+        // Exactly `error`, not `tool_error`: the Graph failure is a handler
+        // error, and the line must say so without quoting it.
+        assert!(line.contains("outcome=\"error\""), "{line}");
         assert!(!line.contains("secret detail"), "{line}");
         crate::test_support::assert_no_address("tool_call log", line);
     }
