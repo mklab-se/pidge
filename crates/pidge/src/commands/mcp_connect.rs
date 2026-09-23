@@ -39,15 +39,16 @@ pub async fn run(url: String, store: TokenStorage, yes: bool, json_output: bool)
     result.map_err(|e| mcp::remap_session_expired(&url, e))
 }
 
-/// `--dry-run`: report what `connect` would do without touching the server
-/// or running an interactive sign-in. If there's no usable stored session,
-/// says sign-in would be required and stops there (a dry run must not open
-/// a browser or block on anything). If there is one, makes exactly one
-/// `accounts_list` read and reports which local accounts would be
-/// connected and which settings would be copied.
+/// `--dry-run`: report what `connect` would do without touching the server,
+/// refreshing anything, or running an interactive sign-in. If there's no
+/// usable stored session, says sign-in would be required and stops there.
+/// If the stored session is close enough to expiry that using it would
+/// require a refresh, says so and stops rather than performing that
+/// refresh. Otherwise makes exactly one `accounts_list` read (via
+/// [`plan_dry_run`]) and reports which local accounts would be connected
+/// and which settings would be copied.
 async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()> {
-    let http = reqwest::Client::new();
-    let Some((tokens, backend)) = try_existing_session(&http, url, store).await? else {
+    let Some((tokens, backend)) = find_stored_tokens(url, store)? else {
         if json_output {
             println!(
                 "{}",
@@ -61,36 +62,47 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
         return Ok(());
     };
 
+    if tokens.needs_refresh() {
+        if json_output {
+            println!(
+                "{}",
+                json!({
+                    "dry_run": true,
+                    "server": tokens.server,
+                    "signed_in": true,
+                    "store": backend_name(backend),
+                    "token_near_expiry": true,
+                })
+            );
+        } else {
+            println!(
+                "Dry run: signed in to {} ({} backend), but the access token is near expiry.",
+                tokens.server.cyan(),
+                backend_name(backend)
+            );
+            println!("  skipping the live accounts_list call — a dry run never refreshes tokens.");
+            println!(
+                "  run `pidge mcp connect {url}` (without --dry-run) to see the current plan."
+            );
+        }
+        return Ok(());
+    }
+
+    let http = reqwest::Client::new();
     let mut raw = McpRpc::new(http, tokens.server.clone(), tokens.access_token.clone());
     raw.initialize()
         .await
         .context("failed to initialize the MCP session")?;
-    let list_text = McpCalls::call_tool(&mut raw, "accounts_list", json!({}))
-        .await
-        .context("accounts_list failed")?
-        .text;
-    let already_connected = parse_connected_addresses(&list_text);
 
     let config = Config::load()?;
     let local_accounts: Vec<String> = config.accounts.iter().map(|a| a.email.clone()).collect();
-    let would_connect: Vec<String> = local_accounts
-        .iter()
-        .filter(|email| !already_connected.contains(&email.to_lowercase()))
-        .cloned()
-        .collect();
-
-    let mut would_copy = Vec::new();
-    if let Some(default_send) = config.defaults.send.as_deref()
-        && (already_connected.contains(&default_send.to_lowercase())
-            || would_connect
-                .iter()
-                .any(|e| e.eq_ignore_ascii_case(default_send)))
-    {
-        would_copy.push(format!("default_sender={default_send}"));
-    }
-    for sender in &config.trusted_senders {
-        would_copy.push(format!("trust={sender}"));
-    }
+    let plan = plan_dry_run(
+        &mut raw,
+        &local_accounts,
+        config.defaults.send.as_deref(),
+        &config.trusted_senders,
+    )
+    .await?;
 
     if json_output {
         println!(
@@ -100,8 +112,8 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
                 "server": tokens.server,
                 "signed_in": true,
                 "store": backend_name(backend),
-                "would_connect": would_connect,
-                "would_copy": would_copy,
+                "would_connect": plan.would_connect,
+                "would_copy": plan.would_copy,
             })
         );
     } else {
@@ -110,18 +122,67 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
             tokens.server.cyan(),
             backend_name(backend)
         );
-        if would_connect.is_empty() {
+        if plan.would_connect.is_empty() {
             println!("  every local account is already connected");
         } else {
-            println!("  would connect: {}", would_connect.join(", "));
+            println!("  would connect: {}", plan.would_connect.join(", "));
         }
-        if would_copy.is_empty() {
+        if plan.would_copy.is_empty() {
             println!("  no settings to copy");
         } else {
-            println!("  would copy: {}", would_copy.join(", "));
+            println!("  would copy: {}", plan.would_copy.join(", "));
         }
     }
     Ok(())
+}
+
+/// The `--dry-run` plan for an already-signed-in session: which local
+/// accounts would be connected, and which settings would be copied. Takes
+/// `calls` generically (over [`McpCalls`]) purely so it's unit-testable
+/// with a recording fake — a test can assert this makes exactly one
+/// `accounts_list` call and nothing else, since a dry run must never call
+/// `accounts_connect`/`accounts_update`.
+struct DryRunPlan {
+    would_connect: Vec<String>,
+    would_copy: Vec<String>,
+}
+
+async fn plan_dry_run<C: McpCalls>(
+    calls: &mut C,
+    local_accounts: &[String],
+    default_send: Option<&str>,
+    trusted_senders: &[String],
+) -> Result<DryRunPlan> {
+    let list_text = calls
+        .call_tool("accounts_list", json!({}))
+        .await
+        .context("accounts_list failed")?
+        .text;
+    let already_connected = parse_connected_addresses(&list_text);
+
+    let would_connect: Vec<String> = local_accounts
+        .iter()
+        .filter(|email| !already_connected.contains(&email.to_lowercase()))
+        .cloned()
+        .collect();
+
+    let mut would_copy = Vec::new();
+    if let Some(default_send) = default_send
+        && (already_connected.contains(&default_send.to_lowercase())
+            || would_connect
+                .iter()
+                .any(|e| e.eq_ignore_ascii_case(default_send)))
+    {
+        would_copy.push(format!("default_sender={default_send}"));
+    }
+    for sender in trusted_senders {
+        would_copy.push(format!("trust={sender}"));
+    }
+
+    Ok(DryRunPlan {
+        would_connect,
+        would_copy,
+    })
 }
 
 async fn run_inner(url: &str, store: TokenStorage, yes: bool, json_output: bool) -> Result<()> {
@@ -170,46 +231,14 @@ async fn run_inner(url: &str, store: TokenStorage, yes: bool, json_output: bool)
         }
     }
 
-    // Don't trust an Enter keypress (or even a completed poll) at face
-    // value: re-read accounts_list once, and only report/act on what the
-    // server now actually shows as connected.
-    let verify_text = rpc
-        .call_tool("accounts_list", json!({}))
-        .await
-        .context("accounts_list failed")?
-        .text;
-    let verified = parse_connected_addresses(&verify_text);
-
-    let mut connected = Vec::new();
-    for email in &outcome.connected {
-        if verified.contains(&email.to_lowercase()) {
-            connected.push(email.clone());
-        } else {
-            eprintln!(
-                "warning: {email} did not show as connected after signing in; run `pidge mcp connect {url}` again to finish."
-            );
-        }
-    }
-
-    // Copy settings that only make sense once the account they refer to is
-    // actually connected. A rejected or failing update is a warning, never
-    // fatal — the rest of the summary still gets reported.
-    if let Some(default_send) = config.defaults.send.as_deref()
-        && verified.contains(&default_send.to_lowercase())
-        && let Err(e) = rpc
-            .call_tool("accounts_update", json!({ "default_sender": default_send }))
-            .await
-    {
-        eprintln!("warning: could not set default sender to {default_send}: {e:#}");
-    }
-    for sender in &config.trusted_senders {
-        if let Err(e) = rpc
-            .call_tool("accounts_update", json!({ "trust": sender }))
-            .await
-        {
-            eprintln!("warning: could not add trusted sender {sender}: {e:#}");
-        }
-    }
+    let connected = finish_migration(
+        &mut rpc,
+        url,
+        &outcome,
+        config.defaults.send.as_deref(),
+        &config.trusted_senders,
+    )
+    .await?;
 
     let final_text = rpc
         .call_tool("accounts_list", json!({}))
@@ -282,28 +311,63 @@ async fn ensure_signed_in(
 /// falling back to the other backend on a miss — so `connect --store=file`
 /// after an earlier `connect --store=keychain` reuses that session instead
 /// of silently signing in again and leaving the keychain entry behind.
-/// Only tries the second backend when the first has no entry at all; an
-/// entry that exists but is irrecoverably expired (`SessionExpired`) is
-/// reported as `None` without trying the other one. Never triggers an
+/// A session that exists but is irrecoverably expired (`SessionExpired`) is
+/// reported as `None` without trying the other backend. Never triggers an
 /// interactive sign-in itself.
 async fn try_existing_session(
     http: &reqwest::Client,
     url: &str,
     preferred: TokenStorage,
 ) -> Result<Option<(McpTokens, TokenStorage)>> {
-    for backend in candidate_backends(preferred) {
-        let Some(mut tokens) = McpTokenStore::load(url, backend)? else {
-            continue;
-        };
-        let server = tokens.server.clone();
-        return match valid_access_token(http, &server, &mut tokens).await {
-            Ok(_) => {
-                McpTokenStore::save(&tokens, backend)?;
-                Ok(Some((tokens, backend)))
+    let Some((mut tokens, backend)) = find_stored_tokens(url, preferred)? else {
+        return Ok(None);
+    };
+    match refresh_if_needed(http, &mut tokens, backend).await {
+        Ok(()) => Ok(Some((tokens, backend))),
+        Err(ClientError::SessionExpired { .. }) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Find a stored session for `url` with no network call and no refresh —
+/// just the raw local/keychain lookup, tried in [`candidate_backends`]
+/// order. Used directly by `--dry-run` (which must never refresh) and as
+/// the first step of [`try_existing_session`].
+fn find_stored_tokens(
+    url: &str,
+    preferred: TokenStorage,
+) -> Result<Option<(McpTokens, TokenStorage)>> {
+    Ok(find_first_hit(&candidate_backends(preferred), |backend| {
+        McpTokenStore::load(url, backend)
+    })?)
+}
+
+/// Try `load` against each of `candidates` in order, returning the first
+/// hit (`Ok(Some(_))`). A miss (`Ok(None)`) moves on to the next candidate.
+/// An error only propagates when it comes from the *first* (preferred)
+/// candidate; a load error from a later, fallback candidate is treated as a
+/// miss instead (with a stderr warning) rather than failing the whole
+/// lookup — `--store=file` exists precisely for machines where the
+/// keychain/Secret Service isn't usable, and a fallback probe of it must
+/// not turn into a hard dependency on it. Generic and synchronous so it's
+/// directly unit-testable with no real keychain or network.
+fn find_first_hit<T, E: std::fmt::Display>(
+    candidates: &[TokenStorage],
+    mut load: impl FnMut(TokenStorage) -> Result<Option<T>, E>,
+) -> Result<Option<(T, TokenStorage)>, E> {
+    for (index, &backend) in candidates.iter().enumerate() {
+        match load(backend) {
+            Ok(Some(value)) => return Ok(Some((value, backend))),
+            Ok(None) => continue,
+            Err(e) if index == 0 => return Err(e),
+            Err(e) => {
+                eprintln!(
+                    "warning: could not check the {} backend for a stored session: {e}; trying the next one",
+                    backend_name(backend)
+                );
+                continue;
             }
-            Err(ClientError::SessionExpired { .. }) => Ok(None),
-            Err(e) => Err(e.into()),
-        };
+        }
     }
     Ok(None)
 }
@@ -392,12 +456,12 @@ impl RefreshingRpc {
 impl McpCalls for RefreshingRpc {
     async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> Result<ToolResult> {
         let server = self.tokens.server.clone();
-        let previous_access_token = self.tokens.access_token.clone();
-        let access_token = valid_access_token(&self.http, &server, &mut self.tokens).await?;
-        if access_token != previous_access_token {
-            self.inner.set_access_token(access_token);
-            McpTokenStore::save(&self.tokens, self.store)?;
-        }
+        refresh_if_needed(&self.http, &mut self.tokens, self.store).await?;
+        // Cheap in-memory assignment regardless of whether a refresh just
+        // happened — unlike the token-store write inside
+        // `refresh_if_needed`, there's no reason to guard this one.
+        self.inner
+            .set_access_token(self.tokens.access_token.clone());
         match <McpRpc as McpCalls>::call_tool(&mut self.inner, name, arguments).await {
             Ok(result) => Ok(result),
             Err(e) if is_unauthorized(&e) => {
@@ -413,6 +477,40 @@ fn is_unauthorized(err: &anyhow::Error) -> bool {
         err.downcast_ref::<ClientError>(),
         Some(ClientError::Graph { status: 401, .. })
     )
+}
+
+/// True if `err`'s chain contains either flavor of "this hosted session is
+/// dead, sign in again" — the client's own [`ClientError::SessionExpired`]
+/// (a failed refresh grant) or the CLI-level
+/// [`ClientError::McpSessionExpired`] a caller may already have remapped it
+/// to. Used by the poller to stop retrying immediately instead of spending
+/// its whole deadline re-POSTing a revoked refresh token (see N2).
+fn is_session_expired(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<ClientError>(),
+            Some(ClientError::SessionExpired { .. } | ClientError::McpSessionExpired { .. })
+        )
+    })
+}
+
+/// Refresh `tokens` in place if [`McpTokens::needs_refresh`] says it's due,
+/// persisting the new tokens through `store` only when the access token
+/// actually changed — an unconditional save on every call would mean a
+/// keychain write (and on some platforms an access prompt) even when
+/// nothing changed. Shared by [`try_existing_session`] and [`RefreshingRpc`].
+async fn refresh_if_needed(
+    http: &reqwest::Client,
+    tokens: &mut McpTokens,
+    store: TokenStorage,
+) -> Result<(), ClientError> {
+    let server = tokens.server.clone();
+    let previous_access_token = tokens.access_token.clone();
+    let access_token = valid_access_token(http, &server, tokens).await?;
+    if access_token != previous_access_token {
+        McpTokenStore::save(tokens, store)?;
+    }
+    Ok(())
 }
 
 /// The outcome of one [`run_migration`] run.
@@ -479,6 +577,61 @@ where
     Ok(MigrationOutcome { connected, skipped })
 }
 
+/// After the migration loop: re-verify who's actually connected — never
+/// trust an Enter keypress, or even a completed poll, at face value — then
+/// copy `default_send` (only for a *verified* address) and every trusted
+/// sender onto the server. Each `accounts_update` failure is a warning on
+/// stderr, never fatal, so one rejected update doesn't stop the next or
+/// swallow the summary. Returns the verified subset of `outcome.connected`
+/// to report as the run's `connected` list; an account the loop thought it
+/// connected but that doesn't verify gets a stderr warning instead and is
+/// dropped from that list. Takes `calls` generically (over [`McpCalls`]) so
+/// it's unit-testable with a recording fake, with no network involved.
+async fn finish_migration<C: McpCalls>(
+    calls: &mut C,
+    url: &str,
+    outcome: &MigrationOutcome,
+    default_send: Option<&str>,
+    trusted_senders: &[String],
+) -> Result<Vec<String>> {
+    let verify_text = calls
+        .call_tool("accounts_list", json!({}))
+        .await
+        .context("accounts_list failed")?
+        .text;
+    let verified = parse_connected_addresses(&verify_text);
+
+    let mut connected = Vec::new();
+    for email in &outcome.connected {
+        if verified.contains(&email.to_lowercase()) {
+            connected.push(email.clone());
+        } else {
+            eprintln!(
+                "warning: {email} did not show as connected after signing in; run `pidge mcp connect {url}` again to finish."
+            );
+        }
+    }
+
+    if let Some(default_send) = default_send
+        && verified.contains(&default_send.to_lowercase())
+        && let Err(e) = calls
+            .call_tool("accounts_update", json!({ "default_sender": default_send }))
+            .await
+    {
+        eprintln!("warning: could not set default sender to {default_send}: {e:#}");
+    }
+    for sender in trusted_senders {
+        if let Err(e) = calls
+            .call_tool("accounts_update", json!({ "trust": sender }))
+            .await
+        {
+            eprintln!("warning: could not add trusted sender {sender}: {e:#}");
+        }
+    }
+
+    Ok(connected)
+}
+
 /// The line printed for each account that was already connected and so
 /// skipped. Factored out (pure, no I/O) so its wording is directly
 /// unit-testable.
@@ -488,11 +641,12 @@ fn already_connected_line(addr: &str) -> String {
 
 /// Print/open the connect link for `email`, then wait for the user to
 /// finish signing in: with `yes`, poll `accounts_list` until `email` shows
-/// as connected or the deadline passes; otherwise, print a prompt and block
-/// for Enter. Always returns `Ok(())` except for a genuine I/O error
-/// reading stdin — a timed-out poll warns and moves on rather than aborting
-/// the rest of the migration (the caller re-verifies who's actually
-/// connected afterwards).
+/// as connected, the deadline passes, or the session turns out to be dead;
+/// otherwise, print a prompt and block for Enter. Returns `Err` only for a
+/// genuine I/O error reading stdin, or (via [`poll_until_connected`]) when
+/// the hosted session itself has expired — anything else (a timed-out poll,
+/// a transient `accounts_list` failure) is a warning; the caller
+/// re-verifies who's actually connected once the whole migration is done.
 async fn wait_for_connection<C: McpCalls>(
     calls: &Mutex<C>,
     connect_url: &str,
@@ -505,7 +659,7 @@ async fn wait_for_connection<C: McpCalls>(
     let _ = account_add::open_browser(connect_url);
 
     if yes {
-        poll_until_connected(calls, email).await;
+        poll_until_connected(calls, email).await?;
     } else {
         eprintln!(
             "{}",
@@ -520,22 +674,27 @@ async fn wait_for_connection<C: McpCalls>(
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_POLL_WAIT: Duration = Duration::from_secs(10 * 60);
 
-async fn poll_until_connected<C: McpCalls>(calls: &Mutex<C>, email: &str) {
-    poll_until_connected_with(calls, email, POLL_INTERVAL, MAX_POLL_WAIT).await;
+async fn poll_until_connected<C: McpCalls>(calls: &Mutex<C>, email: &str) -> Result<()> {
+    poll_until_connected_with(calls, email, POLL_INTERVAL, MAX_POLL_WAIT).await
 }
 
 /// `poll_until_connected`, parameterized on interval/deadline so tests can
 /// drive it with tiny durations under `tokio::test(start_paused = true)`
-/// instead of waiting for real minutes. A transient `accounts_list` failure
-/// is a warning, retried until the deadline rather than aborted; a timeout
-/// is also just a warning — the caller moves on to the next account and
+/// instead of waiting for real minutes.
+///
+/// A dead session ([`is_session_expired`]) bails immediately — otherwise
+/// this would spend its whole deadline re-POSTing a revoked refresh token
+/// every interval, only for the *next* account's `accounts_connect` to
+/// surface the reconnect hint. Every other `accounts_list` failure is
+/// transient and just a warning, retried until the deadline; a timeout is
+/// also just a warning — the caller moves on to the next account and
 /// re-verifies who actually connected once the whole migration is done.
 async fn poll_until_connected_with<C: McpCalls>(
     calls: &Mutex<C>,
     email: &str,
     interval: Duration,
     max_wait: Duration,
-) {
+) -> Result<()> {
     let deadline = tokio::time::Instant::now() + max_wait;
     let target = email.to_lowercase();
     loop {
@@ -544,8 +703,11 @@ async fn poll_until_connected_with<C: McpCalls>(
             c.call_tool("accounts_list", json!({})).await
         };
         match outcome {
-            Ok(result) if parse_connected_addresses(&result.text).contains(&target) => return,
+            Ok(result) if parse_connected_addresses(&result.text).contains(&target) => {
+                return Ok(());
+            }
             Ok(_) => {}
+            Err(e) if is_session_expired(&e) => return Err(e),
             Err(e) => {
                 eprintln!(
                     "warning: accounts_list failed while waiting for {email} to connect: {e:#} (retrying)"
@@ -556,7 +718,7 @@ async fn poll_until_connected_with<C: McpCalls>(
             eprintln!(
                 "warning: timed out waiting for {email} to connect; continuing with the rest"
             );
-            return;
+            return Ok(());
         }
         tokio::time::sleep(interval).await;
     }
@@ -712,6 +874,74 @@ mod tests {
         );
     }
 
+    // --- find_first_hit -----------------------------------------------
+
+    #[test]
+    fn find_first_hit_returns_the_first_hit_and_does_not_try_the_rest() {
+        let candidates = [TokenStorage::Keychain, TokenStorage::File];
+        let mut tried = Vec::new();
+        let result = find_first_hit(&candidates, |backend| {
+            tried.push(backend);
+            Ok::<_, anyhow::Error>(if backend == TokenStorage::Keychain {
+                Some(42)
+            } else {
+                None
+            })
+        })
+        .unwrap();
+
+        assert_eq!(result, Some((42, TokenStorage::Keychain)));
+        assert_eq!(tried, vec![TokenStorage::Keychain]);
+    }
+
+    #[test]
+    fn find_first_hit_finds_a_hit_in_the_fallback_backend() {
+        let candidates = [TokenStorage::Keychain, TokenStorage::File];
+        let result = find_first_hit(&candidates, |backend| {
+            Ok::<_, anyhow::Error>(match backend {
+                TokenStorage::Keychain => None,
+                TokenStorage::File => Some("found"),
+            })
+        })
+        .unwrap();
+
+        assert_eq!(result, Some(("found", TokenStorage::File)));
+    }
+
+    #[test]
+    fn find_first_hit_propagates_an_error_from_the_preferred_backend() {
+        let candidates = [TokenStorage::Keychain, TokenStorage::File];
+        let mut tried = Vec::new();
+        let err = find_first_hit(&candidates, |backend| {
+            tried.push(backend);
+            Err::<Option<i32>, _>(anyhow::anyhow!("keychain unavailable"))
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("keychain unavailable"));
+        assert_eq!(
+            tried,
+            vec![TokenStorage::Keychain],
+            "must not try the fallback after a preferred-backend error"
+        );
+    }
+
+    #[test]
+    fn find_first_hit_treats_a_fallback_backend_error_as_a_miss() {
+        let candidates = [TokenStorage::Keychain, TokenStorage::File];
+        let result = find_first_hit(&candidates, |backend| match backend {
+            // miss on the preferred backend
+            TokenStorage::Keychain => Ok::<Option<i32>, anyhow::Error>(None),
+            TokenStorage::File => Err(anyhow::anyhow!("no secret service running")),
+        })
+        .unwrap();
+
+        assert_eq!(
+            result, None,
+            "a fallback-backend error must be reported as an overall miss, not fail the lookup"
+        );
+    }
+
     // --- run_migration ---------------------------------------------------
 
     #[derive(Default)]
@@ -857,7 +1087,8 @@ mod tests {
             Duration::from_millis(1),
             Duration::from_secs(60),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert!(calls.lock().await.calls >= 3);
     }
@@ -879,19 +1110,244 @@ mod tests {
         }
         let calls = Mutex::new(FlakyRpc { calls: 0 });
 
-        // Never succeeds — this must return (with a timeout warning) rather
-        // than propagate the transient error or hang.
+        // Never succeeds — this must return Ok (with a timeout warning)
+        // rather than propagate the transient error or hang.
         poll_until_connected_with(
             &calls,
             "a@x.com",
             Duration::from_millis(1),
             Duration::from_millis(5),
         )
-        .await;
+        .await
+        .unwrap();
 
         assert!(
             calls.lock().await.calls >= 2,
             "should have retried at least once before the deadline"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn poll_until_connected_bails_immediately_on_a_dead_session() {
+        struct DeadSessionRpc {
+            calls: usize,
+        }
+        impl McpCalls for DeadSessionRpc {
+            async fn call_tool(
+                &mut self,
+                _name: &str,
+                _arguments: serde_json::Value,
+            ) -> Result<ToolResult> {
+                self.calls += 1;
+                Err(ClientError::SessionExpired {
+                    email: "https://mcp.example.com/mcp".into(),
+                }
+                .into())
+            }
+        }
+        let calls = Mutex::new(DeadSessionRpc { calls: 0 });
+
+        // A generous deadline — if this retried instead of bailing, the
+        // (paused) clock would need to advance the full 60s for the loop
+        // to time out, and the test would still pass for the wrong reason,
+        // so the real assertion is the call count below.
+        let err = poll_until_connected_with(
+            &calls,
+            "a@x.com",
+            Duration::from_millis(1),
+            Duration::from_secs(60),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            err.downcast_ref::<ClientError>(),
+            Some(ClientError::SessionExpired { .. })
+        ));
+        assert_eq!(
+            calls.lock().await.calls,
+            1,
+            "must bail on the first session-expired error, not retry until the deadline"
+        );
+    }
+
+    // --- finish_migration / plan_dry_run --------------------------------
+
+    /// Records every call made to it and answers `accounts_list` with a
+    /// fixed, settable text; an `accounts_update {"trust": <addr>}` for an
+    /// address in `fail_trust` errors, everything else succeeds. Lets N3's
+    /// tests drive `finish_migration`/`plan_dry_run` without any network.
+    #[derive(Default)]
+    struct RecordingRpc {
+        calls: Vec<(String, serde_json::Value)>,
+        accounts_list_text: String,
+        fail_trust: HashSet<String>,
+    }
+
+    impl McpCalls for RecordingRpc {
+        async fn call_tool(
+            &mut self,
+            name: &str,
+            arguments: serde_json::Value,
+        ) -> Result<ToolResult> {
+            self.calls.push((name.to_string(), arguments.clone()));
+            match name {
+                "accounts_list" => Ok(ToolResult {
+                    text: self.accounts_list_text.clone(),
+                    is_error: false,
+                }),
+                "accounts_update" => {
+                    if let Some(trust) = arguments.get("trust").and_then(|v| v.as_str())
+                        && self.fail_trust.contains(trust)
+                    {
+                        return Err(anyhow::anyhow!("simulated failure for {trust}"));
+                    }
+                    Ok(ToolResult {
+                        text: "Saved.".into(),
+                        is_error: false,
+                    })
+                }
+                other => panic!("unexpected tool call in test: {other}"),
+            }
+        }
+    }
+
+    impl RecordingRpc {
+        fn with_list_text(text: &str) -> Self {
+            Self {
+                accounts_list_text: text.to_string(),
+                ..Default::default()
+            }
+        }
+
+        fn update_calls_with(&self, key: &str) -> Vec<&str> {
+            self.calls
+                .iter()
+                .filter(|(name, _)| name == "accounts_update")
+                .filter_map(|(_, args)| args.get(key).and_then(|v| v.as_str()))
+                .collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn finish_migration_does_not_set_default_sender_for_an_unverified_account() {
+        // `work@example.com` was Enter-confirmed (in `outcome.connected`)
+        // but the verify pass shows only `jane@example.com` as connected —
+        // the default-sender update must not be sent for it.
+        let mut rpc = RecordingRpc::with_list_text("mailboxes:\n  - jane@example.com: ok\n");
+        let outcome = MigrationOutcome {
+            connected: vec!["work@example.com".to_string()],
+            skipped: vec![],
+        };
+
+        let connected = finish_migration(
+            &mut rpc,
+            "https://mcp.example.com",
+            &outcome,
+            Some("work@example.com"),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            connected.is_empty(),
+            "an unverified account must not be reported as connected: {connected:?}"
+        );
+        assert!(
+            rpc.update_calls_with("default_sender").is_empty(),
+            "default_sender must not be sent for an account that never verified: {:?}",
+            rpc.calls
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_migration_sets_default_sender_and_reports_a_verified_account() {
+        let mut rpc = RecordingRpc::with_list_text(
+            "mailboxes:\n  - jane@example.com: ok\n  - work@example.com: ok\n",
+        );
+        let outcome = MigrationOutcome {
+            connected: vec!["work@example.com".to_string()],
+            skipped: vec!["jane@example.com".to_string()],
+        };
+
+        let connected = finish_migration(
+            &mut rpc,
+            "https://mcp.example.com",
+            &outcome,
+            Some("work@example.com"),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(connected, vec!["work@example.com".to_string()]);
+        assert_eq!(
+            rpc.update_calls_with("default_sender"),
+            vec!["work@example.com"]
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_migration_continues_past_a_failing_trust_update() {
+        let mut rpc = RecordingRpc::with_list_text("mailboxes:\n  - jane@example.com: ok\n");
+        rpc.fail_trust.insert("bad@example.com".to_string());
+        let trusted = vec![
+            "bad@example.com".to_string(),
+            "good@example.com".to_string(),
+        ];
+
+        let connected = finish_migration(
+            &mut rpc,
+            "https://mcp.example.com",
+            &MigrationOutcome::default(),
+            None,
+            &trusted,
+        )
+        .await
+        .unwrap();
+
+        assert!(connected.is_empty());
+        assert_eq!(
+            rpc.update_calls_with("trust"),
+            vec!["bad@example.com", "good@example.com"],
+            "a failing trust update must not stop the next one from being attempted"
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_dry_run_only_calls_accounts_list() {
+        let mut rpc = RecordingRpc::with_list_text("mailboxes:\n  - jane@example.com: ok\n");
+        let local = vec![
+            "jane@example.com".to_string(),
+            "work@example.com".to_string(),
+        ];
+
+        let plan = plan_dry_run(
+            &mut rpc,
+            &local,
+            Some("jane@example.com"),
+            &["trusted@example.com".to_string()],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(plan.would_connect, vec!["work@example.com".to_string()]);
+        assert_eq!(
+            plan.would_copy,
+            vec![
+                "default_sender=jane@example.com".to_string(),
+                "trust=trusted@example.com".to_string(),
+            ]
+        );
+        assert_eq!(
+            rpc.calls
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["accounts_list"],
+            "a dry run must make exactly one accounts_list call and nothing else: {:?}",
+            rpc.calls
         );
     }
 }
