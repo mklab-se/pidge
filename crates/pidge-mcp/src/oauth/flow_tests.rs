@@ -107,6 +107,7 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
         markitdown: "markitdown".into(),
         alt_hosts: Vec::new(),
         legacy_issuers: Vec::new(),
+        log_format: crate::config::LogFormat::Text,
     };
     let key = random_bytes(32);
     let signer = Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp"));
@@ -150,6 +151,7 @@ async fn harness_with_alt_hosts(alt_hosts: Vec<String>) -> Harness {
         markitdown: "markitdown".into(),
         alt_hosts,
         legacy_issuers: Vec::new(),
+        log_format: crate::config::LogFormat::Text,
     };
     let key = random_bytes(32);
     let signer = Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp"));
@@ -1482,4 +1484,52 @@ async fn store_failures_during_the_generation_lookup_log_no_address() {
     let logged = logs.text();
     assert!(logged.contains("loading token generation"), "{logged}");
     crate::test_support::assert_no_address("log", &logged);
+}
+
+#[tokio::test]
+async fn http_request_log_line_has_method_route_status_and_latency() {
+    let (logs, _guard) = crate::test_support::LogCapture::start();
+    let h = harness("jane@example.com").await;
+
+    let status = h
+        .app
+        .clone()
+        .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, StatusCode::OK);
+
+    let logged = logs.text();
+    let lines: Vec<&str> = logged
+        .lines()
+        .filter(|l| l.contains("http_request"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{logged}");
+    let line = lines[0];
+    assert!(line.contains("GET"), "{line}");
+    assert!(line.contains("/healthz"), "{line}");
+    assert!(line.contains("status") && line.contains("200"), "{line}");
+    assert!(line.contains("latency_ms"), "{line}");
+}
+
+#[tokio::test]
+async fn http_request_log_line_redacts_download_tokens() {
+    let (logs, _guard) = crate::test_support::LogCapture::start();
+    let h = harness("jane@example.com").await;
+
+    let _ = h
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/dl/some-signed-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let logged = logs.text();
+    assert!(!logged.contains("some-signed-token"), "{logged}");
+    assert!(logged.contains("/dl/<redacted>"), "{logged}");
 }

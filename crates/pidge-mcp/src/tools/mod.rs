@@ -11,12 +11,21 @@ mod mail_act;
 mod mail_read;
 mod mail_write;
 
+use std::time::Instant;
+
 use rmcp::handler::server::router::prompt::PromptRouter;
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerConfig};
-use rmcp::{ServerHandler, prompt_handler, tool_handler};
+use rmcp::handler::server::tool::ToolCallContext;
+use rmcp::model::{
+    CacheScope, CallToolRequestParams, CallToolResponse, Implementation, ListToolsResult,
+    PaginatedRequestParams, ProtocolVersion, ResultType, ServerCapabilities, ServerConfig, Tool,
+};
+use rmcp::service::RequestContext;
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, prompt_handler};
 
+use crate::oauth::bearer::AuthenticatedUser;
 use crate::state::SharedState;
+use crate::users::user_hash;
 
 const INSTRUCTIONS: &str = "pidge gives you the signed-in user's Outlook mailboxes and calendars. \
 No tool takes a user id: every call acts as the signed-in user. Reads merge all the user's \
@@ -56,7 +65,6 @@ impl PidgeMcp {
     }
 }
 
-#[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for PidgeMcp {
     fn get_info(&self) -> ServerConfig {
@@ -75,6 +83,61 @@ impl ServerHandler for PidgeMcp {
         })
         .with_protocol_version(ProtocolVersion::LATEST)
         .with_instructions(INSTRUCTIONS.to_string())
+    }
+
+    /// Hand-written in place of `#[tool_handler(router = self.tool_router)]`
+    /// so a timing wrapper can sit around the router call: exactly one
+    /// `tool_call` log line per call, with the tool name, an 8-hex user
+    /// hash (never the address), duration and outcome. Arguments, result
+    /// text and error text are never logged.
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        let tool = request.name.clone();
+        let user = context
+            .extensions
+            .get::<http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<AuthenticatedUser>())
+            .map(|u| user_hash(&u.email))
+            .unwrap_or_else(|| "-".to_string());
+
+        let start = Instant::now();
+        let tcc = ToolCallContext::new(self, request, context);
+        let result = self.tool_router.call(tcc).await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+
+        let outcome = match &result {
+            Ok(CallToolResponse::Complete(r)) if r.is_error == Some(true) => "tool_error",
+            Ok(_) => "ok",
+            Err(_) => "error",
+        };
+        tracing::info!(tool = %tool, user = %user, duration_ms, outcome, "tool_call");
+
+        result
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        Ok(ListToolsResult {
+            result_type: Some(ResultType::COMPLETE),
+            tools: self.tool_router.list_all(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            cache_scope: supports_cache_hints.then_some(CacheScope::Public),
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tool_router.get(name).cloned()
     }
 }
 
@@ -199,6 +262,7 @@ pub(crate) mod tests {
             markitdown: crate::markitdown::tests::FAKE.into(),
             alt_hosts: Vec::new(),
             legacy_issuers: Vec::new(),
+            log_format: crate::config::LogFormat::Text,
         };
         let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
         let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
@@ -271,5 +335,66 @@ pub(crate) mod tests {
         assert!(instructions.contains("draft id"));
         assert!(instructions.contains("thread=true"));
         assert!(info.capabilities.prompts.is_some());
+    }
+
+    #[tokio::test]
+    async fn tool_log_line_has_no_error_text() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, ResponseTemplate};
+
+        let (logs, _guard) = crate::test_support::LogCapture::start();
+        let h = ToolHarness::new(&["jane@example.com"]).await;
+        Mock::given(method("GET"))
+            .and(path("/v1.0/me/mailFolders/inbox/messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("secret detail"))
+            .mount(&h.graph)
+            .await;
+
+        let request = rmcp::model::CallToolRequestParams::new("mail_overview");
+        let result = h.mcp.call_tool(request, h.ctx()).await;
+        assert!(
+            result.is_err(),
+            "expected the Graph 400 to surface as an error: {result:?}"
+        );
+
+        let logged = logs.text();
+        let lines: Vec<&str> = logged.lines().filter(|l| l.contains("tool_call")).collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected exactly one tool_call line: {logged}"
+        );
+        let line = lines[0];
+        assert!(line.contains("mail_overview"), "{line}");
+        assert!(line.contains("error"), "{line}");
+        assert!(!line.contains("secret detail"), "{line}");
+        crate::test_support::assert_no_address("tool_call log", line);
+    }
+
+    #[tokio::test]
+    async fn tool_log_line_for_a_successful_call_has_ok_outcome_and_user_hash() {
+        let (logs, _guard) = crate::test_support::LogCapture::start();
+        let h = ToolHarness::new(&["jane@example.com"]).await;
+
+        let request = rmcp::model::CallToolRequestParams::new("accounts_list");
+        let result = h.mcp.call_tool(request, h.ctx()).await;
+        assert!(result.is_ok(), "{result:?}");
+
+        let logged = logs.text();
+        let lines: Vec<&str> = logged.lines().filter(|l| l.contains("tool_call")).collect();
+        assert_eq!(
+            lines.len(),
+            1,
+            "expected exactly one tool_call line: {logged}"
+        );
+        let line = lines[0];
+        assert!(line.contains("accounts_list"), "{line}");
+        assert!(line.contains("outcome=\"ok\""), "{line}");
+        assert!(line.contains("duration_ms"), "{line}");
+        assert!(
+            line.contains(&crate::users::user_hash("jane@example.com")),
+            "{line}"
+        );
+        crate::test_support::assert_no_address("tool_call log", line);
     }
 }

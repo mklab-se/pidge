@@ -16,6 +16,38 @@ pub enum SecretsBackend {
     File { dir: PathBuf },
 }
 
+/// How `main` configures the tracing subscriber. `PIDGE_MCP_LOG_FORMAT`,
+/// default `json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormat {
+    /// One JSON object per line, for Container Apps / Log Analytics.
+    Json,
+    /// `tracing-subscriber`'s human-readable default, for local development.
+    Text,
+}
+
+/// Shared by [`Config::from_map`] and [`log_format_from_env`]: `None` (the
+/// variable unset) defaults to `Json`; any value other than `json`/`text` is
+/// a startup error naming it.
+fn parse_log_format(value: Option<&str>) -> Result<LogFormat> {
+    match value {
+        None => Ok(LogFormat::Json),
+        Some("json") => Ok(LogFormat::Json),
+        Some("text") => Ok(LogFormat::Text),
+        Some(other) => {
+            bail!("PIDGE_MCP_LOG_FORMAT must be \"json\" or \"text\", got {other:?}")
+        }
+    }
+}
+
+/// `PIDGE_MCP_LOG_FORMAT`, read directly from the process environment so
+/// `main` can pick the tracing subscriber before [`Config`] (which may
+/// itself fail to load, and needs a subscriber installed to log that
+/// failure) exists.
+pub fn log_format_from_env() -> Result<LogFormat> {
+    parse_log_format(std::env::var("PIDGE_MCP_LOG_FORMAT").ok().as_deref())
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     /// TCP port to listen on. `PORT`, default 8080.
@@ -41,6 +73,9 @@ pub struct Config {
     /// slash, default empty. New access tokens are always issued under the
     /// current issuer only.
     pub legacy_issuers: Vec<String>,
+    /// The tracing subscriber's output format. `PIDGE_MCP_LOG_FORMAT`,
+    /// default `Json`.
+    pub log_format: LogFormat,
 }
 
 /// `PIDGE_MCP_MARKITDOWN`, default `markitdown` (looked up on `PATH`).
@@ -141,6 +176,8 @@ impl Config {
             }
         }
 
+        let log_format = parse_log_format(vars.get("PIDGE_MCP_LOG_FORMAT").map(String::as_str))?;
+
         Ok(Self {
             markitdown,
             port,
@@ -149,6 +186,7 @@ impl Config {
             secrets,
             alt_hosts,
             legacy_issuers,
+            log_format,
         })
     }
 
@@ -233,6 +271,33 @@ mod tests {
         let err = Config::from_map(&vars).unwrap_err();
         assert!(
             err.to_string().contains("not-a-url"),
+            "error should name the bad value: {err}"
+        );
+    }
+
+    #[test]
+    fn from_map_defaults_log_format_to_json_and_accepts_text() {
+        let config = Config::from_map(&base_map()).unwrap();
+        assert_eq!(config.log_format, LogFormat::Json);
+
+        let mut vars = base_map();
+        vars.insert("PIDGE_MCP_LOG_FORMAT".to_string(), "text".to_string());
+        let config = Config::from_map(&vars).unwrap();
+        assert_eq!(config.log_format, LogFormat::Text);
+
+        let mut vars = base_map();
+        vars.insert("PIDGE_MCP_LOG_FORMAT".to_string(), "json".to_string());
+        let config = Config::from_map(&vars).unwrap();
+        assert_eq!(config.log_format, LogFormat::Json);
+    }
+
+    #[test]
+    fn from_map_rejects_an_unknown_log_format_and_names_it() {
+        let mut vars = base_map();
+        vars.insert("PIDGE_MCP_LOG_FORMAT".to_string(), "yaml".to_string());
+        let err = Config::from_map(&vars).unwrap_err();
+        assert!(
+            err.to_string().contains("yaml"),
             "error should name the bad value: {err}"
         );
     }
