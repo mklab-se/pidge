@@ -45,7 +45,10 @@ pub struct StoredServer {
 pub struct McpTokenStore;
 
 impl McpTokenStore {
-    /// Load the stored session for `server_url`, if any.
+    /// Load the stored session for `server_url`, if any. A stored blob that
+    /// no longer parses (hand-edited, truncated) is logged and treated as
+    /// no session, so `connect` can offer a fresh sign-in, whose save then
+    /// overwrites it, instead of failing on it forever.
     pub fn load(server_url: &str, storage: TokenStorage) -> Result<Option<McpTokens>, ClientError> {
         match storage {
             TokenStorage::Keychain => Self::load_keychain(server_url),
@@ -161,7 +164,7 @@ impl McpTokenStore {
     fn load_keychain(server_url: &str) -> Result<Option<McpTokens>, ClientError> {
         let entry = Self::keychain_entry(server_url)?;
         match entry.get_password() {
-            Ok(blob) => Ok(Some(serde_json::from_str(&blob)?)),
+            Ok(blob) => Ok(parse_stored(&blob, "keychain entry")),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(ClientError::Keychain(e)),
         }
@@ -221,7 +224,7 @@ impl McpTokenStore {
     fn load_file(server_url: &str) -> Result<Option<McpTokens>, ClientError> {
         let path = Self::path_for(server_url)?;
         match std::fs::read_to_string(&path) {
-            Ok(s) => Ok(Some(serde_json::from_str(&s)?)),
+            Ok(s) => Ok(parse_stored(&s, &path.display().to_string())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
@@ -241,6 +244,19 @@ impl McpTokenStore {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(e.into()),
+        }
+    }
+}
+
+/// Parse a stored [`McpTokens`] blob, or log and return `None` if it's
+/// corrupt. `origin` names where it came from, for the warning only; the
+/// blob itself is never logged, since it holds tokens.
+fn parse_stored(blob: &str, origin: &str) -> Option<McpTokens> {
+    match serde_json::from_str(blob) {
+        Ok(tokens) => Some(tokens),
+        Err(e) => {
+            tracing::warn!("ignoring unreadable stored MCP session in {origin}: {e}");
+            None
         }
     }
 }
@@ -285,6 +301,35 @@ mod tests {
                     .is_none()
             );
         });
+    }
+
+    #[test]
+    fn load_treats_a_corrupt_token_file_as_no_session() {
+        with_temp_config_dir(|| {
+            let server = "https://mcp.example.com/mcp";
+            McpTokenStore::ensure_dir().unwrap();
+            let path = McpTokenStore::path_for(server).unwrap();
+            std::fs::write(&path, "{\"server\": \"https://mcp.exa").unwrap();
+
+            let loaded = McpTokenStore::load(server, TokenStorage::File).unwrap();
+            assert!(loaded.is_none());
+
+            // A fresh sign-in's save then overwrites the corrupt file.
+            let tokens = fake_tokens(server);
+            McpTokenStore::save(&tokens, TokenStorage::File).unwrap();
+            assert_eq!(
+                McpTokenStore::load(server, TokenStorage::File).unwrap(),
+                Some(tokens)
+            );
+        });
+    }
+
+    #[test]
+    fn parse_stored_returns_none_for_a_corrupt_blob() {
+        assert!(parse_stored("not json", "test").is_none());
+        let tokens = fake_tokens("https://mcp.example.com");
+        let blob = serde_json::to_string(&tokens).unwrap();
+        assert_eq!(parse_stored(&blob, "test"), Some(tokens));
     }
 
     #[test]

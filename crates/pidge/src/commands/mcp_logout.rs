@@ -95,8 +95,12 @@ fn run_dry(url: &str, candidates: &[TokenStorage], json_output: bool) -> Result<
 /// check whether a session is present, then delete it regardless of what
 /// was found there. Deleting unconditionally, even on a miss, is what
 /// clears a stale index entry whose backend no longer actually holds
-/// anything (task-3-review.md I4). Returns whether a session was found in
-/// *any* backend. Generic over injectable `load`/`delete` so this is
+/// anything (task-3-review.md I4). A failed `load` is reported and the
+/// delete still runs, since removing an unreadable entry is exactly what
+/// `logout` is for; such a backend counts as found. Only a failed `delete`
+/// is an error (fatal for the preferred backend, a warning otherwise, via
+/// [`try_each_backend`]). Returns whether a session was found in *any*
+/// backend. Generic over injectable `load`/`delete` so this is
 /// directly unit-testable with a fake, with no real keychain/file I/O.
 fn logout_from<E: std::fmt::Display>(
     candidates: &[TokenStorage],
@@ -104,7 +108,16 @@ fn logout_from<E: std::fmt::Display>(
     mut delete: impl FnMut(TokenStorage) -> Result<(), E>,
 ) -> Result<bool, E> {
     let results = try_each_backend(candidates, |backend| {
-        let found = load(backend)?;
+        let found = match load(backend) {
+            Ok(found) => found,
+            Err(e) => {
+                eprintln!(
+                    "warning: could not read the stored session in the {} backend: {e}; removing it anyway",
+                    backend_name(backend)
+                );
+                true
+            }
+        };
         delete(backend)?;
         Ok::<bool, E>(found)
     })?;
@@ -175,12 +188,40 @@ mod tests {
     }
 
     #[test]
-    fn logout_from_propagates_an_error_from_the_preferred_backend() {
+    fn logout_from_still_deletes_when_load_fails() {
+        let candidates = candidate_backends(TokenStorage::Keychain);
+        let deleted = RefCell::new(Vec::new());
+
+        let removed = logout_from(
+            &candidates,
+            |backend| match backend {
+                TokenStorage::Keychain => Err(anyhow::anyhow!("corrupt blob")),
+                TokenStorage::File => Ok(false),
+            },
+            |backend| {
+                deleted.borrow_mut().push(backend);
+                Ok::<(), anyhow::Error>(())
+            },
+        )
+        .unwrap();
+
+        assert!(
+            removed,
+            "an unreadable entry that was deleted counts as removed"
+        );
+        assert_eq!(
+            deleted.into_inner(),
+            vec![TokenStorage::Keychain, TokenStorage::File]
+        );
+    }
+
+    #[test]
+    fn logout_from_propagates_a_delete_error_from_the_preferred_backend() {
         let candidates = candidate_backends(TokenStorage::Keychain);
         let err = logout_from(
             &candidates,
             |_| Err::<bool, _>(anyhow::anyhow!("keychain unavailable")),
-            |_| Ok::<(), anyhow::Error>(()),
+            |_| Err::<(), _>(anyhow::anyhow!("keychain unavailable")),
         )
         .unwrap_err();
         assert!(err.to_string().contains("keychain unavailable"));
@@ -195,7 +236,10 @@ mod tests {
                 TokenStorage::Keychain => Ok::<bool, anyhow::Error>(true),
                 TokenStorage::File => Err(anyhow::anyhow!("no secret service running")),
             },
-            |_| Ok::<(), anyhow::Error>(()),
+            |backend| match backend {
+                TokenStorage::Keychain => Ok::<(), anyhow::Error>(()),
+                TokenStorage::File => Err(anyhow::anyhow!("no secret service running")),
+            },
         )
         .unwrap();
         assert!(
