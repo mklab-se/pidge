@@ -25,7 +25,21 @@ allowlist is required and has no default: set `PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y`
 Set `PIDGE_MCP_CUSTOM_DOMAIN=pidge.mklab.se` to bind a custom domain to the
 Container App. Its CNAME and `asuid.<subdomain>` TXT record must already
 exist at the DNS provider before running the script — the certificate
-validation checks them. The script then runs a three-phase dance, since a
+validation checks them:
+
+| Record | Name | Value |
+|---|---|---|
+| CNAME | `pidge` (the subdomain) | the Container App's FQDN, e.g. `ca-pidge-mcp.<env>.swedencentral.azurecontainerapps.io` (from the deploy summary, or `az containerapp show -g pidge -n ca-pidge-mcp --query properties.configuration.ingress.fqdn -o tsv`) |
+| TXT | `asuid.pidge` | the Container Apps environment's custom domain verification id |
+
+Read the verification id with:
+
+```bash
+az containerapp env show -g pidge -n cae-pidge \
+  --query properties.customDomainConfiguration.customDomainVerificationId -o tsv
+```
+
+The script then runs a three-phase dance, since a
 managed certificate can only be created after the hostname is bound:
 
 1. **Bind, no certificate.** The app redeploys with the hostname bound as
@@ -66,11 +80,28 @@ Microsoft; existing refresh tokens keep working, only the issuer they're
 presented against changes.
 
 Whichever mode is used, the custom domain needs its own callback registered
-on the Entra app (`https://<domain>/callback`) alongside the existing one.
-Phase 4 never runs that registration automatically when a custom domain is
-in play — it only prints the `az ad app update` command, listing every
-existing redirect URI plus both hosts' `/callback`, for the app owner to run
-by hand.
+on the Entra app (`https://<domain>/callback`) alongside the existing one,
+**before** setting `PIDGE_MCP_CUTOVER=1` — otherwise sign-ins against the
+new issuer have nowhere valid to redirect to. Phase 4 never runs that
+registration automatically when a custom domain is in play — it only prints
+the `az ad app update` command, listing every existing redirect URI plus
+both hosts' `/callback`, for the app owner to run by hand. It has this
+shape (every URI already on the app, plus the missing one(s) appended):
+
+```bash
+az ad app update --id <entra-app-id> --public-client-redirect-uris \
+  https://<container-apps-fqdn>/callback https://<custom-domain>/callback
+```
+
+**Rollback.** Unset `PIDGE_MCP_CUTOVER` (or set it to anything other than
+`1`) and rerun the script: the Container Apps FQDN becomes the public URL
+and issuer again, and the custom domain reverts to an accepted alt host —
+it keeps resolving and serving traffic throughout. One gotcha: the script
+computes `PIDGE_MCP_LEGACY_ISSUERS` fresh on every run rather than merging
+with what's deployed, and only populates it in the cutover branch. So a
+client holding a token minted under the custom-domain issuer during the
+cutover window is not grandfathered in on rollback — it gets a 401 and has
+to sign in again, the same as any other issuer change.
 
 ## CI/CD
 
@@ -153,6 +184,71 @@ It then always sets the GitHub repository configuration the workflow reads:
 variable to flip by hand (`gh variable set PIDGE_MCP_CUTOVER --body 1`) when
 you're ready to make the custom domain the public URL, per
 [Custom domain](#custom-domain).
+
+## Logs
+
+`PIDGE_MCP_LOG_FORMAT` (`json` or `text`, default `json`; the deploy script
+always sets `json`) picks the tracing subscriber's output format. Every log
+line goes to stdout, which the Container Apps environment collects into the
+`log-pidge` Log Analytics workspace as `ContainerAppConsoleLogs_CL`
+(`Log_s` holds the raw line, `ContainerAppName_s` is `ca-pidge-mcp`).
+
+A JSON line is a flat object: `timestamp`, `level`, `target`, `message`
+(the event name), plus that event's own fields at the top level — there is
+no nested `fields` object. Two structured events, one line per occurrence:
+
+- **`http_request`**, one per HTTP request: `method`, `route` (path only —
+  no query string, since `/authorize` and `/callback` carry OAuth state and
+  codes there; a `/dl/<token>` path is redacted to `/dl/<redacted>` because
+  the token is a bearer credential), `status`, `latency_ms`.
+- **`tool_call`**, one per MCP tool invocation: `tool` (the tool name),
+  `user` (an 8-hex-character hash of the caller's sign-in address, stable
+  across restarts — never the address), `duration_ms`, `outcome` (`ok`,
+  `tool_error` for a tool that reported its own failure, or `error` for a
+  transport/handler failure).
+
+Privacy rule, enforced everywhere in `pidge-mcp`: no e-mail address, subject
+line, message body, recipient list, or token value is ever logged. A user is
+always the 8-character hash above; a download link is always
+`/dl/<redacted>`.
+
+Query with KQL, either in the Azure portal (the container app's **Logs**
+blade, or **Monitor > Logs** against the `log-pidge` workspace) or
+`az monitor log-analytics query --workspace <workspace-customer-id> --analytics-query "<query>"`.
+The body is JSON text in `Log_s`, so parse it first with `parse_json`:
+
+p95 latency per route, last hour:
+
+```kql
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-pidge-mcp" and TimeGenerated > ago(1h)
+| extend line = parse_json(Log_s)
+| where line.message == "http_request"
+| summarize p95_ms = percentile(todouble(line.latency_ms), 95) by route = tostring(line.route)
+| order by p95_ms desc
+```
+
+Tool calls by outcome, last 24 hours:
+
+```kql
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-pidge-mcp" and TimeGenerated > ago(24h)
+| extend line = parse_json(Log_s)
+| where line.message == "tool_call"
+| summarize calls = count() by tool = tostring(line.tool), outcome = tostring(line.outcome)
+| order by calls desc
+```
+
+5xx responses in the last hour:
+
+```kql
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-pidge-mcp" and TimeGenerated > ago(1h)
+| extend line = parse_json(Log_s)
+| where line.message == "http_request" and toint(line.status) >= 500
+| project TimeGenerated, route = tostring(line.route), status = toint(line.status), latency_ms = toint(line.latency_ms)
+| order by TimeGenerated desc
+```
 
 ## Connect a client
 
@@ -276,10 +372,38 @@ deleting its secret, so the user record stays consistent.
 Rotating `jwt-signing-key` invalidates every client registration, token and
 outstanding download link; clients simply re-register and sign in again.
 
-Key Vault purge protection is on and irreversible: a purged vault, and the
-refresh tokens and signing key it held, cannot be recovered. Deleting the
-resource group only soft-deletes the vault; it stays around, unrecoverable
-by design, for the 30-day retention window before Azure purges it itself.
+### Revoke a user's sessions
+
+Call `accounts_update { sign_out_everywhere: true }` from the harness to
+sign one user out everywhere, without touching the vault or any other
+user. It bumps that user's `token_generation` counter in their user
+record; any other settings in the same call (default sender, trust list,
+disconnect) are applied and saved first. Every access token and refresh
+token already issued to that user carries the old generation and is
+rejected from that point on — the bearer check on `/mcp` and the OAuth
+refresh grant both compare the token's generation against the stored one
+and fail with `invalid_token` / `invalid_grant` on a mismatch, regardless
+of expiry. Every client of that user, including the one that made the
+call, must sign in again.
+
+The generation check fails closed: if the secret store can't be read (a
+transient Key Vault error, for example), the server can't prove the caller
+*wasn't* signed out, so it rejects the token rather than let a stale
+in-memory value pass one through. A client sees this as a normal 401 and
+retries or re-authenticates; it does not distinguish "signed out" from
+"store unavailable".
+
+### Key Vault purge protection
+
+`enablePurgeProtection: true` in `main.bicep` turns on Key Vault purge
+protection, and it is irreversible for the life of the vault — there is no
+parameter or `az` command that turns it back off. With it on, a
+soft-deleted secret or a soft-deleted vault cannot be purged during the
+30-day retention window; only Azure can remove it once that window elapses.
+Practically: deleting the `pidge` resource group does not immediately
+destroy the vault or the refresh tokens and signing key inside it — it
+soft-deletes the vault, which then sits unrecoverable-but-not-yet-gone for
+30 days before Azure purges it on its own.
 
 ## Run locally
 
