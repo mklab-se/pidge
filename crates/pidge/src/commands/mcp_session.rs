@@ -188,11 +188,22 @@ pub(crate) async fn refresh_if_needed(
     tokens: &mut McpTokens,
     store: TokenStorage,
 ) -> Result<(), ClientError> {
+    refresh_if_needed_with(http, tokens, |tokens| McpTokenStore::save(tokens, store)).await
+}
+
+/// [`refresh_if_needed`] with the persistence step injected, so both
+/// branches (unchanged token: no save; refreshed: saved) are testable
+/// without a real keychain or config dir.
+async fn refresh_if_needed_with(
+    http: &reqwest::Client,
+    tokens: &mut McpTokens,
+    save: impl FnOnce(&McpTokens) -> Result<(), ClientError>,
+) -> Result<(), ClientError> {
     let server = tokens.server.clone();
     let previous_access_token = tokens.access_token.clone();
     let access_token = valid_access_token(http, &server, tokens).await?;
     if access_token != previous_access_token {
-        McpTokenStore::save(tokens, store)?;
+        save(tokens)?;
     }
     Ok(())
 }
@@ -305,7 +316,85 @@ pub(crate) fn is_session_expired(err: &anyhow::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    fn tokens_expiring_in(server: &str, seconds: i64) -> McpTokens {
+        McpTokens {
+            server: server.to_string(),
+            access_token: "OLD_AT".into(),
+            refresh_token: "OLD_RT".into(),
+            expires_at: chrono::Utc::now() + chrono::Duration::seconds(seconds),
+            client_id: "CID".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_if_needed_does_not_save_an_unchanged_token() {
+        // Far from expiry: no network call (the url is unroutable) and no save.
+        let mut tokens = tokens_expiring_in("http://127.0.0.1:9/mcp", 3600);
+        let mut saved = false;
+
+        refresh_if_needed_with(&reqwest::Client::new(), &mut tokens, |_| {
+            saved = true;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(!saved, "an unchanged access token must not be written back");
+        assert_eq!(tokens.access_token, "OLD_AT");
+    }
+
+    #[tokio::test]
+    async fn refresh_if_needed_saves_a_refreshed_token() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-protected-resource/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "resource": format!("{}/mcp", server.uri()),
+                "authorization_servers": [server.uri()],
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "authorization_endpoint": format!("{}/authorize", server.uri()),
+                "token_endpoint": format!("{}/token", server.uri()),
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "NEW_AT",
+                "refresh_token": "NEW_RT",
+                "expires_in": 3600
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut tokens = tokens_expiring_in(&format!("{}/mcp", server.uri()), -60);
+        let mut saved: Option<McpTokens> = None;
+
+        refresh_if_needed_with(&reqwest::Client::new(), &mut tokens, |t| {
+            saved = Some(t.clone());
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        let saved = saved.expect("a refreshed token must be persisted");
+        assert_eq!(saved.access_token, "NEW_AT");
+        assert_eq!(saved.refresh_token, "NEW_RT");
+        assert_eq!(tokens.access_token, "NEW_AT");
+    }
 
     // --- check_tool_result -------------------------------------------------
 

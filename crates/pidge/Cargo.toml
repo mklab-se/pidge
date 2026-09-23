@@ -55,6 +55,7 @@ tempfile.workspace = true
 # into the same `tokio` build for tests only, enabling `#[tokio::test(start_paused
 # = true)]` for the `mcp connect` polling tests.
 tokio = { workspace = true, features = ["test-util"] }
+wiremock.workspace = true
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/pidge-v{ version }-{ target }.{ archive-format }"
