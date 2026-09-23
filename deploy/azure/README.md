@@ -248,10 +248,13 @@ identity `id-pidge-deploy`, and the container app. Concretely, it can:
 So whoever can push to `main` can deploy, and through the deploy can read
 production mailbox tokens. That includes any tool or agent session
 holding a GitHub credential with write access to the repository. The
-intended boundary is a branch ruleset on `main` that requires a pull
-request, requires the CI status checks to pass, and blocks force-pushes
-and deletion. Set it up before relying on this pipeline:
-`gh api repos/mklab-se/pidge/rulesets` should list it.
+intended boundary is a branch ruleset on `main` that requires the CI
+status checks (Check, Clippy, Format, Test) to pass on a commit before it
+can land, and blocks force-pushes and deletion. Such a ruleset exists on
+this repository ("main: CI must pass", no review requirement, no bypass
+list); `gh api repos/mklab-se/pidge/rulesets` lists it. Add a
+pull-request or review requirement there when more than one person has
+write access.
 
 It then always sets the GitHub repository configuration the workflow reads:
 
