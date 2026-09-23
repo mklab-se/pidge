@@ -64,11 +64,11 @@ pub async fn run(fragment: String, yes: bool) -> Result<()> {
                 return Ok(());
             }
             graph.unsubscribe_one_click(&url).await.map_err(|e| {
-                if let ClientError::Graph { status, message } = &e {
-                    let trimmed: String = message.chars().take(200).collect();
+                if let ClientError::UnsubscribeRejected = &e {
                     anyhow!(
-                        "Unsubscribe endpoint returned HTTP {status}. Response (first 200 \
-                         chars): {trimmed}\nTry the URL in a browser instead: {url}"
+                        "The one-click unsubscribe request was refused or failed (pidge only \
+                         POSTs over https to public hosts and does not follow redirects).\n\
+                         Try the URL in a browser instead: {url}"
                     )
                 } else {
                     anyhow::Error::new(e).context("one-click unsubscribe POST failed")

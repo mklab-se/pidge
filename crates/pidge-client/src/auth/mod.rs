@@ -15,7 +15,7 @@ mod tokens;
 pub use backend::{LocalBackend, TokenBackend};
 pub use browser_flow::AuthSuccess;
 pub use file_store::FileStore;
-pub use jwt::extract_tenant_id;
+pub use jwt::{IdTokenClaims, extract_id_claims, extract_tenant_id};
 pub use store::KeychainStore;
 pub use token_store::TokenStore;
 pub use tokens::TokenSet;

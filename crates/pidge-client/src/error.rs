@@ -54,6 +54,12 @@ pub enum ClientError {
     #[error("core: {0}")]
     Core(#[from] pidge_core::CoreError),
 
+    /// A one-click unsubscribe POST was refused before sending (not https,
+    /// an internal or literal address) or failed (a non-2xx answer, a
+    /// redirect, a network error). Deliberately carries no detail.
+    #[error("unsubscribe request rejected")]
+    UnsubscribeRejected,
+
     #[error("token response missing access_token")]
     MissingAccessToken,
 }

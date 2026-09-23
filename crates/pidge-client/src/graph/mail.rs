@@ -650,33 +650,118 @@ struct GraphHeader {
     value: String,
 }
 
+/// Which one-click targets [`post_one_click`] accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OneClickPolicy {
+    /// https to a host name that resolves only to public addresses.
+    PublicOnly,
+    /// Also plain http and loopback (an IP literal or a name), for tests
+    /// against a local mock server. Every other non-public address is still
+    /// refused.
+    AllowLoopback,
+}
+
 /// POST `List-Unsubscribe=One-Click` to the given URL per RFC 8058. The
 /// body is form-urlencoded (the RFC says so explicitly).
 ///
-/// This goes to an arbitrary third-party host, not Microsoft Graph, so it
-/// uses its own short-lived client — no bearer token, no shared retry
+/// The URL comes from a third party's e-mail header, so the request is
+/// fenced in: https only, never to an IP literal, never to a host that
+/// resolves to a loopback, private, link-local, unique-local or unspecified
+/// address (the checked addresses are the ones connected to, so a second
+/// DNS answer can't swap them), and redirects are not followed. Every
+/// failure, including a non-2xx answer, is the same
+/// [`ClientError::UnsubscribeRejected`]: the endpoint's status and body are
+/// never passed on.
+///
+/// It uses its own short-lived client — no bearer token, no shared retry
 /// policy (a broken sender's unsubscribe endpoint shouldn't get the same
 /// exponential backoff as a throttled Graph call).
 pub async fn unsubscribe_one_click(url: &str) -> Result<(), ClientError> {
-    let client = reqwest::Client::builder()
+    post_one_click(url, OneClickPolicy::PublicOnly).await
+}
+
+pub(crate) async fn post_one_click(url: &str, policy: OneClickPolicy) -> Result<(), ClientError> {
+    let rejected = || ClientError::UnsubscribeRejected;
+    let loopback_ok = policy == OneClickPolicy::AllowLoopback;
+    let parsed = url::Url::parse(url).map_err(|_| rejected())?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" if loopback_ok => {}
+        _ => return Err(rejected()),
+    }
+    let (host, is_name) = match parsed.host() {
+        Some(url::Host::Domain(name)) => (name.to_string(), true),
+        Some(url::Host::Ipv4(ip)) if loopback_ok && ip.is_loopback() => (ip.to_string(), false),
+        _ => return Err(rejected()),
+    };
+    let port = parsed.port_or_known_default().ok_or_else(rejected)?;
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|_| rejected())?
+        .collect();
+    if addrs.is_empty()
+        || addrs
+            .iter()
+            .any(|a| !one_click_address_allowed(a.ip(), loopback_ok))
+    {
+        return Err(rejected());
+    }
+
+    let mut builder = reqwest::Client::builder()
         .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+        .redirect(reqwest::redirect::Policy::none());
+    if is_name {
+        // Connect to exactly the addresses just checked.
+        builder = builder.resolve_to_addrs(&host, &addrs);
+    }
+    let client = builder.build().map_err(|_| rejected())?;
     let resp = client
-        .post(url)
+        .post(parsed)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body("List-Unsubscribe=One-Click")
         .send()
-        .await?;
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(ClientError::Graph {
-            status: status.as_u16(),
-            message: text,
-        });
+        .await
+        .map_err(|_| rejected())?;
+    if !resp.status().is_success() {
+        return Err(rejected());
     }
     Ok(())
+}
+
+/// Whether a one-click POST may connect to `ip`: public unicast only
+/// (loopback too when `loopback_ok`). IPv4-mapped IPv6 is judged as IPv4.
+fn one_click_address_allowed(ip: std::net::IpAddr, loopback_ok: bool) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        v4 => v4,
+    };
+    if ip.is_loopback() {
+        return loopback_ok;
+    }
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || a == 0
+                // 100.64.0.0/10, carrier-grade NAT.
+                || (a == 100 && (b & 0xc0) == 64))
+        }
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            !(v6.is_unspecified()
+                || v6.is_multicast()
+                // fc00::/7, unique local.
+                || (first & 0xfe00) == 0xfc00
+                // fe80::/10, link local.
+                || (first & 0xffc0) == 0xfe80)
+        }
+    }
 }
 
 /// GET /me/messages/{id}/attachments — list attachments without fetching bytes.
@@ -2369,25 +2454,130 @@ mod tests {
             .expect(1)
             .mount(&server)
             .await;
-        unsubscribe_one_click(&format!("{}/u", server.uri()))
-            .await
-            .unwrap();
+        post_one_click(
+            &format!("{}/u", server.uri()),
+            OneClickPolicy::AllowLoopback,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
-    async fn unsubscribe_one_click_errors_on_500() {
+    async fn unsubscribe_one_click_reports_a_500_without_its_status_or_body() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/u"))
             .respond_with(ResponseTemplate::new(500).set_body_string("nope"))
             .mount(&server)
             .await;
-        let err = unsubscribe_one_click(&format!("{}/u", server.uri()))
+        let err = post_one_click(
+            &format!("{}/u", server.uri()),
+            OneClickPolicy::AllowLoopback,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ClientError::UnsubscribeRejected), "{err:?}");
+        assert!(!err.to_string().contains("500"));
+        assert!(!err.to_string().contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_refuses_http_without_a_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let port = server.address().port();
+        for url in [
+            format!("http://localhost:{port}/u"),
+            format!("{}/u", server.uri()),
+        ] {
+            let err = unsubscribe_one_click(&url).await.unwrap_err();
+            assert!(matches!(err, ClientError::UnsubscribeRejected), "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_refuses_ip_literals_and_internal_hosts() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let port = server.address().port();
+        for url in [
+            format!("https://127.0.0.1:{port}/u"),
+            "https://10.0.0.1/u".to_string(),
+            "https://[::1]/u".to_string(),
+            "https://93.184.215.14/u".to_string(),
+            // A name resolving to loopback is refused like the literal.
+            format!("https://localhost:{port}/u"),
+            "ftp://example.com/u".to_string(),
+            "not a url".to_string(),
+        ] {
+            let err = unsubscribe_one_click(&url).await.unwrap_err();
+            assert!(matches!(err, ClientError::UnsubscribeRejected), "{url}");
+        }
+        // Even the test relaxation only admits loopback.
+        let err = post_one_click("http://10.0.0.1/u", OneClickPolicy::AllowLoopback)
             .await
             .unwrap_err();
-        match err {
-            ClientError::Graph { status, .. } => assert_eq!(status, 500),
-            other => panic!("expected Graph error, got {other:?}"),
+        assert!(matches!(err, ClientError::UnsubscribeRejected));
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_does_not_follow_a_redirect() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/u"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", "/internal"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/internal"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let err = post_one_click(
+            &format!("{}/u", server.uri()),
+            OneClickPolicy::AllowLoopback,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ClientError::UnsubscribeRejected), "{err:?}");
+    }
+
+    #[test]
+    fn one_click_address_policy() {
+        use std::net::IpAddr;
+        let allowed = |s: &str, lo| one_click_address_allowed(s.parse::<IpAddr>().unwrap(), lo);
+        for bad in [
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "100.64.0.1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "::ffff:10.0.0.1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(!allowed(bad, false), "{bad}");
+        }
+        assert!(!allowed("127.0.0.1", false));
+        assert!(!allowed("::1", false));
+        assert!(allowed("127.0.0.1", true));
+        assert!(!allowed("10.0.0.1", true));
+        for good in ["93.184.215.14", "172.32.0.1", "2606:2800:220:1::1"] {
+            assert!(allowed(good, false), "{good}");
         }
     }
 }

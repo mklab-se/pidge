@@ -116,6 +116,8 @@ pub struct GraphClient {
     auth: AuthClient,
     http: reqwest::Client,
     base_url: String,
+    /// Test clients may POST one-click unsubscribes to a loopback mock.
+    one_click: mail::OneClickPolicy,
 }
 
 impl GraphClient {
@@ -126,6 +128,7 @@ impl GraphClient {
                 .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
                 .build()?,
             base_url: config::GRAPH_BASE.to_string(),
+            one_click: mail::OneClickPolicy::PublicOnly,
         })
     }
 
@@ -134,6 +137,7 @@ impl GraphClient {
             auth,
             http: reqwest::Client::new(),
             base_url: base_url.into(),
+            one_click: mail::OneClickPolicy::AllowLoopback,
         }
     }
 
@@ -599,8 +603,11 @@ impl GraphClient {
     /// POST a `List-Unsubscribe=One-Click` form body (RFC 8058) to a
     /// third-party unsubscribe URL. No bearer token — the URL belongs to
     /// the sender, not Microsoft.
+    ///
+    /// Only https to a public host; see [`mail::unsubscribe_one_click`].
+    /// A [`Self::for_test`] client also reaches a loopback mock server.
     pub async fn unsubscribe_one_click(&self, url: &str) -> Result<(), ClientError> {
-        mail::unsubscribe_one_click(url).await
+        mail::post_one_click(url, self.one_click).await
     }
 
     /// GET /me/people?$top={top}&$select=displayName,scoredEmailAddresses —
