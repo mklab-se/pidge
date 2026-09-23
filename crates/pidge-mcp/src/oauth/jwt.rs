@@ -11,6 +11,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use rand::{Rng, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use crate::users::user_hash;
+
 pub const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
 pub const REFRESH_TOKEN_TTL: Duration = Duration::days(30);
 pub const AUTH_CODE_TTL: Duration = Duration::minutes(2);
@@ -59,17 +61,20 @@ pub struct RefreshClaims {
 }
 
 /// A `mail_attachment` download link: anyone holding it may fetch this one
-/// attachment until `exp`, as long as `sub` still owns `account`. The
-/// content type rides along so serving it needs no extra Graph call.
+/// attachment until `exp`, as long as the user still owns the mailbox. The
+/// payload is readable by whoever sees the URL, so it names the user and
+/// mailbox only by [`user_hash`]; `/dl` resolves them against the allowlist
+/// and the user's record. The content type rides along so serving it needs
+/// no extra Graph call.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DownloadClaims {
     pub typ: String,
     pub jti: String,
     pub exp: i64,
-    /// The signed-in user the link was minted for.
-    pub sub: String,
-    /// The mailbox holding the message.
-    pub account: String,
+    /// [`user_hash`] of the signed-in user the link was minted for.
+    pub uh: String,
+    /// [`user_hash`] of the mailbox holding the message.
+    pub mh: String,
     pub message_id: String,
     pub attachment_id: String,
     pub filename: String,
@@ -247,8 +252,8 @@ impl Signer {
             typ: "download".into(),
             jti: random_id(),
             exp: (Utc::now() + ttl).timestamp(),
-            sub: sub.into(),
-            account: account.into(),
+            uh: user_hash(sub),
+            mh: user_hash(account),
             message_id: message_id.into(),
             attachment_id: attachment.id.clone(),
             filename: attachment.name.clone(),
@@ -343,14 +348,27 @@ mod tests {
             .unwrap();
         let c = s.verify_download(&token).unwrap();
         assert_eq!(c.typ, "download");
-        assert_eq!(c.sub, "jane@example.com");
-        assert_eq!(c.account, "work@example.com");
+        assert_eq!(c.uh, crate::users::user_hash("jane@example.com"));
+        assert_eq!(c.mh, crate::users::user_hash("work@example.com"));
         assert_eq!(c.message_id, "M1");
         assert_eq!(c.attachment_id, "A1");
         assert_eq!(c.filename, "report.pdf");
         assert_eq!(c.content_type, "application/pdf");
         let ttl = c.exp - Utc::now().timestamp();
         assert!((14 * 60..=15 * 60).contains(&ttl), "{ttl}");
+    }
+
+    #[test]
+    fn download_tokens_carry_no_address() {
+        let s = signer();
+        let token = s
+            .issue_download("jane@example.com", "work@example.com", "M1", &attachment())
+            .unwrap();
+        let payload = token.split('.').nth(1).unwrap();
+        let json = String::from_utf8(URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+        for part in ["jane", "work", "example", "@"] {
+            assert!(!json.contains(part), "payload leaks {part}: {json}");
+        }
     }
 
     #[test]

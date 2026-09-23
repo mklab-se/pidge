@@ -12,6 +12,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, schemars, tool, tool_router};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::PidgeMcp;
 use super::mail_read::check_id;
@@ -26,6 +27,8 @@ const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 /// Characters of converted text per call; `offset` pages through the rest.
 const TEXT_CAP: usize = 30_000;
 const CONVERT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a conversion waits for one of the server's conversion slots.
+const SLOT_WAIT: Duration = Duration::from_secs(10);
 /// Image types a vision model accepts as image content; other `image/*`
 /// types go through conversion like any other file.
 const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -76,13 +79,16 @@ impl PidgeMcp {
         check_id(&args.id)?;
         check_id(&args.attachment_id)?;
         let mode = args.mode.unwrap_or_default();
-        // Links are minted per call, so only reads are cached. Pictures
-        // aren't either: the cache holds text, and they are cheap to fetch.
-        let key = ReadCache::key("mail_attachment", &args);
+        let offset = args.offset.unwrap_or(0);
+        // A document's Markdown is cached per attachment, not per offset, so
+        // paging converts once. Links are minted per call and pictures are
+        // cheap to fetch (and too big to hold), so neither is cached.
+        let key = ReadCache::key("mail_attachment", &(&args.id, &args.attachment_id));
         if mode == AttachmentMode::Read
             && let Some(hit) = self.state.cache.get(&tc.user.email, &key)
+            && let Ok(doc) = serde_json::from_str::<Converted>(&hit)
         {
-            return Ok(CallToolResult::success(vec![ContentBlock::text(hit)]));
+            return Ok(text_result(render_document(&args.id, &doc, offset)?));
         }
 
         let message = self.find_message(&candidates, &args.id).await?;
@@ -104,22 +110,22 @@ impl PidgeMcp {
                     .map_err(|_| {
                         McpError::internal_error("could not create a download link", None)
                     })?;
-                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                Ok(text_result(format!(
                     "Download {} ({} bytes): {}/dl/{token}  (valid 15 minutes)",
                     one_line(&attachment.name),
                     attachment.size_bytes,
                     self.state.config.base_url()
-                ))]))
+                )))
             }
             AttachmentMode::Read if is_image(&attachment) => {
                 self.read_image(&message, &attachment).await
             }
             AttachmentMode::Read => {
-                let text = self
-                    .read_document(&tc, &message, &attachment, args.offset.unwrap_or(0))
-                    .await?;
-                self.state.cache.put(&tc.user.email, key, text.clone());
-                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+                let doc = self.convert_document(&tc, &message, attachment).await?;
+                if let Ok(json) = serde_json::to_string(&doc) {
+                    self.state.cache.put(&tc.user.email, key, json);
+                }
+                Ok(text_result(render_document(&message.id, &doc, offset)?))
             }
         }
     }
@@ -154,14 +160,13 @@ impl PidgeMcp {
         attachment: &Attachment,
     ) -> Result<CallToolResult, McpError> {
         if attachment.size_bytes > MAX_IMAGE_BYTES {
-            return Err(tool_error(format!(
-                "{} ({}, {} bytes) is over the 5 MB limit for pictures; use mode=link to give the user a download link",
-                one_line(&attachment.name),
-                one_line(&attachment.content_type),
-                attachment.size_bytes
-            )));
+            return Err(image_too_large(attachment, attachment.size_bytes));
         }
         let bytes = self.fetch(message, attachment).await?;
+        // The listing's size is Graph's estimate; the bytes are what we send.
+        if bytes.len() as u64 > MAX_IMAGE_BYTES {
+            return Err(image_too_large(attachment, bytes.len() as u64));
+        }
         Ok(CallToolResult::success(vec![
             ContentBlock::text(format!(
                 "{}, {}, {} bytes",
@@ -173,63 +178,32 @@ impl PidgeMcp {
         ]))
     }
 
-    /// The attachment converted to Markdown, from character `offset`, at
-    /// most [`TEXT_CAP`] characters, wrapped as untrusted, with a `next:`
-    /// line when more remains.
-    async fn read_document(
+    /// The attachment converted to Markdown.
+    async fn convert_document(
         &self,
         tc: &ToolContext,
         message: &FullMessage,
-        attachment: &Attachment,
-        offset: usize,
-    ) -> Result<String, McpError> {
-        let bytes = self.fetch(message, attachment).await?;
-        let markdown = match markitdown::convert(&bytes, &attachment.name, CONVERT_TIMEOUT).await {
-            Ok(markdown) => markdown,
+        attachment: Attachment,
+    ) -> Result<Converted, McpError> {
+        let bytes = self.fetch(message, &attachment).await?;
+        let _slot = conversion_slot(&self.state.conversions, SLOT_WAIT).await?;
+        let converted = markitdown::convert(
+            &self.state.config.markitdown,
+            &bytes,
+            &attachment.name,
+            CONVERT_TIMEOUT,
+        )
+        .await;
+        match converted {
+            Ok(markdown) => Ok(Converted {
+                attachment,
+                markdown,
+            }),
             Err(e) => {
                 tracing::warn!(user = %user_hash(&tc.user.email), error = %e, "attachment conversion failed");
-                return Err(conversion_error(attachment, &e));
+                Err(conversion_error(&attachment, &e))
             }
-        };
-
-        let total = markdown.chars().count();
-        if offset > 0 && offset >= total {
-            return Err(tool_error(format!(
-                "offset {offset} is past the end of this attachment's text ({total} characters)"
-            )));
         }
-        let rest = match markdown.char_indices().nth(offset) {
-            Some((at, _)) => &markdown[at..],
-            None => "",
-        };
-        let more = total - offset > TEXT_CAP;
-        let mut block = format!(
-            "attachment: {}  type={}  size={} bytes\n",
-            one_line(&attachment.name),
-            one_line(&attachment.content_type),
-            attachment.size_bytes
-        );
-        if offset > 0 || more {
-            let end = (offset + TEXT_CAP).min(total);
-            block.push_str(&format!("characters {offset}–{end} of {total}\n"));
-        }
-        block.push('\n');
-        if rest.trim().is_empty() {
-            block.push_str("(no text could be extracted)");
-        } else {
-            block.push_str(&cap(rest, TEXT_CAP));
-        }
-
-        let mut out = untrusted(&block);
-        if more {
-            out.push_str(&format!(
-                "\nnext: mail_attachment id={} attachment_id={} offset={}",
-                message.id,
-                attachment.id,
-                offset + TEXT_CAP
-            ));
-        }
-        Ok(out)
     }
 
     async fn fetch(
@@ -243,6 +217,87 @@ impl PidgeMcp {
             .await
             .map_err(graph_error)
     }
+}
+
+/// A converted document as the read cache holds it.
+#[derive(Serialize, Deserialize)]
+struct Converted {
+    attachment: Attachment,
+    markdown: String,
+}
+
+fn text_result(text: String) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::text(text)])
+}
+
+/// `doc`'s Markdown from character `offset`, at most [`TEXT_CAP`]
+/// characters, wrapped as untrusted, with a `next:` line when more remains.
+fn render_document(message_id: &str, doc: &Converted, offset: usize) -> Result<String, McpError> {
+    let attachment = &doc.attachment;
+    let total = doc.markdown.chars().count();
+    if offset > 0 && offset >= total {
+        return Err(tool_error(format!(
+            "offset {offset} is past the end of this attachment's text ({total} characters)"
+        )));
+    }
+    let rest = match doc.markdown.char_indices().nth(offset) {
+        Some((at, _)) => &doc.markdown[at..],
+        None => "",
+    };
+    let more = total - offset > TEXT_CAP;
+    let mut block = format!(
+        "attachment: {}  type={}  size={} bytes\n",
+        one_line(&attachment.name),
+        one_line(&attachment.content_type),
+        attachment.size_bytes
+    );
+    if offset > 0 || more {
+        let end = (offset + TEXT_CAP).min(total);
+        block.push_str(&format!("characters {offset}–{end} of {total}\n"));
+    }
+    block.push('\n');
+    if rest.trim().is_empty() {
+        block.push_str("(no text could be extracted)");
+    } else {
+        block.push_str(&cap(rest, TEXT_CAP));
+    }
+
+    let mut out = untrusted(&block);
+    if rest.trim().is_empty() {
+        out.push_str(&format!(
+            "\nno text could be extracted from this {} ({} bytes); use mode=link to give the user a download link",
+            one_line(&attachment.content_type),
+            attachment.size_bytes
+        ));
+    }
+    if more {
+        out.push_str(&format!(
+            "\nnext: mail_attachment id={message_id} attachment_id={} offset={}",
+            attachment.id,
+            offset + TEXT_CAP
+        ));
+    }
+    Ok(out)
+}
+
+/// One of the server's [`crate::state::CONVERSION_SLOTS`], or a "busy"
+/// error if none frees up within `wait`.
+async fn conversion_slot(
+    slots: &Semaphore,
+    wait: Duration,
+) -> Result<SemaphorePermit<'_>, McpError> {
+    match tokio::time::timeout(wait, slots.acquire()).await {
+        Ok(Ok(permit)) => Ok(permit),
+        _ => Err(tool_error("conversion is busy; try again shortly")),
+    }
+}
+
+fn image_too_large(attachment: &Attachment, size: u64) -> McpError {
+    tool_error(format!(
+        "{} ({}, {size} bytes) is over the 5 MB limit for pictures; use mode=link to give the user a download link",
+        one_line(&attachment.name),
+        one_line(&attachment.content_type),
+    ))
 }
 
 /// The attachment's MIME type, lower-cased and without parameters.
@@ -286,7 +341,7 @@ pub(crate) mod tests {
     use wiremock::{Mock, ResponseTemplate};
 
     use super::*;
-    use crate::markitdown::tests::{fake_markitdown, temp_files};
+    use crate::markitdown::tests::{conversion_lock, temp_files};
     use crate::tools::tests::{ToolHarness, access_token, text};
 
     pub(crate) const JANE: &str = "jane@example.com";
@@ -426,8 +481,8 @@ pub(crate) mod tests {
             .signer
             .verify_download(dl_path(&out).trim_start_matches("/dl/"))
             .unwrap();
-        assert_eq!(claims.sub, JANE);
-        assert_eq!(claims.account, WORK);
+        assert_eq!(claims.uh, crate::users::user_hash(JANE));
+        assert_eq!(claims.mh, crate::users::user_hash(WORK));
         assert_eq!(claims.content_type, "application/pdf");
 
         // The link works through the real router, outside the bearer layer.
@@ -489,7 +544,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_document_is_converted_wrapped_capped_and_paged_by_offset() {
-        let _guard = fake_markitdown().await;
+        let _guard = conversion_lock().await;
         let before = temp_files();
         let h = ToolHarness::new(&[JANE]).await;
         mount_message(&h, JANE, "M1").await;
@@ -507,8 +562,9 @@ pub(crate) mod tests {
             )],
         )
         .await;
-        // Three reads below, but the repeated first page comes from the cache.
-        mount_bytes(&h, JANE, "M1", "A1", body.as_bytes(), 2).await;
+        // Three reads below (page 1, page 1 again, page 2): the Markdown is
+        // cached per attachment, so it is fetched and converted once.
+        mount_bytes(&h, JANE, "M1", "A1", body.as_bytes(), 1).await;
 
         let first = text(&call(&h, args("M1", "A1")).await.unwrap());
         assert!(
@@ -554,8 +610,89 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn an_image_whose_bytes_exceed_5_mb_is_refused_after_the_fetch() {
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_message(&h, JANE, "M1").await;
+        // The listing understates the size; the bytes are what count.
+        mount_listing(
+            &h,
+            JANE,
+            "M1",
+            vec![listing_row("A1", "big.png", "image/png", 10)],
+        )
+        .await;
+        mount_bytes(&h, JANE, "M1", "A1", &vec![0u8; 5 * 1024 * 1024 + 1], 1).await;
+        let err = call(&h, args("M1", "A1")).await.unwrap_err();
+        assert!(err.message.contains("5 MB"), "{err:?}");
+        assert!(err.message.contains("mode=link"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_extraction_names_the_file_and_suggests_a_link() {
+        let _guard = conversion_lock().await;
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_message(&h, JANE, "M1").await;
+        mount_listing(
+            &h,
+            JANE,
+            "M1",
+            vec![listing_row("A1", "scan.empty", "application/pdf", 7)],
+        )
+        .await;
+        mount_bytes(&h, JANE, "M1", "A1", b"%PDF-1.", 1).await;
+        let out = text(&call(&h, args("M1", "A1")).await.unwrap());
+        assert!(out.contains("(no text could be extracted)"), "{out}");
+        assert!(
+            out.ends_with(
+                "</untrusted-email-content>\nno text could be extracted from this application/pdf (7 bytes); use mode=link to give the user a download link"
+            ),
+            "{out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_conversion_that_cannot_get_a_slot_in_time_is_busy() {
+        let slots = tokio::sync::Semaphore::new(1);
+        let held = conversion_slot(&slots, Duration::from_millis(50))
+            .await
+            .unwrap();
+        let err = conversion_slot(&slots, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert_eq!(err.message, "conversion is busy; try again shortly");
+        drop(held);
+        assert!(
+            conversion_slot(&slots, Duration::from_millis(50))
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_svg_is_converted_not_returned_as_an_image() {
+        let _guard = conversion_lock().await;
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_message(&h, JANE, "M1").await;
+        mount_listing(
+            &h,
+            JANE,
+            "M1",
+            vec![listing_row("A1", "logo.svg", "image/svg+xml", 11)],
+        )
+        .await;
+        mount_bytes(&h, JANE, "M1", "A1", b"<svg></svg>", 1).await;
+
+        let result = call(&h, args("M1", "A1")).await.unwrap();
+        assert_eq!(result.content.len(), 1, "{result:?}");
+        assert!(result.content[0].as_image().is_none(), "{result:?}");
+        let out = text(&result);
+        assert!(out.contains("type=image/svg+xml"), "{out}");
+        assert!(out.contains("# converted\n<svg></svg>"), "{out}");
+    }
+
+    #[tokio::test]
     async fn an_offset_past_the_end_is_an_error() {
-        let _guard = fake_markitdown().await;
+        let _guard = conversion_lock().await;
         let h = ToolHarness::new(&[JANE]).await;
         mount_message(&h, JANE, "M1").await;
         mount_listing(
@@ -581,7 +718,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn a_failed_conversion_names_type_and_size_and_suggests_a_link_without_stderr() {
-        let _guard = fake_markitdown().await;
+        let _guard = conversion_lock().await;
         let h = ToolHarness::new(&[JANE]).await;
         mount_message(&h, JANE, "M1").await;
         mount_listing(

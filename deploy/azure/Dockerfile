@@ -15,7 +15,7 @@ RUN cargo build --release --locked -p pidge-mcp \
  && strip target/release/pidge-mcp
 
 FROM python:3.13-slim-bookworm
-RUN pip install --no-cache-dir "markitdown[pdf,docx,xlsx,pptx]" \
+RUN pip install --no-cache-dir "markitdown[pdf,docx,xlsx,pptx]==0.1.8" \
  && useradd --system --uid 65532 --create-home pidge
 COPY --from=builder /src/target/release/pidge-mcp /usr/local/bin/pidge-mcp
 ENV PORT=8080

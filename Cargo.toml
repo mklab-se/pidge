@@ -119,6 +119,8 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 http = "1"
 tower-http = { version = "0.7", features = ["trace"] }
 tokio-util = "0.7"
+# pidge-mcp: resource limits for the markitdown subprocess (Linux).
+libc = "0.2"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 # aws-lc-rs is already the TLS crypto provider (reqwest/rustls); reuse it for HS256

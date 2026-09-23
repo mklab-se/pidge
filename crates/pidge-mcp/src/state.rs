@@ -23,6 +23,8 @@ const CACHE_PER_USER: usize = 256;
 pub const SENDS_PER_HOUR: usize = 30;
 /// Attachment downloads (`GET /dl/…`) allowed per user in any rolling hour.
 pub const DOWNLOADS_PER_HOUR: usize = 60;
+/// markitdown processes allowed to run at once, across all users.
+pub const CONVERSION_SLOTS: usize = 2;
 const RATE_WINDOW: StdDuration = StdDuration::from_secs(60 * 60);
 
 /// What a Microsoft sign-in is for.
@@ -74,6 +76,8 @@ pub struct AppState {
     pub sends: Mutex<HashMap<String, Vec<Instant>>>,
     /// Sign-in address → instants of that user's downloads in the last hour.
     pub downloads: Mutex<HashMap<String, Vec<Instant>>>,
+    /// Bounds concurrent markitdown runs to [`CONVERSION_SLOTS`].
+    pub conversions: tokio::sync::Semaphore,
     pending: Mutex<HashMap<String, PendingAuthorization>>,
     /// `jti` → expiry of authorization codes already redeemed, so a code
     /// can't be replayed inside its two-minute lifetime.
@@ -101,6 +105,7 @@ impl AppState {
             contacts: ContactCaches::default(),
             sends: Mutex::new(HashMap::new()),
             downloads: Mutex::new(HashMap::new()),
+            conversions: tokio::sync::Semaphore::new(CONVERSION_SLOTS),
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
         }
@@ -184,4 +189,21 @@ fn claim_in_window(counter: &Mutex<HashMap<String, Vec<Instant>>>, user: &str, c
     }
     events.push(Instant::now());
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::tools::tests::ToolHarness;
+
+    use super::DOWNLOADS_PER_HOUR;
+
+    #[tokio::test]
+    async fn one_users_download_budget_does_not_touch_anothers() {
+        let h = ToolHarness::new(&["jane@example.com"]).await;
+        for _ in 0..DOWNLOADS_PER_HOUR {
+            assert!(h.state.reserve_download("jane@example.com"));
+        }
+        assert!(!h.state.reserve_download("jane@example.com"));
+        assert!(h.state.reserve_download("anna@example.com"));
+    }
 }

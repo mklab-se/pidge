@@ -63,6 +63,7 @@ async fn harness(signed_in_email: &str) -> Harness {
         secrets: SecretsBackend::File {
             dir: secrets_dir.path().to_path_buf(),
         },
+        markitdown: "markitdown".into(),
     };
     let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
     let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));

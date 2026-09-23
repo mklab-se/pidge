@@ -41,6 +41,14 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
 
+    forbid_core_dumps_and_ptrace();
+
+    // Conversions a killed process never cleaned up; see `markitdown`.
+    let swept = markitdown::sweep_stale_temp_files(std::time::Duration::from_secs(60 * 60));
+    if swept > 0 {
+        tracing::info!(count = swept, "removed stale attachment temp files");
+    }
+
     let config = Config::from_env()?;
     tracing::info!(
         public_url = %config.public_url,
@@ -89,6 +97,26 @@ async fn main() -> Result<()> {
         .await?;
     Ok(())
 }
+
+/// markitdown runs as our uid, so without this a child exploited by a
+/// hostile document could read `/proc/<our pid>/environ` (the managed
+/// identity endpoint and secret on Container Apps) or ptrace us. Marking the
+/// process non-dumpable makes those files root-only. The child's own
+/// environment is scrubbed separately (see `markitdown`).
+#[cfg(target_os = "linux")]
+fn forbid_core_dumps_and_ptrace() {
+    // SAFETY: PR_SET_DUMPABLE takes plain integer arguments and touches no
+    // memory of ours.
+    let rc = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
+    if rc == 0 {
+        tracing::info!("process marked non-dumpable");
+    } else {
+        tracing::info!("could not mark process non-dumpable");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn forbid_core_dumps_and_ptrace() {}
 
 async fn load_or_create_signing_key(secrets: &SharedSecrets) -> Result<Vec<u8>> {
     if let Some(stored) = secrets.get(SIGNING_KEY_SECRET).await? {

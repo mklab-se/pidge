@@ -27,6 +27,9 @@ pub struct Config {
     /// Lower-cased e-mail addresses allowed to sign in. `PIDGE_MCP_ALLOWED_EMAILS`, comma-separated.
     pub allowed_emails: HashSet<String>,
     pub secrets: SecretsBackend,
+    /// The markitdown executable `mail_attachment` converts documents with.
+    /// `PIDGE_MCP_MARKITDOWN`, default `markitdown` (looked up on `PATH`).
+    pub markitdown: PathBuf,
 }
 
 impl Config {
@@ -75,7 +78,12 @@ impl Config {
             }
         };
 
+        let markitdown = std::env::var_os("PIDGE_MCP_MARKITDOWN")
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| PathBuf::from("markitdown"), PathBuf::from);
+
         Ok(Self {
+            markitdown,
             port,
             public_url,
             allowed_emails,

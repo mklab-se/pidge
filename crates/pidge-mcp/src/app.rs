@@ -3,6 +3,8 @@
 //! whole router in-process.
 
 use axum::Router;
+use axum::body::Body;
+use axum::http::Request;
 use axum::routing::get;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
@@ -39,8 +41,24 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
         .route("/dl/{token}", get(download::download))
         .merge(oauth::router())
         .merge(mcp_routes)
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(tower_http::trace::TraceLayer::new_for_http().make_span_with(request_span))
         .with_state(state)
+}
+
+/// The default request span, except that a `/dl/` URI is logged as
+/// `/dl/<redacted>`: the token in it is a bearer credential.
+fn request_span(req: &Request<Body>) -> tracing::Span {
+    let uri = if req.uri().path().starts_with("/dl/") {
+        "/dl/<redacted>".to_string()
+    } else {
+        req.uri().to_string()
+    };
+    tracing::debug_span!(
+        "request",
+        method = %req.method(),
+        uri = %uri,
+        version = ?req.version(),
+    )
 }
 
 /// The public host (with and without its port) plus loopback for local runs.

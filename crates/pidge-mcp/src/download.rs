@@ -1,8 +1,10 @@
 //! `GET /dl/{token}`: serves one attachment to whoever holds a
 //! `mail_attachment` link (spec §1.10). The signed token is the only
-//! credential, so the route sits outside the bearer layer; it still checks
-//! that the link's user is allowed, within their hourly download budget,
-//! and still owns the mailbox. Every refusal looks the same: a neutral 404.
+//! credential, so the route sits outside the bearer layer. The token names
+//! the user and mailbox only by hash; the route resolves the user against
+//! the allowlist, charges their hourly download budget, and finds the
+//! mailbox among those they still own. Every refusal looks the same: a
+//! neutral 404.
 
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -20,27 +22,41 @@ pub async fn download(State(state): State<SharedState>, Path(token): Path<String
         tracing::info!(outcome = "invalid link", "download refused");
         return pages::link_unavailable();
     };
-    let user = user_hash(&claims.sub);
+    let user = claims.uh.as_str();
     let refuse = |outcome: &str| {
         tracing::info!(%user, outcome, "download refused");
         pages::link_unavailable()
     };
 
-    if !state.config.is_allowed(&claims.sub) {
+    // The token names people only by hash: find the allowlisted user…
+    let Some(signin) = state
+        .config
+        .allowed_emails
+        .iter()
+        .find(|e| user_hash(e) == claims.uh)
+        .cloned()
+    else {
         return refuse("user not allowed");
-    }
-    if !state.reserve_download(&claims.sub) {
+    };
+    if !state.reserve_download(&signin) {
         return refuse("rate limited");
     }
-    match state.users.load(&claims.sub).await {
-        Ok(Some(record)) if record.owns(&claims.account) => {}
-        Ok(_) => return refuse("mailbox not owned"),
+    // …and the mailbox among the ones they still own.
+    let account = match state.users.load(&signin).await {
+        Ok(Some(record)) => record
+            .mailboxes
+            .into_iter()
+            .find(|m| user_hash(m) == claims.mh),
+        Ok(None) => None,
         Err(_) => return refuse("user store unavailable"),
-    }
+    };
+    let Some(account) = account else {
+        return refuse("mailbox not owned");
+    };
     // The error is not logged: Graph failures can name the mailbox.
     let bytes = match state
         .graph
-        .get_attachment_bytes(&claims.account, &claims.message_id, &claims.attachment_id)
+        .get_attachment_bytes(&account, &claims.message_id, &claims.attachment_id)
         .await
     {
         Ok(bytes) => bytes,
@@ -68,6 +84,11 @@ pub async fn download(State(state): State<SharedState>, Path(token): Path<String
             (
                 header::X_CONTENT_TYPE_OPTIONS,
                 HeaderValue::from_static("nosniff"),
+            ),
+            // Even if a browser renders it, the file gets no origin or scripts.
+            (
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox"),
             ),
         ],
         Body::from(bytes),
@@ -185,9 +206,13 @@ pub(crate) mod tests {
         );
         assert_eq!(headers[header::CACHE_CONTROL], "no-store");
         assert_eq!(headers["x-content-type-options"], "nosniff");
+        assert_eq!(headers[header::CONTENT_SECURITY_POLICY], "sandbox");
 
         let logged = logs.text();
         assert!(logged.contains("served"), "{logged}");
+        // The request span names the route but never the token.
+        assert!(logged.contains("/dl/<redacted>"), "{logged}");
+        assert!(!logged.contains(&t), "token logged: {logged}");
         assert_no_address("logs", &logged);
     }
 
