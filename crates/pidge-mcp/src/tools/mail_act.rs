@@ -61,6 +61,8 @@ pub struct ActArgs {
 
 /// Characters of a manual unsubscribe link shown.
 const MANUAL_URL_CAP: usize = 500;
+/// Characters of a `List-Unsubscribe` mailto subject used.
+const MAILTO_SUBJECT_CAP: usize = 100;
 
 const NOT_FOUND: &str = "not found in any of your mailboxes";
 
@@ -68,6 +70,8 @@ const NOT_FOUND: &str = "not found in any of your mailboxes";
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Outcome {
     Ok,
+    /// An unsubscribe e-mail went to this address.
+    Sent(String),
     Failed(String),
     /// Unsubscribing needs the user to open this (https) link themselves.
     Manual(String),
@@ -145,6 +149,13 @@ impl PidgeMcp {
                 Outcome::Ok => {
                     ok += 1;
                     "ok".to_string()
+                }
+                Outcome::Sent(address) => {
+                    ok += 1;
+                    format!(
+                        "ok (unsubscribe e-mail sent to {})",
+                        cap_inline(&one_line(&address), MANUAL_URL_CAP)
+                    )
                 }
                 Outcome::Failed(reason) => {
                     failed += 1;
@@ -297,10 +308,10 @@ impl PidgeMcp {
                     Err(e) => Outcome::Failed(failure(&e)),
                 }
             }
+            // The header's body is ignored and its subject capped: the
+            // sender chooses them, and the e-mail goes out as the user.
             UnsubscribeMethod::Mailto {
-                address,
-                subject,
-                body,
+                address, subject, ..
             } => {
                 if !self.state.reserve_send(user) {
                     return Outcome::Failed(format!(
@@ -308,14 +319,14 @@ impl PidgeMcp {
                     ));
                 }
                 let message = Outgoing {
-                    subject: subject.unwrap_or_else(|| "unsubscribe".into()),
-                    body_text: body.unwrap_or_else(|| "unsubscribe".into()),
-                    to: vec![address],
+                    subject: mailto_subject(subject.as_deref()),
+                    body_text: "unsubscribe".into(),
+                    to: vec![address.clone()],
                     cc: vec![],
                     bcc: vec![],
                 };
                 match self.state.graph.send_mail(account, &message).await {
-                    Ok(()) => Outcome::Ok,
+                    Ok(()) => Outcome::Sent(address),
                     Err(e) => {
                         self.state.release_send(user);
                         Outcome::Failed(failure(&e))
@@ -386,11 +397,27 @@ fn batch_outcome(r: &BatchResponse) -> Outcome {
     }
 }
 
+/// The unsubscribe e-mail's subject: the header's, on one line and capped
+/// at [`MAILTO_SUBJECT_CAP`] characters, or "unsubscribe".
+fn mailto_subject(subject: Option<&str>) -> String {
+    let subject: String = one_line(subject.unwrap_or_default())
+        .chars()
+        .take(MAILTO_SUBJECT_CAP)
+        .collect();
+    let subject = subject.trim();
+    if subject.is_empty() {
+        "unsubscribe".into()
+    } else {
+        subject.to_string()
+    }
+}
+
 /// A failure reason for one id: a status or a fixed phrase, never a Graph
 /// (or third-party) response body, and never an address.
 fn failure(e: &ClientError) -> String {
     match e {
         ClientError::Graph { status, .. } => status.to_string(),
+        ClientError::UnsubscribeRejected => "unsubscribe request rejected".into(),
         ClientError::SessionExpired { .. } => {
             "mailbox needs reconnecting: call accounts_connect".into()
         }
@@ -856,6 +883,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_one_click_link_to_an_internal_host_is_rejected_without_a_request() {
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_headers(
+            &h,
+            "M1",
+            &[
+                ("List-Unsubscribe", "<https://10.0.0.1/unsub?u=abc>"),
+                ("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"),
+            ],
+        )
+        .await;
+        let out = act(&h, args(&["M1"], ActAction::Unsubscribe))
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            "M1 failed: unsubscribe request rejected\ndone: 0 ok, 1 failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_one_click_endpoint_reports_no_status() {
+        let h = ToolHarness::new(&[JANE]).await;
+        let url = format!(
+            "{}/unsub?u=abc",
+            h.graph.uri().replacen("http://", "https://", 1)
+        );
+        mount_headers(
+            &h,
+            "M1",
+            &[
+                ("List-Unsubscribe", &format!("<{url}>")),
+                ("List-Unsubscribe-Post", "List-Unsubscribe=One-Click"),
+            ],
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path("/unsub"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("internal detail"))
+            .mount(&h.graph)
+            .await;
+        let out = act(&h, args(&["M1"], ActAction::Unsubscribe))
+            .await
+            .unwrap();
+        assert_eq!(
+            out,
+            "M1 failed: unsubscribe request rejected\ndone: 0 ok, 1 failed"
+        );
+    }
+
+    #[tokio::test]
     async fn unsubscribe_by_mailto_sends_through_the_cap_and_logs_no_addresses() {
         let (logs, _guard) = LogCapture::start();
         let h = ToolHarness::new(&[JANE]).await;
@@ -864,7 +942,7 @@ mod tests {
             "M1",
             &[(
                 "List-Unsubscribe",
-                "<mailto:leave@lists.example.com?subject=stop%20please>",
+                "<mailto:leave@lists.example.com?subject=stop%20please&body=Please%20wire%20money>",
             )],
         )
         .await;
@@ -884,9 +962,31 @@ mod tests {
         let out = act(&h, args(&["M1"], ActAction::Unsubscribe))
             .await
             .unwrap();
-        assert_eq!(out, "M1 ok\ndone: 1 ok, 0 failed");
+        assert_eq!(
+            out,
+            "M1 ok (unsubscribe e-mail sent to leave@lists.example.com)\ndone: 1 ok, 0 failed"
+        );
         assert_eq!(h.state.sends.lock().unwrap()[JANE].len(), 1);
         assert_no_address("logs", &logs.text());
+        // The header's body is never sent.
+        let sent = h
+            .graph
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.url.path() == "/v1.0/me/sendMail")
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&sent.body).contains("wire money"));
+    }
+
+    #[test]
+    fn a_mailto_subject_is_one_line_and_capped() {
+        assert_eq!(mailto_subject(None), "unsubscribe");
+        assert_eq!(mailto_subject(Some(" \n\t")), "unsubscribe");
+        assert_eq!(mailto_subject(Some("stop\r\nBcc: x")), "stop Bcc: x");
+        let long = "a".repeat(150);
+        assert_eq!(mailto_subject(Some(&long)), "a".repeat(100));
     }
 
     #[tokio::test]

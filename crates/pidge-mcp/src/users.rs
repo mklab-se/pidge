@@ -12,11 +12,24 @@ use sha2::{Digest, Sha256};
 
 use crate::secrets::{SharedSecrets, mailbox_secret_name};
 
+/// The immutable identity of a Microsoft account: its tenant and object id,
+/// from the ID token of the sign-in. Pinned on first use, so a later sign-in
+/// whose address matches but whose account differs is refused.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Identity {
+    pub tid: String,
+    pub oid: String,
+}
+
 /// A signed-in user's profile: which mailboxes they own, their default
 /// sending address, timezone, and trust settings.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UserRecord {
     pub signin: String,
+    /// The Microsoft account this user signs in with; `None` on records
+    /// from before identities were pinned (pinned at the next sign-in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Identity>,
     pub mailboxes: Vec<String>,
     pub default_sender: String,
     pub timezone: String,
@@ -35,6 +48,7 @@ impl UserRecord {
             default_sender: signin.clone(),
             timezone: "Europe/Stockholm".to_string(),
             signin,
+            identity: None,
             trusted_senders: Vec::new(),
             token_generation: 0,
         }
@@ -61,6 +75,10 @@ impl UserRecord {
 pub struct MailboxRecord {
     pub owner: String,
     pub tokens: TokenSet,
+    /// The Microsoft account whose tokens these are; `None` on records from
+    /// before identities were pinned (pinned at the next bind).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<Identity>,
 }
 
 /// Backward-compatible shape for reading a mailbox secret: either the
@@ -79,6 +97,8 @@ enum StoredMailbox {
 pub enum OwnershipError {
     #[error("mailbox is owned by another user")]
     OwnedByOther,
+    #[error("mailbox is pinned to a different Microsoft account")]
+    IdentityMismatch,
     #[error("secret store: {0}")]
     Store(#[from] anyhow::Error),
 }
@@ -126,6 +146,7 @@ impl UserStore {
             StoredMailbox::Legacy(tokens) => MailboxRecord {
                 owner: mailbox.to_ascii_lowercase(),
                 tokens,
+                identity: None,
             },
         }))
     }
@@ -138,11 +159,24 @@ impl UserStore {
 
     /// `Ok(())` if `mailbox` is unowned or already owned by `owner`;
     /// `Err(OwnershipError::OwnedByOther)` if it's claimed by someone else.
-    pub async fn check_ownership(&self, mailbox: &str, owner: &str) -> Result<(), OwnershipError> {
-        match self.load_mailbox(mailbox).await? {
-            Some(rec) if !rec.owner.eq_ignore_ascii_case(owner) => {
-                Err(OwnershipError::OwnedByOther)
-            }
+    /// And when `identity` is given and the stored record has one pinned,
+    /// they must match
+    /// (`Err(OwnershipError::IdentityMismatch)` otherwise). A record without
+    /// a pinned identity passes; the caller pins it when saving.
+    pub async fn check_binding(
+        &self,
+        mailbox: &str,
+        owner: &str,
+        identity: Option<&Identity>,
+    ) -> Result<(), OwnershipError> {
+        let Some(rec) = self.load_mailbox(mailbox).await? else {
+            return Ok(());
+        };
+        if !rec.owner.eq_ignore_ascii_case(owner) {
+            return Err(OwnershipError::OwnedByOther);
+        }
+        match (&rec.identity, identity) {
+            (Some(pinned), Some(new)) if pinned != new => Err(OwnershipError::IdentityMismatch),
             _ => Ok(()),
         }
     }
@@ -222,6 +256,67 @@ mod tests {
         assert!(r.owns("JANE@example.com"));
     }
 
+    #[test]
+    fn records_without_an_identity_still_load() {
+        let user: UserRecord = serde_json::from_str(
+            r#"{"signin":"jane@example.com","mailboxes":["jane@example.com"],"default_sender":"jane@example.com","timezone":"Europe/Stockholm"}"#,
+        )
+        .unwrap();
+        assert_eq!(user.identity, None);
+        let mailbox: MailboxRecord = serde_json::from_str(
+            r#"{"owner":"jane@example.com","tokens":{"access_token":"a","refresh_token":"r","expires_at":"2026-01-01T00:00:00Z"}}"#,
+        )
+        .unwrap();
+        assert_eq!(mailbox.identity, None);
+    }
+
+    #[tokio::test]
+    async fn a_pinned_mailbox_identity_must_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets: SharedSecrets = Arc::new(FileSecrets::new(dir.path()).unwrap());
+        let store = UserStore::new(secrets);
+        let pinned = Identity {
+            tid: "t".into(),
+            oid: "o1".into(),
+        };
+        let other = Identity {
+            tid: "t".into(),
+            oid: "o2".into(),
+        };
+        let tokens = TokenSet {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            expires_at: chrono::Utc::now(),
+        };
+        let mut rec = MailboxRecord {
+            owner: "jane@example.com".into(),
+            tokens,
+            identity: None,
+        };
+        store.save_mailbox(&rec, "jane@example.com").await.unwrap();
+        // Unpinned: any identity passes.
+        assert!(
+            store
+                .check_binding("jane@example.com", "jane@example.com", Some(&other))
+                .await
+                .is_ok()
+        );
+        rec.identity = Some(pinned.clone());
+        store.save_mailbox(&rec, "jane@example.com").await.unwrap();
+        assert!(
+            store
+                .check_binding("jane@example.com", "jane@example.com", Some(&pinned))
+                .await
+                .is_ok()
+        );
+        assert!(matches!(
+            store
+                .check_binding("jane@example.com", "jane@example.com", Some(&other))
+                .await,
+            Err(OwnershipError::IdentityMismatch)
+        ));
+    }
+
     #[tokio::test]
     async fn ownership_is_enforced_and_legacy_secrets_are_adopted() {
         let dir = tempfile::tempdir().unwrap();
@@ -246,13 +341,13 @@ mod tests {
         assert_eq!(rec.owner, "old@example.com");
         assert!(
             store
-                .check_ownership("old@example.com", "old@example.com")
+                .check_binding("old@example.com", "old@example.com", None)
                 .await
                 .is_ok()
         );
         assert!(matches!(
             store
-                .check_ownership("old@example.com", "mallory@example.com")
+                .check_binding("old@example.com", "mallory@example.com", None)
                 .await,
             Err(OwnershipError::OwnedByOther)
         ));

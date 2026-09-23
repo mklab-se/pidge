@@ -59,6 +59,9 @@ pub struct PendingAuthorization {
 }
 
 pub const PENDING_TTL: Duration = Duration::minutes(10);
+/// Most pending authorizations held at once; the oldest is evicted beyond
+/// it, so unauthenticated `/authorize` calls can't grow the map unbounded.
+pub const MAX_PENDING: usize = 1_000;
 
 pub struct AppState {
     pub config: Config,
@@ -115,6 +118,16 @@ impl AppState {
         let mut map = self.pending.lock().expect("pending lock");
         let cutoff = Utc::now() - PENDING_TTL;
         map.retain(|_, p| p.created_at > cutoff);
+        while map.len() >= MAX_PENDING && !map.contains_key(&state) {
+            let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, p)| p.created_at)
+                .map(|(k, _)| k.clone())
+            else {
+                break;
+            };
+            map.remove(&oldest);
+        }
         map.insert(state, pending);
     }
 
@@ -195,7 +208,43 @@ fn claim_in_window(counter: &Mutex<HashMap<String, Vec<Instant>>>, user: &str, c
 mod tests {
     use crate::tools::tests::ToolHarness;
 
-    use super::DOWNLOADS_PER_HOUR;
+    use super::{DOWNLOADS_PER_HOUR, MAX_PENDING, PendingAuthorization, PendingKind};
+
+    fn pending_at(created_at: chrono::DateTime<chrono::Utc>) -> PendingAuthorization {
+        PendingAuthorization {
+            kind: PendingKind::SignIn,
+            client_id: String::new(),
+            client_redirect_uri: String::new(),
+            client_state: None,
+            code_challenge: String::new(),
+            microsoft_verifier: String::new(),
+            consent_nonce: None,
+            created_at,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_pending_map_is_capped_by_evicting_the_oldest() {
+        let h = ToolHarness::new(&["jane@example.com"]).await;
+        let start = chrono::Utc::now() - chrono::Duration::minutes(5);
+        for i in 0..MAX_PENDING {
+            h.state.insert_pending(
+                format!("s{i}"),
+                pending_at(start + chrono::Duration::milliseconds(i as i64)),
+            );
+        }
+        assert!(h.state.peek_pending("s0").is_some());
+        h.state
+            .insert_pending("new".into(), pending_at(chrono::Utc::now()));
+        assert!(h.state.peek_pending("new").is_some());
+        assert!(h.state.peek_pending("s0").is_none(), "oldest evicted");
+        assert!(h.state.peek_pending("s1").is_some());
+        assert_eq!(h.state.pending.lock().unwrap().len(), MAX_PENDING);
+        // Replacing an existing key evicts nothing.
+        h.state
+            .insert_pending("s1".into(), pending_at(chrono::Utc::now()));
+        assert!(h.state.peek_pending("s2").is_some());
+    }
 
     #[tokio::test]
     async fn one_users_download_budget_does_not_touch_anothers() {

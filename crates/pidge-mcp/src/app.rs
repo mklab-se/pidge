@@ -45,13 +45,15 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
         .with_state(state)
 }
 
-/// The default request span, except that a `/dl/` URI is logged as
-/// `/dl/<redacted>`: the token in it is a bearer credential.
+/// The request's span: method and path only. The query string is never
+/// logged: on `/callback` it carries Microsoft's authorization code and
+/// free-text `error_description`, on `/authorize` the client's state. A
+/// `/dl/` path is logged as `/dl/<redacted>`: its token is a bearer credential.
 fn request_span(req: &Request<Body>) -> tracing::Span {
     let uri = if req.uri().path().starts_with("/dl/") {
         "/dl/<redacted>".to_string()
     } else {
-        req.uri().to_string()
+        req.uri().path().to_string()
     };
     tracing::debug_span!(
         "request",

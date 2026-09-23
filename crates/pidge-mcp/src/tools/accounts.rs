@@ -305,6 +305,7 @@ mod tests {
                 &crate::users::MailboxRecord {
                     owner: "mallory@example.com".into(),
                     tokens: crate::tools::tests::fresh_tokens(),
+                    identity: None,
                 },
                 WORK,
             )

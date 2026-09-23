@@ -3,11 +3,16 @@
 //! MCP clients (Claude, ChatGPT, Claude Code, MCP Inspector, …) discover it
 //! through RFC 9728 protected-resource metadata, register themselves with
 //! RFC 7591 dynamic client registration, and run an authorization-code +
-//! PKCE flow. The *user* authenticates at Microsoft: `/authorize` bounces to
-//! Microsoft login, `/callback` verifies the returned account against the
-//! allowlist and, because the very same sign-in grants Graph access to that
-//! account's mailbox, stores its refresh token — sign-in and mailbox
-//! connection are one step.
+//! PKCE flow. The *user* authenticates at Microsoft: `/authorize` shows a
+//! consent page naming the client and where it will be sent, its Continue
+//! (`/authorize/go`) bounces to Microsoft login, and `/callback` verifies the
+//! returned account against the allowlist and, because the very same sign-in
+//! grants Graph access to that account's mailbox, stores its refresh token —
+//! sign-in and mailbox connection are one step.
+//!
+//! An account is identified by its `userPrincipalName` (never the editable
+//! `mail` attribute) and pinned to the immutable tenant and object id from
+//! the ID token the first time it is seen.
 //!
 //! No database: clients, codes and tokens are all signed JWTs (see [`jwt`]).
 //! The only in-memory state is the minutes-long window between `/authorize`
@@ -31,7 +36,9 @@ use url::Url;
 use pidge_client::auth::TokenSet;
 
 use crate::state::{PENDING_TTL, PendingAuthorization, PendingKind, SharedState};
-use crate::users::{MailboxRecord, OwnershipError, UserRecord, log_store_error, user_hash};
+use crate::users::{
+    Identity, MailboxRecord, OwnershipError, UserRecord, log_store_error, user_hash,
+};
 
 pub const SCOPE: &str = "mail";
 
@@ -55,6 +62,7 @@ pub fn router() -> Router<SharedState> {
         )
         .route("/register", post(register))
         .route("/authorize", get(authorize))
+        .route("/authorize/go", get(authorize_go))
         .route("/callback", get(callback))
         .route("/connect", get(connect))
         .route("/connect/go", get(connect_go))
@@ -300,29 +308,70 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
         );
     }
 
+    // Anyone can register a client with any https redirect and hand a user
+    // this link, so before going to Microsoft (which would show only an
+    // account picker) the user is told which client and host will receive
+    // the sign-in. The Continue step is bound to this browser by a cookie.
     let microsoft_state = jwt::random_id();
-    let microsoft_verifier = jwt::random_id() + &jwt::random_id();
-    let microsoft_url = state.graph.auth().authorize_url(
-        &state.config.microsoft_callback_url(),
-        &jwt::pkce_challenge(&microsoft_verifier),
-        &microsoft_state,
-    );
-
+    let nonce = jwt::random_id();
     state.insert_pending(
-        microsoft_state,
+        microsoft_state.clone(),
         PendingAuthorization {
             kind: PendingKind::SignIn,
             client_id: client_id.to_string(),
             client_redirect_uri: redirect_uri.to_string(),
             client_state: client_state.map(str::to_string),
             code_challenge: code_challenge.to_string(),
-            microsoft_verifier,
-            consent_nonce: None,
+            microsoft_verifier: jwt::random_id() + &jwt::random_id(),
+            consent_nonce: Some(nonce.clone()),
             created_at: chrono::Utc::now(),
         },
     );
 
-    tracing::info!(client_name = ?client.client_name, "authorization started, redirecting to Microsoft");
+    let redirect_host = Url::parse(redirect_uri)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default();
+    let go = format!(
+        "{}/authorize/go?state={}",
+        state.config.base_url(),
+        urlencode(&microsoft_state)
+    );
+    tracing::info!(client_name = ?client.client_name, "authorization started, asking for consent");
+    let resp = pages::confirm_sign_in(client.client_name.as_deref(), &redirect_host, &go);
+    with_consent_cookie(resp, &SIGN_IN_CONSENT, &nonce, &state)
+}
+
+/// The sign-in consent page's Continue: sends the browser to Microsoft with
+/// the pending sign-in's state, but only from the browser shown the page.
+async fn authorize_go(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(p): Query<ConnectParams>,
+) -> Response {
+    let Some((key, pending)) = p
+        .state
+        .as_deref()
+        .and_then(|key| Some((key, state.peek_pending(key)?)))
+        .filter(|(_, pending)| pending.kind == PendingKind::SignIn)
+    else {
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "This sign-in link has expired or is not valid. Start again from your AI client.",
+        );
+    };
+    let presented = consent_nonce_from(&headers, &SIGN_IN_CONSENT);
+    if pending.consent_nonce.is_none() || presented != pending.consent_nonce {
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "Start the sign-in from your AI client and confirm it on the pidge page that opens.",
+        );
+    }
+    let microsoft_url = state.graph.auth().authorize_url(
+        &state.config.microsoft_callback_url(),
+        &jwt::pkce_challenge(&pending.microsoft_verifier),
+        key,
+    );
     Redirect::to(&microsoft_url).into_response()
 }
 
@@ -334,8 +383,9 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
 struct CallbackParams {
     code: Option<String>,
     state: Option<String>,
+    /// Microsoft's error code. Its `error_description` is deliberately not
+    /// read: free text that would otherwise reach the log.
     error: Option<String>,
-    error_description: Option<String>,
 }
 
 /// A failure after Microsoft returned: a sign-in redirects the error to the
@@ -362,6 +412,35 @@ fn callback_failure(pending: &PendingAuthorization, error: &str, description: &s
     }
 }
 
+/// The one answer for a Microsoft account that can't be tied to a stable
+/// identity, or whose identity differs from the one pinned for its address.
+fn unverified_account() -> Response {
+    pages::error(
+        StatusCode::FORBIDDEN,
+        "could not verify the Microsoft account",
+    )
+}
+
+/// Logs a failed call to Microsoft with only the HTTP status (when there is
+/// one): the error's text can echo Microsoft's response body.
+fn log_microsoft_failure(what: &str, e: &pidge_client::ClientError) {
+    match e {
+        pidge_client::ClientError::Graph { status, .. } => {
+            tracing::error!(status, "{what} failed");
+        }
+        _ => tracing::error!("{what} failed"),
+    }
+}
+
+/// Microsoft's `error` code as logged: its word characters only, capped, so
+/// a crafted callback can't inject free text into the log.
+fn error_code(err: &str) -> String {
+    err.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take(64)
+        .collect()
+}
+
 fn owned_by_other_page(mailbox: &str) -> Response {
     pages::error(
         StatusCode::FORBIDDEN,
@@ -378,7 +457,8 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
     };
 
     if let Some(err) = p.error.as_deref() {
-        tracing::warn!(error = err, description = ?p.error_description, "Microsoft sign-in failed");
+        // Only the code: `error_description` is free text from the URL.
+        tracing::warn!(error = %error_code(err), "Microsoft sign-in failed");
         return callback_failure(
             &pending,
             "access_denied",
@@ -401,7 +481,7 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
     {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(error = %e, "redeeming Microsoft code");
+            log_microsoft_failure("redeeming Microsoft code", &e);
             return callback_failure(
                 &pending,
                 "server_error",
@@ -410,16 +490,25 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
         }
     };
 
+    // The account's immutable identity, from the ID token Microsoft just
+    // returned over TLS. Without it the account can't be pinned: refuse.
+    let Some(claims) = success
+        .id_token
+        .as_deref()
+        .and_then(pidge_client::auth::extract_id_claims)
+    else {
+        tracing::warn!("sign-in refused: no tenant and object id in the ID token");
+        return unverified_account();
+    };
+    let identity = Identity {
+        tid: claims.tid,
+        oid: claims.oid,
+    };
+
     let me = match state.graph.me(&success.tokens.access_token).await {
         Ok(me) => me,
         Err(e) => {
-            // The error's text can echo Graph's response body; log only the status.
-            match e {
-                pidge_client::ClientError::Graph { status, .. } => {
-                    tracing::error!(status, "reading signed-in profile failed");
-                }
-                _ => tracing::error!("reading signed-in profile failed"),
-            }
+            log_microsoft_failure("reading signed-in profile", &e);
             return callback_failure(
                 &pending,
                 "server_error",
@@ -427,32 +516,46 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
             );
         }
     };
-    let email = me
-        .mail
-        .clone()
-        .unwrap_or(me.user_principal_name.clone())
-        .to_ascii_lowercase();
+    // Never `mail`: a tenant admin can set it to any address, including an
+    // allowlisted one. The principal name is the sign-in name itself.
+    let email = me.user_principal_name.to_ascii_lowercase();
 
     match &pending.kind {
-        PendingKind::SignIn => sign_in_complete(&state, &pending, &email, success.tokens).await,
+        PendingKind::SignIn => {
+            sign_in_complete(&state, &pending, &email, &identity, success.tokens).await
+        }
         PendingKind::Connect { owner } => {
-            connect_complete(&state, &pending, owner, &email, success.tokens).await
+            connect_complete(&state, &pending, owner, &email, &identity, success.tokens).await
         }
     }
 }
 
 /// Binds `mailbox`'s fresh tokens to `owner`, refusing (403 page) if another
-/// user owns it. Evicts any cached tokens so the new ones take effect.
-/// Returns the response to send on failure, `None` on success.
+/// user owns it or its record is pinned to a different Microsoft account;
+/// pins `identity` otherwise. Evicts any cached tokens so the new ones take
+/// effect. Returns the response to send on failure, `None` on success.
 async fn bind_mailbox(
     state: &SharedState,
     pending: &PendingAuthorization,
     mailbox: &str,
     owner: &str,
+    identity: &Identity,
     tokens: TokenSet,
 ) -> Option<Response> {
-    match state.users.check_ownership(mailbox, owner).await {
+    match state
+        .users
+        .check_binding(mailbox, owner, Some(identity))
+        .await
+    {
         Ok(()) => {}
+        Err(OwnershipError::IdentityMismatch) => {
+            tracing::warn!(
+                user = %user_hash(owner),
+                mailbox = %user_hash(mailbox),
+                "refused: mailbox is pinned to a different Microsoft account"
+            );
+            return Some(unverified_account());
+        }
         Err(OwnershipError::OwnedByOther) => {
             tracing::warn!(
                 user = %user_hash(owner),
@@ -473,6 +576,7 @@ async fn bind_mailbox(
     let record = MailboxRecord {
         owner: owner.to_string(),
         tokens,
+        identity: Some(identity.clone()),
     };
     if let Err(e) = state.users.save_mailbox(&record, mailbox).await {
         log_store_error("storing mailbox tokens", mailbox, &e);
@@ -487,10 +591,15 @@ async fn bind_mailbox(
     None
 }
 
+/// A sign-in finished at Microsoft as `email` (its principal name) with the
+/// immutable `identity`. The address must be allowlisted; a user record
+/// pinned to another identity refuses (403, nothing stored); an unpinned
+/// one (from before pinning) is pinned now.
 async fn sign_in_complete(
     state: &SharedState,
     pending: &PendingAuthorization,
     email: &str,
+    identity: &Identity,
     tokens: TokenSet,
 ) -> Response {
     let client_state = pending.client_state.as_deref();
@@ -503,20 +612,32 @@ async fn sign_in_complete(
         );
     }
 
-    if let Some(resp) = bind_mailbox(state, pending, email, email, tokens).await {
-        return resp;
-    }
-
-    let has_record = match state.users.load(email).await {
-        Ok(rec) => rec.is_some(),
+    let existing = match state.users.load(email).await {
+        Ok(rec) => rec,
         Err(e) => {
             log_store_error("loading user record", email, &e);
             return callback_failure(pending, "server_error", "could not load the user profile");
         }
     };
-    if !has_record {
-        if let Err(e) = state.users.save(&UserRecord::new(email)).await {
-            log_store_error("creating user record", email, &e);
+    if let Some(pinned) = existing.as_ref().and_then(|r| r.identity.as_ref())
+        && pinned != identity
+    {
+        tracing::warn!(
+            user = %user_hash(email),
+            "sign-in refused: a different Microsoft account than the one pinned"
+        );
+        return unverified_account();
+    }
+
+    if let Some(resp) = bind_mailbox(state, pending, email, email, identity, tokens).await {
+        return resp;
+    }
+
+    if existing.as_ref().is_none_or(|r| r.identity.is_none()) {
+        let mut record = existing.unwrap_or_else(|| UserRecord::new(email));
+        record.identity = Some(identity.clone());
+        if let Err(e) = state.users.save(&record).await {
+            log_store_error("saving user record", email, &e);
             return callback_failure(pending, "server_error", "could not create the user profile");
         }
         state.cache.invalidate_user(email);
@@ -556,6 +677,7 @@ async fn connect_complete(
     pending: &PendingAuthorization,
     owner: &str,
     mailbox: &str,
+    identity: &Identity,
     tokens: TokenSet,
 ) -> Response {
     if !state.config.is_allowed(owner) {
@@ -579,7 +701,7 @@ async fn connect_complete(
         );
     }
 
-    if let Some(resp) = bind_mailbox(state, pending, mailbox, owner, tokens).await {
+    if let Some(resp) = bind_mailbox(state, pending, mailbox, owner, identity, tokens).await {
         return resp;
     }
 
@@ -641,28 +763,63 @@ fn expired_connect_link() -> Response {
     )
 }
 
-/// Cookie carrying the confirmation page's nonce to the Continue step.
-const CONSENT_COOKIE: &str = "pidge_connect";
+/// A cookie carrying a confirmation page's nonce to its Continue step,
+/// scoped to that flow's path.
+struct ConsentCookie {
+    name: &'static str,
+    path: &'static str,
+}
 
-/// `Set-Cookie` value for the consent nonce: scoped to `/connect`, gone
+/// For a connect link: `/connect` → `/connect/go`.
+const CONNECT_CONSENT: ConsentCookie = ConsentCookie {
+    name: "pidge_connect",
+    path: "/connect",
+};
+
+/// For a client's sign-in: `/authorize` → `/authorize/go`.
+const SIGN_IN_CONSENT: ConsentCookie = ConsentCookie {
+    name: "pidge_authorize",
+    path: "/authorize",
+};
+
+/// `Set-Cookie` value for a consent nonce: scoped to the flow's path, gone
 /// with the pending entry's lifetime, `Secure` whenever we're served over https.
-fn consent_cookie(nonce: &str, secure: bool) -> String {
+fn consent_cookie(cookie: &ConsentCookie, nonce: &str, secure: bool) -> String {
     format!(
-        "{CONSENT_COOKIE}={nonce}; HttpOnly;{} SameSite=Lax; Max-Age={}; Path=/connect",
+        "{}={nonce}; HttpOnly;{} SameSite=Lax; Max-Age={}; Path={}",
+        cookie.name,
         if secure { " Secure;" } else { "" },
-        PENDING_TTL.num_seconds()
+        PENDING_TTL.num_seconds(),
+        cookie.path
     )
 }
 
+/// `resp` with the consent cookie set.
+fn with_consent_cookie(
+    mut resp: Response,
+    cookie: &ConsentCookie,
+    nonce: &str,
+    state: &SharedState,
+) -> Response {
+    let secure = state.config.public_url.scheme() == "https";
+    resp.headers_mut().insert(
+        header::SET_COOKIE,
+        consent_cookie(cookie, nonce, secure)
+            .parse()
+            .expect("cookie is ASCII"),
+    );
+    resp
+}
+
 /// The consent nonce from the request's `Cookie` header(s), if any.
-fn consent_nonce_from(headers: &HeaderMap) -> Option<String> {
+fn consent_nonce_from(headers: &HeaderMap, cookie: &ConsentCookie) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(name, _)| *name == CONSENT_COOKIE)
+        .find(|(name, _)| *name == cookie.name)
         .map(|(_, value)| value.to_string())
 }
 
@@ -681,15 +838,12 @@ async fn connect(State(state): State<SharedState>, Query(p): Query<ConnectParams
         state.config.base_url(),
         urlencode(&key)
     );
-    let secure = state.config.public_url.scheme() == "https";
-    let mut resp = pages::confirm_connect(&owner, &go);
-    resp.headers_mut().insert(
-        header::SET_COOKIE,
-        consent_cookie(&nonce, secure)
-            .parse()
-            .expect("cookie is ASCII"),
-    );
-    resp
+    with_consent_cookie(
+        pages::confirm_connect(&owner, &go),
+        &CONNECT_CONSENT,
+        &nonce,
+        &state,
+    )
 }
 
 /// The confirmation's Continue: sends the browser to Microsoft with the
@@ -702,7 +856,7 @@ async fn connect_go(
     let Some((key, _, pending)) = connect_pending(&state, &p) else {
         return expired_connect_link();
     };
-    let presented = consent_nonce_from(&headers);
+    let presented = consent_nonce_from(&headers, &CONNECT_CONSENT);
     if pending.consent_nonce.is_none() || presented != pending.consent_nonce {
         return pages::error(
             StatusCode::BAD_REQUEST,
@@ -933,21 +1087,50 @@ mod tests {
 
     #[test]
     fn consent_cookie_attributes_and_parsing() {
-        let c = consent_cookie("abc_-1", false);
+        let c = consent_cookie(&CONNECT_CONSENT, "abc_-1", false);
         assert_eq!(
             c,
             "pidge_connect=abc_-1; HttpOnly; SameSite=Lax; Max-Age=600; Path=/connect"
         );
-        assert!(consent_cookie("abc", true).contains("; Secure;"));
+        assert!(consent_cookie(&CONNECT_CONSENT, "abc", true).contains("; Secure;"));
+        assert_eq!(
+            consent_cookie(&SIGN_IN_CONSENT, "n", true),
+            "pidge_authorize=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/authorize"
+        );
 
         let mut headers = HeaderMap::new();
-        assert_eq!(consent_nonce_from(&headers), None);
-        headers.append(header::COOKIE, "other=1; pidge_connect=n1".parse().unwrap());
-        assert_eq!(consent_nonce_from(&headers).as_deref(), Some("n1"));
+        assert_eq!(consent_nonce_from(&headers, &CONNECT_CONSENT), None);
+        headers.append(
+            header::COOKIE,
+            "other=1; pidge_connect=n1; pidge_authorize=s1"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            consent_nonce_from(&headers, &CONNECT_CONSENT).as_deref(),
+            Some("n1")
+        );
+        assert_eq!(
+            consent_nonce_from(&headers, &SIGN_IN_CONSENT).as_deref(),
+            Some("s1")
+        );
         let mut headers = HeaderMap::new();
         headers.append(header::COOKIE, "a=b".parse().unwrap());
         headers.append(header::COOKIE, "pidge_connect=n2".parse().unwrap());
-        assert_eq!(consent_nonce_from(&headers).as_deref(), Some("n2"));
+        assert_eq!(
+            consent_nonce_from(&headers, &CONNECT_CONSENT).as_deref(),
+            Some("n2")
+        );
+    }
+
+    #[test]
+    fn logged_error_codes_are_word_characters_only() {
+        assert_eq!(error_code("access_denied"), "access_denied");
+        assert_eq!(
+            error_code("x\nuser jane@example.com logged in"),
+            "xuserjaneexamplecomloggedin"
+        );
+        assert_eq!(error_code(&"a".repeat(100)).len(), 64);
     }
 
     #[test]

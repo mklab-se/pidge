@@ -131,9 +131,29 @@ pub fn graph_error(e: ClientError) -> McpError {
         ClientError::Throttled { retry_after: None } => {
             "Microsoft is throttling; retry in a minute".to_string()
         }
-        other => format!("Microsoft Graph error: {other}"),
+        ClientError::Graph { status, .. } => {
+            format!(
+                "Microsoft Graph error: {} ({status})",
+                graph_status_phrase(status)
+            )
+        }
+        _ => "Microsoft Graph error: the request failed".to_string(),
     };
     McpError::internal_error(msg, None)
+}
+
+/// A fixed phrase for a Graph status. Graph's own message is never used: it
+/// can echo addresses, message content or other third-party text.
+fn graph_status_phrase(status: u16) -> &'static str {
+    match status {
+        400 => "Microsoft rejected the request",
+        401 | 403 => "Microsoft denied access",
+        404 => "not found",
+        409 => "conflict",
+        429 => "throttled; retry later",
+        500..=599 => "Microsoft service error",
+        _ => "the request failed",
+    }
 }
 
 /// A secret-store failure during a tool call: logged redacted (see
@@ -236,7 +256,34 @@ mod tests {
             status: 404,
             message: "not found".into(),
         });
-        assert!(e.message.starts_with("Microsoft Graph error: "), "{e:?}");
+        assert_eq!(e.message, "Microsoft Graph error: not found (404)");
+    }
+
+    #[test]
+    fn graph_errors_never_carry_graphs_message() {
+        let e = graph_error(ClientError::Graph {
+            status: 400,
+            message: "secret detail about jane@example.com".into(),
+        });
+        assert_eq!(
+            e.message,
+            "Microsoft Graph error: Microsoft rejected the request (400)"
+        );
+        for (status, phrase) in [
+            (401, "Microsoft denied access"),
+            (403, "Microsoft denied access"),
+            (409, "conflict"),
+            (429, "throttled; retry later"),
+            (503, "Microsoft service error"),
+        ] {
+            let e = graph_error(ClientError::Graph {
+                status,
+                message: "secret detail".into(),
+            });
+            assert!(!e.message.contains("secret detail"), "{e:?}");
+            assert!(e.message.contains(phrase), "{e:?}");
+            assert!(e.message.contains(&status.to_string()), "{e:?}");
+        }
     }
 
     #[tokio::test]

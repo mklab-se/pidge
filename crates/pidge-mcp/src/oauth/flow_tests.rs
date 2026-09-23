@@ -1,5 +1,6 @@
 //! End-to-end tests of the authorization server with Microsoft mocked:
-//! register → authorize → callback → token → MCP request.
+//! register → authorize (consent page) → authorize/go → callback → token →
+//! MCP request.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -21,7 +22,7 @@ use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::{Signer, pkce_challenge, random_bytes};
 use crate::secrets::{FileSecrets, SharedSecrets, mailbox_secret_name};
 use crate::state::{AppState, PendingAuthorization, PendingKind, SharedState};
-use crate::users::{UserRecord, UserStore};
+use crate::users::{Identity, UserRecord, UserStore};
 
 const PUBLIC: &str = "http://localhost:8080";
 const CLIENT_REDIRECT: &str = "http://localhost:9999/cb";
@@ -34,19 +35,53 @@ struct Harness {
     secrets_dir: tempfile::TempDir,
 }
 
+const TENANT: &str = "tenant-1";
+
+/// The object id the mocked Microsoft gives the account `upn`.
+fn oid_for(upn: &str) -> String {
+    format!("oid-{}", upn.to_ascii_lowercase())
+}
+
+fn identity_for(upn: &str) -> Identity {
+    Identity {
+        tid: TENANT.into(),
+        oid: oid_for(upn),
+    }
+}
+
+/// An unsigned ID token carrying `claims`, shaped like Microsoft's.
+fn id_token(claims: serde_json::Value) -> String {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    format!(
+        "{}.{}.{}",
+        URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#),
+        URL_SAFE_NO_PAD.encode(claims.to_string()),
+        URL_SAFE_NO_PAD.encode("dummy-signature")
+    )
+}
+
+/// Microsoft signs in as `signed_in_email` (its principal name and `mail`).
 async fn harness(signed_in_email: &str) -> Harness {
+    harness_with(signed_in_email, signed_in_email, &oid_for(signed_in_email)).await
+}
+
+/// Microsoft signs in as the account with principal name `upn`, profile
+/// `mail` attribute `mail`, and ID-token object id `oid`.
+async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
     let microsoft = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/oauth2/v2.0/token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "access_token": "MS_AT", "refresh_token": "MS_RT", "expires_in": 3600
+            "access_token": "MS_AT", "refresh_token": "MS_RT", "expires_in": 3600,
+            "id_token": id_token(serde_json::json!({ "tid": TENANT, "oid": oid })),
         })))
         .mount(&microsoft)
         .await;
     Mock::given(method("GET"))
         .and(path("/v1.0/me"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "u1", "userPrincipalName": signed_in_email, "mail": signed_in_email
+            "id": "u1", "userPrincipalName": upn, "mail": mail
         })))
         .mount(&microsoft)
         .await;
@@ -139,20 +174,39 @@ async fn register_named(app: &Router, name: &str) -> String {
         .to_string()
 }
 
-/// Runs register → authorize → callback and returns the client's code.
-async fn sign_in(h: &Harness, client_id: &str, verifier: &str) -> axum::response::Response {
-    let uri = format!(
+fn authorize_uri(client_id: &str, verifier: &str) -> String {
+    format!(
         "/authorize?response_type=code&client_id={}&redirect_uri={}&state=client-state&code_challenge={}&code_challenge_method=S256",
         urlenc(client_id),
         urlenc(CLIENT_REDIRECT),
         pkce_challenge(verifier)
-    );
-    let resp = h
-        .app
-        .clone()
-        .oneshot(Request::get(&uri).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
+    )
+}
+
+/// Opens `/authorize` and returns the consent page's Continue path and the
+/// cookie it set (`name=value`).
+async fn consent(h: &Harness, client_id: &str, verifier: &str) -> (String, String) {
+    let resp = get(h, &authorize_uri(client_id, verifier)).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    let cookie = resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let page = body_text(resp).await;
+    let at = page.find("/authorize/go?state=").expect("Continue link");
+    let go = page[at..].split('"').next().unwrap().to_string();
+    (go, cookie)
+}
+
+/// Runs authorize → consent → authorize/go → callback and returns the
+/// callback's response (a redirect carrying the client's code on success).
+async fn sign_in(h: &Harness, client_id: &str, verifier: &str) -> axum::response::Response {
+    let (go, cookie) = consent(h, client_id, verifier).await;
+    let resp = get_with_cookie(h, &go, &cookie).await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
     let location = resp.headers()[header::LOCATION]
         .to_str()
@@ -246,8 +300,15 @@ async fn full_flow_for_allowed_user() {
         .unwrap()
         .unwrap();
     assert_eq!(mailbox.owner, "jane@example.com");
+    assert_eq!(mailbox.identity, Some(identity_for("jane@example.com")));
     let rec = users.load("jane@example.com").await.unwrap().unwrap();
-    assert_eq!(rec, UserRecord::new("jane@example.com"));
+    assert_eq!(
+        rec,
+        UserRecord {
+            identity: Some(identity_for("jane@example.com")),
+            ..UserRecord::new("jane@example.com")
+        }
+    );
 
     // Wrong verifier fails, right verifier succeeds, replay fails.
     let (status, body) = redeem(
@@ -408,6 +469,7 @@ async fn sign_in_keeps_an_existing_user_record() {
     let mut rec = UserRecord::new("jane@example.com");
     rec.mailboxes.push("second@example.com".into());
     rec.timezone = "Europe/London".into();
+    rec.identity = Some(identity_for("jane@example.com"));
     users.save(&rec).await.unwrap();
     let client_id = register(&h.app).await;
     let resp = sign_in(
@@ -433,6 +495,7 @@ async fn sign_in_refuses_a_mailbox_another_user_connected() {
                     refresh_token: "MALLORY_RT".into(),
                     expires_at: chrono::Utc::now(),
                 },
+                identity: None,
             },
             "jane@example.com",
         )
@@ -809,5 +872,328 @@ async fn profile_read_failure_logs_only_the_status() {
         logged.contains("reading signed-in profile failed"),
         "{logged}"
     );
+    assert_no_address("logs", &logged);
+}
+
+// ---------------------------------------------------------------------------
+// Sign-in consent page
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn authorize_shows_a_consent_page_naming_the_client_and_host() {
+    let h = harness("jane@example.com").await;
+    let client_id = register_named(&h.app, "Sneaky <b>App</b>").await;
+    let resp = get(
+        &h,
+        &authorize_uri(&client_id, "verifier-verifier-verifier-verifier"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    let set_cookie = resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(set_cookie.starts_with("pidge_authorize="), "{set_cookie}");
+    assert!(set_cookie.contains("HttpOnly"), "{set_cookie}");
+    assert!(set_cookie.contains("SameSite=Lax"), "{set_cookie}");
+    assert!(set_cookie.contains("Max-Age=600"), "{set_cookie}");
+    assert!(set_cookie.contains("Path=/authorize"), "{set_cookie}");
+    let page = body_text(resp).await;
+    assert!(
+        page.contains("Sign in to pidge for Sneaky &lt;b&gt;App&lt;/b&gt; at localhost?"),
+        "{page}"
+    );
+    assert!(page.contains("Continue only if you started this from that app."));
+    assert!(
+        page.contains(&format!("{PUBLIC}/authorize/go?state=")),
+        "{page}"
+    );
+}
+
+#[tokio::test]
+async fn authorize_go_needs_the_consent_cookie() {
+    let h = harness("jane@example.com").await;
+    let client_id = register(&h.app).await;
+    let (go, cookie) = consent(&h, &client_id, "verifier-verifier-verifier-verifier").await;
+    let key = query(&format!("{PUBLIC}{go}"), "state").unwrap();
+
+    // Handed the Continue URL directly, never having seen the page.
+    let resp = get(&h, &go).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    let resp = get_with_cookie(&h, &go, "pidge_authorize=guess").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    // A connect link's cookie doesn't stand in for it.
+    let other = cookie.replacen("pidge_authorize", "pidge_connect", 1);
+    let resp = get_with_cookie(&h, &go, &other).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = get_with_cookie(&h, &go, &cookie).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with(&h.microsoft.uri()), "{location}");
+    assert_eq!(query(&location, "state").as_deref(), Some(key.as_str()));
+    let pending = h.state.peek_pending(&key).expect("still pending");
+    assert_eq!(
+        query(&location, "code_challenge").unwrap(),
+        pkce_challenge(&pending.microsoft_verifier)
+    );
+}
+
+#[tokio::test]
+async fn authorize_go_refuses_unknown_and_connect_states() {
+    let h = harness("jane@example.com").await;
+    h.state
+        .insert_pending("conn".into(), connect_pending("jane@example.com"));
+    for uri in [
+        "/authorize/go",
+        "/authorize/go?state=nope",
+        "/authorize/go?state=conn",
+    ] {
+        let resp = get_with_cookie(&h, uri, "pidge_authorize=x").await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{uri}");
+        assert!(resp.headers().get(header::LOCATION).is_none(), "{uri}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Identity: principal name only, pinned to tid + oid
+// ---------------------------------------------------------------------------
+
+fn assert_nothing_stored(h: &Harness, addresses: &[&str]) {
+    for a in addresses {
+        assert!(
+            !h.secrets_dir.path().join(mailbox_secret_name(a)).exists(),
+            "mailbox secret for {a}"
+        );
+        assert!(
+            !h.secrets_dir
+                .path()
+                .join(crate::users::user_secret_name(a))
+                .exists(),
+            "user record for {a}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sign_in_ignores_a_mail_attribute_set_to_an_allowlisted_address() {
+    // A foreign tenant's admin sets `mail` on their own account to Jane's
+    // address; the principal name gives them away.
+    let h = harness_with("mallory@evil.example", "jane@example.com", "oid-mallory").await;
+    let client_id = register(&h.app).await;
+    let resp = sign_in(&h, &client_id, "verifier-verifier-verifier-verifier").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    assert_nothing_stored(&h, &["jane@example.com", "mallory@evil.example"]);
+}
+
+#[tokio::test]
+async fn sign_in_with_a_different_object_id_than_the_pinned_one_is_refused() {
+    let h = harness_with("jane@example.com", "jane@example.com", "oid-impostor").await;
+    let users = UserStore::new(h.secrets.clone());
+    let rec = UserRecord {
+        identity: Some(identity_for("jane@example.com")),
+        ..UserRecord::new("jane@example.com")
+    };
+    users.save(&rec).await.unwrap();
+    let client_id = register(&h.app).await;
+    let resp = sign_in(&h, &client_id, "verifier-verifier-verifier-verifier").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(
+        body_text(resp)
+            .await
+            .contains("could not verify the Microsoft account")
+    );
+    assert!(
+        users
+            .load_mailbox("jane@example.com")
+            .await
+            .unwrap()
+            .is_none(),
+        "no tokens stored"
+    );
+    assert_eq!(users.load("jane@example.com").await.unwrap().unwrap(), rec);
+}
+
+#[tokio::test]
+async fn sign_in_refuses_a_mailbox_pinned_to_a_different_account() {
+    let h = harness_with("jane@example.com", "jane@example.com", "oid-impostor").await;
+    let users = UserStore::new(h.secrets.clone());
+    users
+        .save_mailbox(
+            &crate::users::MailboxRecord {
+                owner: "jane@example.com".into(),
+                tokens: pidge_client::auth::TokenSet {
+                    access_token: "a".into(),
+                    refresh_token: "JANE_RT".into(),
+                    expires_at: chrono::Utc::now(),
+                },
+                identity: Some(identity_for("jane@example.com")),
+            },
+            "jane@example.com",
+        )
+        .await
+        .unwrap();
+    let client_id = register(&h.app).await;
+    let resp = sign_in(&h, &client_id, "verifier-verifier-verifier-verifier").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let mailbox = users
+        .load_mailbox("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mailbox.tokens.refresh_token, "JANE_RT", "tokens untouched");
+    assert!(users.load("jane@example.com").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_record_from_before_pinning_is_pinned_at_the_next_sign_in() {
+    let h = harness("jane@example.com").await;
+    let users = UserStore::new(h.secrets.clone());
+    let mut rec = UserRecord::new("jane@example.com");
+    rec.timezone = "Europe/London".into();
+    users.save(&rec).await.unwrap();
+
+    let client_id = register(&h.app).await;
+    let resp = sign_in(&h, &client_id, "verifier-verifier-verifier-verifier").await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let pinned = users.load("jane@example.com").await.unwrap().unwrap();
+    assert_eq!(pinned.identity, Some(identity_for("jane@example.com")));
+    assert_eq!(pinned.timezone, "Europe/London", "the rest is kept");
+
+    // The same account signs in again: still fine.
+    let resp = sign_in(&h, &client_id, "verifier-verifier-verifier-verifier").await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers()[header::LOCATION].to_str().unwrap();
+    assert!(location.starts_with(CLIENT_REDIRECT), "{location}");
+}
+
+#[tokio::test]
+async fn sign_in_without_an_id_token_is_refused() {
+    let h = harness("jane@example.com").await;
+    Mock::given(method("POST"))
+        .and(path("/oauth2/v2.0/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "MS_AT", "refresh_token": "MS_RT", "expires_in": 3600,
+            "id_token": id_token(serde_json::json!({ "tid": TENANT })),
+        })))
+        .with_priority(1)
+        .mount(&h.microsoft)
+        .await;
+    let client_id = register(&h.app).await;
+    let resp = sign_in(&h, &client_id, "verifier-verifier-verifier-verifier").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert!(
+        body_text(resp)
+            .await
+            .contains("could not verify the Microsoft account")
+    );
+    assert_nothing_stored(&h, &["jane@example.com"]);
+}
+
+#[tokio::test]
+async fn connect_binds_the_principal_name_and_pins_its_identity() {
+    // `mail` claims Anna's (allowlisted) address; the account is second@….
+    let h = harness_with("second@example.com", "anna@example.com", "oid-second").await;
+    let users = UserStore::new(h.secrets.clone());
+    users
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    h.state
+        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+    let resp = get(&h, "/callback?code=x&state=s1").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mailbox = users
+        .load_mailbox("second@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mailbox.owner, "jane@example.com");
+    assert_eq!(
+        mailbox.identity,
+        Some(Identity {
+            tid: TENANT.into(),
+            oid: "oid-second".into()
+        })
+    );
+    assert!(
+        users
+            .load_mailbox("anna@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Another account under the same name can't take the mailbox over.
+    let h2 = harness_with("second@example.com", "second@example.com", "oid-other").await;
+    let users2 = UserStore::new(h2.secrets.clone());
+    users2
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    users2
+        .save_mailbox(&mailbox, "second@example.com")
+        .await
+        .unwrap();
+    h2.state
+        .insert_pending("s2".into(), connect_pending("jane@example.com"));
+    let resp = get(&h2, "/callback?code=x&state=s2").await;
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        users2
+            .load_mailbox("second@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .identity,
+        mailbox.identity
+    );
+}
+
+#[tokio::test]
+async fn microsoft_error_text_never_reaches_the_log() {
+    use crate::test_support::{LogCapture, assert_no_address};
+
+    let h = harness("second@example.com").await;
+    let (logs, _guard) = LogCapture::start();
+    h.state
+        .insert_pending("denied".into(), connect_pending("jane@example.com"));
+    let resp = get(
+        &h,
+        "/callback?error=access_denied&error_description=user%20jane%40example.com%20cancelled&state=denied",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    Mock::given(method("POST"))
+        .and(path("/oauth2/v2.0/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "code for jane@example.com was already redeemed"
+        })))
+        .with_priority(1)
+        .mount(&h.microsoft)
+        .await;
+    h.state
+        .insert_pending("badcode".into(), connect_pending("jane@example.com"));
+    let resp = get(&h, "/callback?code=x&state=badcode").await;
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let logged = logs.text();
+    assert!(logged.contains("access_denied"), "{logged}");
+    assert!(
+        logged.contains("redeeming Microsoft code failed"),
+        "{logged}"
+    );
+    assert!(logged.contains("400"), "{logged}");
+    assert!(!logged.contains("cancelled"), "{logged}");
+    assert!(!logged.contains("already redeemed"), "{logged}");
     assert_no_address("logs", &logged);
 }

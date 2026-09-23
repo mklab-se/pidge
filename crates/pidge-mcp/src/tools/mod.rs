@@ -140,6 +140,7 @@ pub(crate) mod tests {
                                 access_token: access_token(m),
                                 ..fresh_tokens()
                             },
+                            identity: None,
                         },
                         m,
                     )

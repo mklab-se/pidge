@@ -289,12 +289,13 @@ impl PidgeMcp {
             "sent a draft"
         );
 
-        let mut out = format!(
+        // A reply's subject is the original sender's text: marked untrusted.
+        let mut out = untrusted(&format!(
             "Sent \"{}\" to {} from {}",
             one_line(&draft.subject),
             recipients.join(", "),
             draft.account
-        );
+        ));
         if let Some(note) = note {
             out.push('\n');
             out.push_str(&note);
@@ -1215,7 +1216,7 @@ mod tests {
         let out = send(&h, "D1").await.unwrap();
         assert_eq!(
             out,
-            "Sent \"Lunch\" to bob@example.com from work@example.com"
+            "<untrusted-email-content>\nSent \"Lunch\" to bob@example.com from work@example.com\n</untrusted-email-content>"
         );
         assert!(h.state.cache.get(JANE, "k").is_none(), "cache not cleared");
         let logged = logs.text();
@@ -1315,7 +1316,10 @@ mod tests {
         }
 
         let out = send(&h, "D1").await.unwrap();
-        assert!(out.starts_with("Sent \"Lunch\""), "{out}");
+        assert!(
+            out.starts_with("<untrusted-email-content>\nSent \"Lunch\""),
+            "{out}"
+        );
         assert!(
             out.contains("note: earlier messages of this conversation are in work@example.com"),
             "{out}"

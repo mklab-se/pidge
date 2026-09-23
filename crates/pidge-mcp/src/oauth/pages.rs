@@ -1,6 +1,7 @@
-//! The HTML pages a human can see: an error, and the confirmation after
-//! connecting an extra mailbox. A sign-in's success never renders here: it
-//! redirects back to the MCP client.
+//! The HTML pages a human can see: an error, the consent pages before a
+//! sign-in or a mailbox connect goes to Microsoft, and the confirmation
+//! after connecting an extra mailbox. A sign-in's success never renders
+//! here: it redirects back to the MCP client.
 
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
@@ -36,6 +37,25 @@ pub fn confirm_connect(owner: &str, go_url: &str) -> Response {
         html_escape(go_url)
     );
     render(StatusCode::OK, "Connect a mailbox", &message, &action)
+}
+
+/// The interstitial before a client's sign-in goes to Microsoft: names the
+/// client (as it registered itself) and the host the sign-in will be sent
+/// to, with a Continue link to `go_url`.
+pub fn confirm_sign_in(client_name: Option<&str>, redirect_host: &str, go_url: &str) -> Response {
+    let name: String = client_name
+        .map(|n| n.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|n| !n.is_empty())
+        .map(|n| n.chars().take(80).collect())
+        .unwrap_or_else(|| "an unnamed client".to_string());
+    let message = format!(
+        "Sign in to pidge for {name} at {redirect_host}? Continue only if you started this from that app."
+    );
+    let action = format!(
+        r#"<p><a class="go" href="{}">Continue to Microsoft sign-in</a></p>"#,
+        html_escape(go_url)
+    );
+    render(StatusCode::OK, "Sign in to pidge", &message, &action)
 }
 
 fn page(status: StatusCode, heading: &str, message: &str) -> Response {

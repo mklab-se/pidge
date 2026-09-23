@@ -112,12 +112,13 @@ impl PidgeMcp {
                     .map_err(|_| {
                         McpError::internal_error("could not create a download link", None)
                     })?;
-                Ok(text_result(format!(
+                // The name is the sender's text, so the line is marked untrusted.
+                Ok(text_result(untrusted(&format!(
                     "Download {} ({} bytes): {}/dl/{token}  (valid 15 minutes)",
                     one_line(&attachment.name),
                     attachment.size_bytes,
                     self.state.config.base_url()
-                )))
+                ))))
             }
             AttachmentMode::Read if is_image(&attachment) => {
                 self.read_image(&message, &attachment).await
@@ -182,15 +183,17 @@ impl PidgeMcp {
         ]))
     }
 
-    /// The attachment converted to Markdown.
+    /// The attachment converted to Markdown. The conversion slot is taken
+    /// before the bytes are fetched, so callers queued behind a busy
+    /// converter don't each hold a (up to 25 MB) download in memory.
     async fn convert_document(
         &self,
         tc: &ToolContext,
         message: &FullMessage,
         attachment: Attachment,
     ) -> Result<Converted, McpError> {
-        let bytes = self.fetch(message, &attachment).await?;
         let _slot = conversion_slot(&self.state.conversions, SLOT_WAIT).await?;
+        let bytes = self.fetch(message, &attachment).await?;
         let converted = markitdown::convert(
             &self.state.config.markitdown,
             &bytes,
@@ -474,11 +477,14 @@ pub(crate) mod tests {
         let out = text(&call(&h, link_args("M1", "A1")).await.unwrap());
         assert!(
             out.starts_with(
-                "Download Q3 Report (final).pdf (1234 bytes): http://localhost:8080/dl/"
+                "<untrusted-email-content>\nDownload Q3 Report (final).pdf (1234 bytes): http://localhost:8080/dl/"
             ),
             "{out}"
         );
-        assert!(out.ends_with("  (valid 15 minutes)"), "{out}");
+        assert!(
+            out.ends_with("  (valid 15 minutes)\n</untrusted-email-content>"),
+            "{out}"
+        );
 
         let claims = h
             .state
@@ -652,6 +658,45 @@ pub(crate) mod tests {
             ),
             "{out}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_document_is_fetched_only_once_a_conversion_slot_is_free() {
+        let _guard = conversion_lock().await;
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_message(&h, JANE, "M1").await;
+        mount_listing(
+            &h,
+            JANE,
+            "M1",
+            vec![listing_row("A1", "notes.txt", "text/plain", 5)],
+        )
+        .await;
+        mount_bytes(&h, JANE, "M1", "A1", b"hello", 1).await;
+        let held = h
+            .state
+            .conversions
+            .acquire_many(crate::state::CONVERSION_SLOTS as u32)
+            .await
+            .unwrap();
+
+        let fetched_while_busy = async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let fetched = h
+                .graph
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .any(|r| r.url.path().ends_with("/attachments/A1"));
+            drop(held);
+            fetched
+        };
+        let (result, fetched_while_busy) =
+            tokio::join!(call(&h, args("M1", "A1")), fetched_while_busy);
+        assert!(!fetched_while_busy, "bytes fetched before a slot was free");
+        let out = text(&result.unwrap());
+        assert!(out.contains("hello"), "{out}");
     }
 
     #[tokio::test]
