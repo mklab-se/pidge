@@ -144,7 +144,10 @@ assign_rbac_admin_conditioned() {
     --condition "$RBAC_CONDITION" \
     --condition-version "2.0" \
     --description "$RBAC_CONDITION_DESCRIPTION" \
-    >/dev/null
+    >/dev/null || {
+      echo "error: removed the unconditioned RBAC Administrator grant but could not create the conditioned one; re-run this script" >&2
+      exit 1
+    }
   log "Role 'Role Based Access Control Administrator' assigned (conditioned: AcrPull, Key Vault Secrets Officer only)"
 }
 

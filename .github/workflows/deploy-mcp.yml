@@ -23,11 +23,51 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # workflow_run fires in THIS repository's context — with id-token: write
+    # and every secret — no matter whose branch triggered the upstream CI
+    # run. A fork PR whose head branch happens to be named `main` produces a
+    # CI run with head_branch == 'main', which would otherwise pass the
+    # branches: [main] filter above and deploy the fork's commit with
+    # production Azure credentials. Every clause here is load-bearing:
+    #   - workflow_dispatch: manual runs have no workflow_run event at all.
+    #   - conclusion == 'success': only deploy a CI run that passed.
+    #   - event == 'push': excludes pull_request (and pull_request_target)
+    #     CI runs, which is what a fork PR produces.
+    #   - head_branch == 'main': belt and suspenders alongside the
+    #     branches: filter above.
+    #   - head_repository.full_name == github.repository: the push landed on
+    #     THIS repository, not a fork — the clause that actually stops the
+    #     fork attack, since a fork's own push to its own main still has
+    #     event == 'push' and head_branch == 'main'.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # Two CI runs on quick successive pushes can complete out of order;
+      # the concurrency group above serializes the deploys but doesn't
+      # reorder them, so a slower older run could otherwise clobber a
+      # faster newer one. Refuse to deploy anything that isn't (still) the
+      # tip of main.
+      - name: Guard against out-of-order completions
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploying="${{ github.event.workflow_run.head_sha || github.sha }}"
+          tip="$(git ls-remote --quiet origin refs/heads/main | cut -f1)"
+          if [[ -n "$tip" && "$tip" != "$deploying" ]]; then
+            echo "superseded by $tip, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Azure login (OIDC)
         uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
@@ -48,6 +88,7 @@ jobs:
       # behaviour (it always skips Phase 4, custom domain or not).
       - name: Deploy pidge-mcp
         id: deploy
+        if: steps.guard.outputs.skip != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -68,6 +109,7 @@ jobs:
           PIDGE_MCP_CUTOVER: ${{ vars.PIDGE_MCP_CUTOVER }}
 
       - name: Smoke test
+        if: steps.guard.outputs.skip != 'true'
         shell: bash
         env:
           URL: ${{ steps.deploy.outputs.url }}
