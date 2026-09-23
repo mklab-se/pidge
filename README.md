@@ -154,6 +154,16 @@ pidge ai status    # check status
 
 and it's available to every ailloy-based tool.
 
+## Remote MCP server
+
+Prefer not to run `pidge` locally at all? `pidge-mcp` is a hosted [Model
+Context Protocol](https://modelcontextprotocol.io) server exposing the same
+mail and calendar tools over HTTP to Claude.ai, Cowork, Claude Code, ChatGPT
+and other MCP-capable harnesses, with each user signing in with their own
+Microsoft account. See [docs/mcp.md](docs/mcp.md) for connecting, migrating
+an existing local `pidge` setup with `pidge mcp connect`, and self-hosting
+(including a ready-made container image at `ghcr.io/mklab-se/pidge-mcp`).
+
 ## Development
 
 ```bash

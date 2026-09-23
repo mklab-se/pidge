@@ -66,6 +66,7 @@ deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Contai
 - **Sending:** only `mail_send` sends, only by draft id, at most 30 per hour per user (unsubscribe e-mails count too).
 - **markitdown hardening:** scrubbed environment; a fresh per-conversion work dir as `HOME`/`TMPDIR`, removed on every path; 30 s timeout with kill-on-drop; 4 GB address-space limit on Linux; 2 MB output cap; stderr discarded (it can quote the document); at most 2 concurrent conversions. The server marks itself non-dumpable on Linux so the child cannot read its environment.
 - **Deploy:** `.github/workflows/deploy-mcp.yml` redeploys on every green CI run on `main`; every env var it and `deploy/azure/deploy.sh` can set is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs`.
+- **CLI side:** `pidge mcp connect/status/logout` (`crates/pidge/src/commands/mcp*.rs`) sign a local user into a hosted `pidge-mcp` server and migrate their local accounts onto it, via the client-side protocol in `crates/pidge-client/src/mcp/`; user guide: `docs/mcp.md`.
 
 ## Key Patterns
 
