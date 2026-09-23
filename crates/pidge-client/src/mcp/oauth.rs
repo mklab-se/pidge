@@ -259,7 +259,8 @@ fn build_authorize_url(
     Ok(url.into())
 }
 
-#[derive(Debug, Deserialize)]
+// No `Debug`: it holds a plain access token, and `McpTokens` redacts its own.
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     refresh_token: Option<String>,
