@@ -1,9 +1,20 @@
 name: Release
 
+# One trigger for everything that ships: the `v*` tag the release skill
+# pushes. CI gates every job below; then the CLI binaries, SBOMs, GitHub
+# Release, Homebrew formula, crates.io crates and the MCP image are
+# published, and pidge-mcp is deployed to Azure — all from the same tagged
+# commit. Nothing deploys on a push to `main`.
+#
+# `workflow_dispatch` is the manual "redeploy the server" button: it runs
+# CI and the deploy from the chosen ref (normally `main`) and nothing else,
+# for a redeploy that needs no new version, e.g. after rotating
+# PIDGE_MCP_ALLOWED_EMAILS.
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,6 +41,7 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     needs: ci
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -124,13 +136,19 @@ jobs:
   github-release:
     name: GitHub Release
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download all artifacts
+      # Only the build matrix's archives and SBOMs. The image job stores
+      # its own `*.dockerbuild` artifact in this run, which must neither be
+      # attached to the release nor downloaded here (its digest check has
+      # failed the whole download before).
+      - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
+          pattern: pidge-*
           path: artifacts
           merge-multiple: true
 
@@ -144,6 +162,7 @@ jobs:
   homebrew:
     name: Update Homebrew Tap
     needs: github-release
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Update formula
@@ -271,6 +290,7 @@ jobs:
   crates-io:
     name: Publish to crates.io
     needs: ci
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: crates-io
     steps:
@@ -278,23 +298,127 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Publish pidge-core
-        run: cargo publish -p pidge-core
+      # In dependency order, skipping any crate whose version is already on
+      # crates.io: a version can never be re-uploaded, so this is what lets
+      # a tag be re-pushed (or the run re-run) after a partial failure
+      # elsewhere in the workflow without failing red here.
+      - name: Publish pidge-core, pidge-client, pidge
+        shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for crate in pidge-core pidge-client pidge; do
+            status="$(curl -s -o /dev/null -w '%{http_code}' \
+              -A 'pidge-release (https://github.com/mklab-se/pidge)' \
+              "https://crates.io/api/v1/crates/${crate}/${version}")"
+            if [[ "$status" == "200" ]]; then
+              echo "${crate} ${version} is already on crates.io; skipping"
+              continue
+            fi
+            cargo publish -p "$crate"
+            # Let the index catch up before the next crate resolves this one.
+            sleep 30
+          done
 
-      - name: Wait for crates.io index
-        run: sleep 30
+  # Deploy pidge-mcp to Azure Container Apps from the same commit. Runs
+  # for every tag and for a manual dispatch; never for a push to main.
+  # The `production` environment fixes the OIDC subject to
+  # `repo:mklab-se/pidge:environment:production` whatever the ref, which is
+  # the subject the deploy identity's federated credential trusts (see
+  # deploy/azure/setup-github-oidc.sh). Forks have no Azure identity to
+  # federate with, so the job is skipped there instead of failing.
+  deploy:
+    name: Deploy MCP
+    needs: ci
+    if: github.repository == 'mklab-se/pidge'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    # A second trigger queues behind a deploy in progress rather than
+    # racing or cancelling it.
+    concurrency:
+      group: deploy-mcp
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
 
-      - name: Publish pidge-client
-        run: cargo publish -p pidge-client
+      - name: Azure login (OIDC)
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # --skip-entra: Phase 4 (Entra callback registration) is done once,
+      # by hand; the deploy identity has no Graph directory rights.
+      # --skip-certificate: the custom-domain certificate is provisioned
+      # once, interactively; CI asserts the binding is SniEnabled and reuses
+      # it. deploy.sh keeps the live custom domain and cutover state when
+      # PIDGE_MCP_CUSTOM_DOMAIN / PIDGE_MCP_CUTOVER are empty, which they
+      # are unless repository variables of those names exist.
+      #
+      # The image is tagged with the release tag (v1.2.3) on a tag run and
+      # with the commit SHA on a manual dispatch.
+      - name: Deploy pidge-mcp
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploy/azure/deploy.sh --skip-entra --skip-certificate | tee deploy-output.log
+
+          url="$(grep -oE 'MCP endpoint *: https://[^[:space:]]+/mcp' deploy-output.log | awk '{print $NF}' || true)"
+          if [[ -z "$url" ]]; then
+            echo "warning: could not parse MCP endpoint from deploy output; re-deriving from the Container App" >&2
+            fqdn="$(az containerapp show --resource-group pidge --name ca-pidge-mcp \
+              --query properties.configuration.ingress.fqdn -o tsv)"
+            url="https://$fqdn/mcp"
+          fi
+          echo "url=${url%/mcp}" >> "$GITHUB_OUTPUT"
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          IMAGE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
+          PIDGE_MCP_ALLOWED_EMAILS: ${{ secrets.PIDGE_MCP_ALLOWED_EMAILS }}
+          PIDGE_MCP_CUSTOM_DOMAIN: ${{ vars.PIDGE_MCP_CUSTOM_DOMAIN }}
+          PIDGE_MCP_CUTOVER: ${{ vars.PIDGE_MCP_CUTOVER }}
 
-      - name: Wait for crates.io index
-        run: sleep 30
-
-      - name: Publish pidge
-        run: cargo publish -p pidge
+      - name: Smoke test
+        shell: bash
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          url="$URL"
+          echo "Smoke testing $url"
+
+          curl_retry=(--retry 5 --retry-delay 5 --retry-all-errors --max-time 30)
+
+          health="$(curl -fsS "${curl_retry[@]}" "$url/healthz")"
+          if [[ "$health" != "ok" ]]; then
+            echo "error: /healthz returned '$health', expected 'ok'" >&2
+            exit 1
+          fi
+
+          as_metadata="$(curl -fsS "${curl_retry[@]}" "$url/.well-known/oauth-authorization-server")"
+          issuer="$(jq -r '.issuer // empty' <<<"$as_metadata")"
+          if [[ "$issuer" != "$url" ]]; then
+            echo "error: discovery issuer '$issuer' does not match the deployed URL '$url'" >&2
+            exit 1
+          fi
+
+          resource_metadata="$(curl -fsS "${curl_retry[@]}" "$url/.well-known/oauth-protected-resource")"
+          resource="$(jq -r '.resource // empty' <<<"$resource_metadata")"
+          if [[ "$resource" != "$url/mcp" ]]; then
+            echo "error: protected-resource metadata resource '$resource' does not match '$url/mcp'" >&2
+            exit 1
+          fi
+
+          status="$(curl -s -o /dev/null -w '%{http_code}' "${curl_retry[@]}" -X POST "$url/mcp")"
+          if [[ "$status" != "401" ]]; then
+            echo "error: POST $url/mcp without a bearer token returned $status, expected 401" >&2
+            exit 1
+          fi
+
+          echo "Smoke test passed: healthz ok, issuer=$issuer, resource=$resource, unauthenticated /mcp -> 401"

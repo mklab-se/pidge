@@ -9,7 +9,10 @@
 # exist. Creates, if missing:
 #   - user-assigned identity `id-pidge-deploy` in the resource group, tagged
 #     like main.bicep's resources (managed-by=script)
-#   - a federated credential trusting GitHub Actions runs from `main`
+#   - a federated credential trusting GitHub Actions jobs that run in the
+#     repository's `production` environment (the Release workflow's deploy
+#     job, whatever ref triggered it: a `v*` tag or a manual dispatch), plus
+#     the GitHub environment itself
 #   - a Contributor role assignment for that identity, scoped to the
 #     resource group
 #   - a Role Based Access Control Administrator role assignment for that
@@ -18,8 +21,8 @@
 #     roles the Bicep template itself assigns during deploy. If an earlier
 #     run of this script left an unconditioned RBAC Administrator
 #     assignment in place, it is replaced with the conditioned one.
-# and always sets the GitHub repository variables and secret that
-# `.github/workflows/deploy-mcp.yml` reads: AZURE_CLIENT_ID, AZURE_TENANT_ID,
+# and always sets the GitHub repository variables and secret that the
+# deploy job in `.github/workflows/release.yml` reads: AZURE_CLIENT_ID, AZURE_TENANT_ID,
 # AZURE_SUBSCRIPTION_ID, PIDGE_MCP_ALLOWED_EMAILS (secret), and optionally
 # PIDGE_MCP_CUSTOM_DOMAIN.
 #
@@ -29,10 +32,15 @@ set -euo pipefail
 
 RESOURCE_GROUP="${PIDGE_RG:-pidge}"
 IDENTITY_NAME="id-pidge-deploy"
-FEDERATED_CRED_NAME="github-main"
+FEDERATED_CRED_NAME="github-production"
 REPO="mklab-se/pidge"
+GITHUB_ENVIRONMENT="production"
 GITHUB_ISSUER="https://token.actions.githubusercontent.com"
-GITHUB_SUBJECT="repo:${REPO}:ref:refs/heads/main"
+# A job with `environment: production` presents this subject no matter
+# which tag or branch started the run, so one credential covers releases
+# and manual redeploys. (An older `github-main` credential, scoped to
+# refs/heads/main, is left in place if present; nothing uses it now.)
+GITHUB_SUBJECT="repo:${REPO}:environment:${GITHUB_ENVIRONMENT}"
 GITHUB_AUDIENCE="api://AzureADTokenExchange"
 ROLE_CONTRIBUTOR="b24988ac-6180-42a0-ab88-20f7382dd24c"
 ROLE_RBAC_ADMIN="f58310d9-a9f6-439a-9e8d-f62e7b41a168"
@@ -96,6 +104,10 @@ else
     >/dev/null
   log "  created (subject: $GITHUB_SUBJECT)"
 fi
+
+log "GitHub environment '$GITHUB_ENVIRONMENT'"
+gh api -X PUT "repos/${REPO}/environments/${GITHUB_ENVIRONMENT}" >/dev/null
+log "  present"
 
 SCOPE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}"
 

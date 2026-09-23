@@ -151,33 +151,41 @@ still refresh. To unbind the domain as well, pass
 
 ## CI/CD
 
-`.github/workflows/deploy-mcp.yml` redeploys `pidge-mcp` whenever CI (the
-`CI` workflow) finishes successfully on `main` — every green CI run on
-`main` deploys, not every push, so a commit that compiles but fails tests or
-clippy is never deployed. It checks out the commit CI just tested
-(`github.event.workflow_run.head_sha`) and tags the image with that SHA. It
-can also be run manually from the Actions tab (`workflow_dispatch`), which
-deploys the checked-out branch's current commit — useful for a redeploy
-that doesn't need a new commit, e.g. after rotating
-`PIDGE_MCP_ALLOWED_EMAILS` (see below). Runs are serialized: a `deploy-mcp`
-concurrency group with `cancel-in-progress: false` means a second trigger
-queues behind a deploy already in progress rather than racing or
-cancelling it. The `workflow_run` trigger only fires for a `CI` run whose
-event was a `push` to `main` in this repository (never a pull-request run,
-including one from a fork) — see the comment above the job's `if:` in
-`deploy-mcp.yml` for why each clause matters.
+Releasing and deploying are one workflow with one trigger. `.github/workflows/release.yml`
+runs when the release skill pushes a `v*` tag: its `CI` job (format, clippy,
+tests) gates everything else, then the CLI binaries, SBOMs, GitHub Release,
+Homebrew formula, crates.io crates and the GHCR image are published and the
+`Deploy MCP` job deploys `pidge-mcp` from that same tagged commit. A push to
+`main` runs the `CI` workflow but deploys nothing: the tag is the deploy
+intent for both the CLI and the server. The image is tagged with the
+release tag (`v1.2.3`).
 
-The trigger has no path filter, so every green CI run on `main` deploys —
-including a commit that only touches the CLI or docs and doesn't change
-`pidge-mcp` at all. That's deliberate rather than an oversight, and it costs
-one ACR image build per push to `main`. If two pushes land close together,
-a "guard against out-of-order completions" step compares the commit it's
-about to deploy against the current tip of `main` and skips as superseded
-if a newer commit has already landed — so `main`'s tip is always what ends
-up deployed, even if an older run's CI happens to finish last.
+The workflow can also be run manually from the Actions tab
+(`workflow_dispatch`), which runs CI and the deploy from the chosen ref and
+nothing else — a redeploy that doesn't need a new version, e.g. after
+rotating `PIDGE_MCP_ALLOWED_EMAILS` (see below); the image is then tagged
+with the commit SHA. Deploys are serialized: a `deploy-mcp` concurrency
+group with `cancel-in-progress: false` means a second trigger queues behind
+a deploy already in progress rather than racing or cancelling it. The
+deploy job is skipped in forks (`github.repository` check): a fork has no
+Azure identity to federate with. The publishing jobs and the deploy are
+independent after the CI gate, so a failed crates.io or Homebrew step never
+holds back a deploy; a re-pushed tag skips crate versions that are already
+published.
 
-The workflow authenticates to Azure via GitHub's OIDC federation — no Azure
-credential is stored in GitHub. It runs
+The deploy job runs in the repository's `production` GitHub environment,
+which fixes its OIDC subject to `repo:mklab-se/pidge:environment:production`
+regardless of the tag or branch that started the run; that is the subject
+the deploy identity's federated credential trusts. No Azure credential is
+stored in GitHub.
+
+**One-time setup.** `deploy/azure/setup-github-oidc.sh`, run once by hand
+from a workstation with `az login` and `gh auth login` (and
+`PIDGE_MCP_ALLOWED_EMAILS` set), creates the deploy identity
+`id-pidge-deploy`, the `production` GitHub environment, the federated
+credential for that environment's subject, the two conditioned role
+assignments, and the repository variables and secret the deploy job reads.
+It is idempotent, so re-run it after changing any of those. It runs
 `deploy/azure/deploy.sh --skip-entra --skip-certificate`, then smoke-tests
 the result: `/healthz` must return `ok`, the issuer in
 `/.well-known/oauth-authorization-server` must equal the deployed URL, the
@@ -197,100 +205,6 @@ custom domain bound or requested the flag does nothing. Since CI leaves
 `PIDGE_MCP_CUSTOM_DOMAIN` and `PIDGE_MCP_CUTOVER` unset (unless you create
 repository variables for them), every CI deploy keeps the live domain,
 certificate and cutover state as they are.
-
-### One-time setup
-
-Before the workflow can run, `deploy/azure/setup-github-oidc.sh` wires up the
-trust relationship and the repository configuration it reads. Run it once,
-by hand, from a workstation logged in with both `az login` and
-`gh auth login`:
-
-```bash
-PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y deploy/azure/setup-github-oidc.sh
-```
-
-It's idempotent — re-running it after partial setup, or to rotate the
-allowlist, is safe. Rotating the allowlist only updates the GitHub secret;
-it takes effect on the *next* deploy, so trigger one afterwards with
-`workflow_dispatch` if you're not already about to push. It creates, if
-missing:
-
-- A user-assigned managed identity, `id-pidge-deploy`, in the resource
-  group.
-- A federated credential on that identity, `github-main`, trusting GitHub
-  Actions runs for `repo:mklab-se/pidge:ref:refs/heads/main` (issuer
-  `https://token.actions.githubusercontent.com`, audience
-  `api://AzureADTokenExchange`) — this is what lets the workflow get an
-  Azure access token with no stored secret.
-- Two role assignments for that identity on the resource group:
-  `Contributor` (to deploy the Bicep template and build images) and
-  `Role Based Access Control Administrator` (because the Bicep template
-  itself creates role assignments, e.g. ACR pull and Key Vault Secrets
-  Officer, for the app's own identity) — conditioned so it can only
-  assign or remove those same two roles (AcrPull, Key Vault Secrets
-  Officer), never anything broader like Owner. Re-running the script
-  replaces an older, unconditioned assignment from before this condition
-  existed.
-
-**What the condition does and doesn't limit.** The condition limits which
-*roles* the deploy identity can grant. It does not limit what the identity
-can *reach*. With Contributor on the resource group it can reach
-everything in it: the Key Vault, the app's identity `id-pidge-mcp`, its own
-identity `id-pidge-deploy`, and the container app. Concretely, it can:
-
-- deploy any image to run as `id-pidge-mcp`, which can read every user's
-  Microsoft refresh token and the signing key from the vault;
-- add a federated credential to itself;
-- switch the vault's access model;
-- grant AcrPull or Key Vault Secrets Officer to any principal, since the
-  condition restricts role ids, not who receives them.
-
-So whoever can push to `main` can deploy, and through the deploy can read
-production mailbox tokens. That includes any tool or agent session
-holding a GitHub credential with write access to the repository. The
-intended boundary is a branch ruleset on `main` that requires the CI
-status checks (Check, Clippy, Format, Test) to pass on a commit before it
-can land, and blocks force-pushes and deletion. Such a ruleset exists on
-this repository ("main: CI must pass", no review requirement, no bypass
-list); `gh api repos/mklab-se/pidge/rulesets` lists it. Add a
-pull-request or review requirement there when more than one person has
-write access.
-
-It then always sets the GitHub repository configuration the workflow reads:
-
-| Name | Kind | Value |
-|---|---|---|
-| `AZURE_CLIENT_ID` | variable | `id-pidge-deploy`'s client id |
-| `AZURE_TENANT_ID` | variable | the Azure AD tenant id |
-| `AZURE_SUBSCRIPTION_ID` | variable | the subscription id |
-| `PIDGE_MCP_ALLOWED_EMAILS` | secret | from the environment variable of the same name (required; the script refuses to run without it, and never echoes the value) |
-| `PIDGE_MCP_CUSTOM_DOMAIN` | variable | from the environment variable of the same name, only if set |
-
-**Resources outside `main.bicep`.** Everything the server runs on is
-declared in `main.bicep`, with three exceptions, all created by scripts:
-
-- **The deploy identity**, `id-pidge-deploy`, with its federated credential
-  and its two role assignments (`setup-github-oidc.sh`). It is what runs
-  the Bicep deployment from CI, so it has to exist before the first CI
-  run. Declaring it in the template it deploys would also mean the
-  identity re-applies its own federated credential and its own
-  Contributor and RBAC Administrator grants on every run, and the RBAC
-  condition deliberately forbids it from assigning those roles. It
-  carries the same tags as the Bicep resources, with
-  `managed-by=script`.
-- **The managed certificate**, `pidge-mcp-managed` (`deploy.sh`, Phase
-  3b). A managed certificate can only be issued after the hostname is
-  bound to the app, and issuing it takes minutes of polling, so the
-  script creates it between two Bicep deployments and passes its id back
-  in as `customDomainCertificateId`.
-
-`PIDGE_MCP_CUTOVER` isn't set by the script, and doesn't need to be a
-repository variable at all: cut over (or back) with one local run of
-`deploy.sh`, and CI keeps that state from then on. If you do create
-`PIDGE_MCP_CUTOVER` or `PIDGE_MCP_CUSTOM_DOMAIN` as repository variables,
-the workflow passes them on and every CI deploy applies them, including a
-stale `0` that reverts a cutover. The `PIDGE_MCP_CUSTOM_DOMAIN` variable the
-setup script sets is harmless as long as it names the bound domain.
 
 ## Logs
 

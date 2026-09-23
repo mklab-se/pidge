@@ -67,7 +67,7 @@ deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Contai
 - **Cache invalidation:** every mutating tool (draft, send, act, calendar writes, account changes) calls `cache.invalidate_user` for the caller; reads are cached per user for 60 s.
 - **Sending:** only `mail_send` sends, only by draft id, at most 30 per hour per user. Unsubscribe e-mails, calendar invitations, attendee changes, cancellation notes and RSVP messages are charged against the same cap.
 - **markitdown hardening:** scrubbed environment; a fresh per-conversion work dir as `HOME`/`TMPDIR`, removed on every path; 30 s timeout with kill-on-drop; 4 GB address-space limit on Linux; 2 MB output cap; stderr discarded (it can quote the document); at most 2 concurrent conversions. The server marks itself non-dumpable on Linux so the child cannot read its environment.
-- **Deploy:** `.github/workflows/deploy-mcp.yml` redeploys on every green CI run on `main`; every env var the running server reads is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs` — `deploy/azure/deploy.sh` and `deploy-mcp.yml` also read some deploy-time-only vars (`PIDGE_RG`, `PIDGE_CLIENT_ID`, `IMAGE_TAG`, `PIDGE_MCP_CUSTOM_DOMAIN`, `PIDGE_MCP_CUTOVER`) that `deploy.sh` translates into the vars `Config::from_env` actually sees.
+- **Deploy:** the `deploy` job of `.github/workflows/release.yml` deploys on every `v*` tag (the same trigger that releases the CLI) and on a manual dispatch, never on a push to `main`; every env var the running server reads is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs` — `deploy/azure/deploy.sh` and the deploy job also read some deploy-time-only vars (`PIDGE_RG`, `PIDGE_CLIENT_ID`, `IMAGE_TAG`, `PIDGE_MCP_CUSTOM_DOMAIN`, `PIDGE_MCP_CUTOVER`) that `deploy.sh` translates into the vars `Config::from_env` actually sees.
 - **CLI side:** `pidge mcp connect/status/logout` (`crates/pidge/src/commands/mcp*.rs`) sign a local user into a hosted `pidge-mcp` server and migrate their local accounts onto it, via the client-side protocol in `crates/pidge-client/src/mcp/`; user guide: `docs/mcp.md`.
 
 ## Key Patterns
@@ -89,7 +89,7 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
 
 1. `/release patch` (or `minor`/`major`)
 2. Skill bumps version, updates CHANGELOG, runs pre-flight checks, tags, pushes
-3. Release workflow builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries (Linux, macOS Intel+ARM, Windows) with a CycloneDX SBOM per target, creates GitHub Release, updates Homebrew tap (`mklab-se/homebrew-tap`), publishes `pidge-core` → `pidge-client` → `pidge` to crates.io
+3. Release workflow runs CI, then builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries (Linux, macOS Intel+ARM, Windows) with a CycloneDX SBOM per target, creates GitHub Release, updates Homebrew tap (`mklab-se/homebrew-tap`), publishes `pidge-core` → `pidge-client` → `pidge` to crates.io, publishes the MCP image, and deploys `pidge-mcp` to Azure — one tag ships the CLI and the server together
 
 **Required GitHub secrets:**
 - `CARGO_REGISTRY_TOKEN` (in `crates-io` environment)

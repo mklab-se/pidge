@@ -59,29 +59,34 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 ### 7. Commit, push, and tag
 
 - Stage all changed files: `Cargo.toml`, `Cargo.lock`, `CHANGELOG.md`, and any updated docs
-- Commit with message: `Release v{NEW_VERSION}` on a branch `release/v{NEW_VERSION}` — the
-  `main` ruleset requires the four CI checks, so a direct push to `main` is declined
-- Push the branch and open a PR: `gh pr create --title "Release v{NEW_VERSION}" --body "..."`;
-  wait for CI with `gh pr checks <n> --watch`, then `gh pr merge <n> --merge --delete-branch`
-- Tag the merged result: `git checkout main && git pull`, then
-  `git tag v{NEW_VERSION} && git push origin v{NEW_VERSION}` (tags are not covered by the ruleset)
+- Commit with message: `Release v{NEW_VERSION}`
+- Push to main: `git push` (the `main` ruleset only forbids force-pushes and deletion; direct
+  pushes are fine)
+- Create and push tag: `git tag v{NEW_VERSION} && git push origin v{NEW_VERSION}`. The tag is the
+  one trigger for everything that ships: CLI binaries, crates.io, Homebrew, the MCP image AND the
+  pidge-mcp deployment to Azure all run from `release.yml` on this tag, behind its CI job
 
 ### 8. Watch and verify
 
 - The tag push triggers the Release workflow. Do NOT declare success yet — watch it:
   `gh run list --repo mklab-se/pidge --workflow release.yml --limit 1`, then
   `gh run watch <id> --repo mklab-se/pidge --exit-status` until it completes
-- If it fails, inspect with `gh run view <id> --log-failed`, fix the cause, and re-release as a patch
+- If a job fails on a GitHub flake (artifact download, runner outage), `gh run rerun <id> --failed`
+  re-runs just the failed jobs. If the fix needs a code change, commit it to `main`, then move the
+  tag: `git tag -f v{NEW_VERSION} && git push -f origin v{NEW_VERSION}` re-runs the whole workflow;
+  crate versions already on crates.io are skipped, everything else is redone
 - When it is green, confirm the outputs:
   - `gh release view v{NEW_VERSION} --repo mklab-se/pidge` lists 4 archives
     (3 × `.tar.gz`, 1 × `.zip`) plus 4 matching `.cdx.json` SBOMs
   - `cargo search pidge --limit 1` shows the new version on crates.io
   - `Formula/pidge.rb` in `mklab-se/homebrew-tap` carries the new version
+  - The `Deploy MCP` job passed its smoke test, and `curl -s https://pidge.mklab.se/healthz`
+    returns `ok`
 
 ### 9. Confirm
 
 - Tell the user the release is tagged, pushed, and the workflow is green — auditable binaries and
   SBOMs are attached to the GitHub Release, crates.io is published (`pidge-core` → `pidge-client` →
-  `pidge`), and the Homebrew tap is updated
+  `pidge`), the Homebrew tap is updated, and pidge-mcp is deployed
 - The publish jobs require the `CARGO_REGISTRY_TOKEN` (in the `crates-io` environment) and
   `HOMEBREW_TAP_TOKEN` (repo secret) to be configured — see README.md
