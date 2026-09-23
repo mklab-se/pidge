@@ -424,11 +424,16 @@ generation too, and `/dl` refuses one minted before the sign-out with the
 same 404 as an expired link. Every client of that user, including the one
 that made the call, must sign in again.
 
-The generation lookup is checked in-memory first; the secret store is only
-read on a cache miss (the first lookup for that user in this process's
-lifetime), and it's that read failing — a transient Key Vault error, say —
-that the server can't tell apart from an actual sign-out. Each of the three
-places that check it fails closed, but not identically:
+The generation lookup is checked in-memory first. A cached value is
+trusted for 5 minutes after the store last confirmed it; after that, or on
+a miss, the secret store is read again. So a generation changed outside
+this process (an edit in Key Vault, or another replica if the app were
+ever scaled out, which `main.bicep` rules out with `maxReplicas: 1`) takes
+effect within 5 minutes. A sign-out through `accounts_update` takes effect
+at once. It's a failing store read (a transient Key Vault error, say) that
+the server can't tell apart from an actual sign-out, and an expired cached
+value is not used as a fallback. Each of the three places that check it
+fails closed, but not identically:
 
 - **The bearer check on `/mcp`** (`oauth/bearer.rs`) returns 401
   `invalid_token` either way — on a real generation mismatch or on a store

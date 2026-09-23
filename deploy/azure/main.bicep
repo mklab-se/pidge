@@ -279,9 +279,14 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
         }
       ]
       scale: {
-        // A single replica keeps the short-lived in-memory OAuth state
-        // (pending authorizations, used codes) coherent. Scale-to-zero is
-        // fine: a Rust binary cold-starts in well under a second.
+        // A single replica is required, for two reasons:
+        //  - the short-lived in-memory OAuth state (pending authorizations,
+        //    used codes) must be coherent;
+        //  - token generations (sign-out everywhere) are cached per process
+        //    for up to 5 minutes, so with more replicas a sign-out on one
+        //    would take that long to reach the others.
+        // Scale-to-zero is fine: a Rust binary cold-starts in well under a
+        // second.
         minReplicas: 0
         maxReplicas: 1
       }
