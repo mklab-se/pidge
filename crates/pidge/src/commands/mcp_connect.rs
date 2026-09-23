@@ -15,6 +15,7 @@
 
 use std::collections::HashSet;
 use std::future::Future;
+use std::io::IsTerminal;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -35,9 +36,30 @@ pub async fn run(url: String, store: TokenStorage, yes: bool, json_output: bool)
     let result = if crate::guardrail::dry_run_active() {
         run_dry(&url, store, json_output).await
     } else {
+        let (yes, note) = effective_yes(yes, std::io::stdin().is_terminal());
+        if let Some(note) = note {
+            eprintln!("{note}");
+        }
         run_inner(&url, store, yes, json_output).await
     };
     result.map_err(|e| mcp::remap_session_expired(&url, e))
+}
+
+/// Whether to poll for each mailbox rather than wait for Enter. Without a
+/// terminal on stdin (an agent, a pipe, `< /dev/null`), waiting for Enter
+/// would read EOF at once and rush through every link, so `connect`
+/// behaves as if `--yes` were given and says so in the returned note.
+fn effective_yes(yes: bool, stdin_is_terminal: bool) -> (bool, Option<&'static str>) {
+    if yes || stdin_is_terminal {
+        (yes, None)
+    } else {
+        (
+            true,
+            Some(
+                "stdin is not a terminal: acting as --yes (polling until each mailbox shows as connected).",
+            ),
+        )
+    }
 }
 
 /// `--dry-run`: report what `connect` would do without touching the server,
@@ -579,6 +601,20 @@ mod tests {
     use pidge_client::mcp::ToolResult;
 
     use super::*;
+
+    #[test]
+    fn effective_yes_polls_when_stdin_is_not_a_terminal() {
+        let (yes, note) = effective_yes(false, false);
+        assert!(yes);
+        assert!(note.unwrap().contains("--yes"));
+    }
+
+    #[test]
+    fn effective_yes_keeps_the_flag_on_a_terminal_or_when_given() {
+        assert_eq!(effective_yes(false, true), (false, None));
+        assert_eq!(effective_yes(true, true), (true, None));
+        assert_eq!(effective_yes(true, false), (true, None));
+    }
 
     // --- parse_connected_addresses -----------------------------------
 

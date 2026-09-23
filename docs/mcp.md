@@ -79,7 +79,8 @@ It signs you in to the server (a browser opens), then walks every account
 already signed in locally, skips any that are already connected, and for
 the rest prints a connect link (also opened in your browser) and waits for
 it to complete. Add `--yes` to skip the interactive per-account prompts and
-just poll each one until it shows connected, and `--store file` to keep the
+just poll each one until it shows connected (when stdin is not a terminal,
+as for an agent or a script, `connect` does this even without `--yes`), and `--store file` to keep the
 session token in a plaintext file (mode 0600 on Unix) instead of the OS
 keychain. `--dry-run` only reads your current state (a single
 `accounts_list` call) and reports what it would do; it never signs in,
