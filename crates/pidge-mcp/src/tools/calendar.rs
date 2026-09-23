@@ -2046,7 +2046,11 @@ mod tests {
             &h,
             EventArgs {
                 attendees: Some(vec!["carl@example.org".into()]),
-                ..create("Planning", "2030-01-07T14:00:00", None)
+                ..create(
+                    "Planning",
+                    "2030-01-07T14:00:00",
+                    Some("2030-01-07T15:00:00"),
+                )
             },
         )
         .await
