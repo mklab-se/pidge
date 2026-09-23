@@ -95,7 +95,7 @@ pub async fn run<F: FnOnce(&str)>(
     let CallbackParams {
         code,
         state: returned_state,
-    } = wait_for_callback(listener).await?;
+    } = wait_for_callback(listener, Duration::from_secs(300)).await?;
     if returned_state != state {
         return Err(ClientError::Graph {
             status: 400,
@@ -172,22 +172,31 @@ pub(crate) fn build_authorize_url(
     url.into()
 }
 
-struct CallbackParams {
-    code: String,
-    state: String,
+pub(crate) struct CallbackParams {
+    pub(crate) code: String,
+    pub(crate) state: String,
 }
 
 /// Accept a single connection on the listener, parse the request line for
 /// query parameters, write a success/error response, close. Single-shot.
-async fn wait_for_callback(listener: TcpListener) -> Result<CallbackParams, ClientError> {
-    // Generous timeout: users might take a minute or two to authenticate,
-    // especially on MFA. 5 minutes matches Microsoft's own OAuth code TTL.
+///
+/// `timeout` bounds how long we'll wait for the browser to hit the callback.
+/// The Microsoft flow uses 5 minutes (matching Microsoft's own OAuth code
+/// TTL); the MCP sign-in flow (see `crate::mcp::oauth`) uses a longer window
+/// since it's a separate, often manually-triggered, sign-in step.
+pub(crate) async fn wait_for_callback(
+    listener: TcpListener,
+    timeout: Duration,
+) -> Result<CallbackParams, ClientError> {
     let accept = listener.accept();
-    let (mut stream, _) = tokio::time::timeout(Duration::from_secs(300), accept)
+    let (mut stream, _) = tokio::time::timeout(timeout, accept)
         .await
         .map_err(|_| ClientError::Graph {
             status: 408,
-            message: "timed out waiting for browser sign-in (5 min)".to_string(),
+            message: format!(
+                "timed out waiting for browser sign-in ({}s)",
+                timeout.as_secs()
+            ),
         })?
         .map_err(ClientError::Io)?;
 
@@ -312,21 +321,21 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; text-align: center; }}
 /// STRING, using the unreserved characters … with a minimum length of 43
 /// characters and a maximum length of 128 characters." 64 alphanumerics is
 /// comfortably inside the spec and gives ~380 bits of entropy.
-fn make_code_verifier() -> String {
+pub(crate) fn make_code_verifier() -> String {
     let mut rng = rng();
     (0..64).map(|_| rng.sample(Alphanumeric) as char).collect()
 }
 
 /// `base64url(SHA256(code_verifier))` per RFC 7636 §4.2. URL_SAFE_NO_PAD is
 /// the exact encoding the OAuth spec requires.
-fn make_code_challenge(verifier: &str) -> String {
+pub(crate) fn make_code_challenge(verifier: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(hasher.finalize())
 }
 
 /// 32 bytes of OS random → URL-safe base64. Used for the `state` CSRF nonce.
-fn make_random(byte_len: usize) -> String {
+pub(crate) fn make_random(byte_len: usize) -> String {
     let mut buf = vec![0u8; byte_len];
     rng().fill_bytes(&mut buf);
     URL_SAFE_NO_PAD.encode(&buf)

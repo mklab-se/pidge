@@ -6,6 +6,7 @@
 pub mod auth;
 mod error;
 pub mod graph;
+pub mod mcp;
 pub mod unsubscribe;
 
 pub use auth::AuthClient;
