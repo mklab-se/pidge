@@ -16,8 +16,9 @@ deploy/azure/deploy.sh        # idempotent; ~10 min the first time (ACR build)
 The script deploys `main.bicep` twice (infrastructure, then the app with the
 freshly built image), builds the image in ACR, and registers the server's
 `/callback` URL on the pidge Entra app. Pass `--skip-build` to reuse the last
-image and `--skip-entra` once the callback is registered. Override the
-allowlist with `PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y`.
+image and `--skip-entra` once the callback is registered. The sign-in
+allowlist is required and has no default: set `PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y`
+(comma-separated) or the script stops before deploying anything.
 
 ## Connect a client
 
@@ -72,6 +73,16 @@ sent only by draft id, and the agent proposes before sending.
   by hash, and every refusal is a plain 404.
 - **Connect links** show a consent page naming the pidge account the mailbox
   will be attached to before sending the user to Microsoft.
+- **Sign-in consent.** A client's `/authorize` shows a page naming the client
+  and the host the sign-in goes back to. Only its Continue, from the same
+  browser, goes to Microsoft.
+- **Account identity.** An account is its Microsoft principal name, never the
+  editable `mail` attribute. The tenant and object id from the ID token are
+  pinned on first sign-in, and a later sign-in or connect under the same name
+  with another account is refused.
+- **Unsubscribe.** One-click POSTs go over https to public hosts only, and
+  redirects are not followed. Unsubscribe e-mails always say "unsubscribe" and
+  use at most 100 characters of the list's subject.
 
 ## Configuration
 

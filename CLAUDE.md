@@ -38,6 +38,7 @@ crates/
       oauth/            # Discovery, DCR, authorize→Microsoft→callback, token, bearer middleware, consent pages
       secrets/          # `SecretStore`: Azure Key Vault (managed identity) or files (dev)
       users.rs          # UserRecord (sign-in, owned mailboxes, settings) + MailboxRecord { owner, tokens }
+      mailbox.rs        # SecretTokenBackend: bridges pidge-client's TokenBackend to the per-mailbox secret store
       context.rs        # ToolContext: caller from the bearer, mailbox ownership checks
       state.rs          # AppState: Graph client, caches, send/download rate limits, conversion slots
       cache.rs          # Per-user 60 s LRU read cache, cleared on that user's writes
