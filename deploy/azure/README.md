@@ -116,7 +116,19 @@ that doesn't need a new commit, e.g. after rotating
 `PIDGE_MCP_ALLOWED_EMAILS` (see below). Runs are serialized: a `deploy-mcp`
 concurrency group with `cancel-in-progress: false` means a second trigger
 queues behind a deploy already in progress rather than racing or
-cancelling it.
+cancelling it. The `workflow_run` trigger only fires for a `CI` run whose
+event was a `push` to `main` in this repository (never a pull-request run,
+including one from a fork) — see the comment above the job's `if:` in
+`deploy-mcp.yml` for why each clause matters.
+
+The trigger has no path filter, so every green CI run on `main` deploys —
+including a commit that only touches the CLI or docs and doesn't change
+`pidge-mcp` at all. That's deliberate rather than an oversight, and it costs
+one ACR image build per push to `main`. If two pushes land close together,
+a "guard against out-of-order completions" step compares the commit it's
+about to deploy against the current tip of `main` and skips as superseded
+if a newer commit has already landed — so `main`'s tip is always what ends
+up deployed, even if an older run's CI happens to finish last.
 
 The workflow authenticates to Azure via GitHub's OIDC federation — no Azure
 credential is stored in GitHub. It runs
