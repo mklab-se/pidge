@@ -308,7 +308,7 @@ impl PidgeMcp {
     /// is `None`), plus the addresses a name matched only among recent
     /// inbox senders, which the preview asks the user to confirm.
     /// Contacts are only built when some token is a name.
-    async fn recipients(
+    pub(crate) async fn recipients(
         &self,
         tc: &ToolContext,
         lists: [&Option<Vec<String>>; 3],
