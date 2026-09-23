@@ -103,13 +103,34 @@ pub async fn run<F: FnOnce(&str)>(
         });
     }
 
-    let tokens_response = exchange_code(
+    exchange_code_to_success(
         http,
         authority_base,
         client_id,
         &code,
         &verifier,
         &redirect_uri,
+    )
+    .await
+}
+
+/// Redeem an authorization code and shape the response as an [`AuthSuccess`].
+/// Shared by the local browser flow and hosted callbacks.
+pub(crate) async fn exchange_code_to_success(
+    http: &reqwest::Client,
+    authority_base: &str,
+    client_id: &str,
+    code: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+) -> Result<AuthSuccess, ClientError> {
+    let tokens_response = exchange_code(
+        http,
+        authority_base,
+        client_id,
+        code,
+        code_verifier,
+        redirect_uri,
     )
     .await?;
 
@@ -124,7 +145,7 @@ pub async fn run<F: FnOnce(&str)>(
     })
 }
 
-fn build_authorize_url(
+pub(crate) fn build_authorize_url(
     authority_base: &str,
     client_id: &str,
     redirect_uri: &str,

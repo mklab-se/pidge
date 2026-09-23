@@ -35,7 +35,7 @@ pub async fn run(
     let auth = AuthClient::from_env()?;
     let graph = GraphClient::new(auth)?;
     graph
-        .rsvp_event(&r.account, &r.event_id, kind, comment, send_response)
+        .rsvp_event(&r.account, &r.event_id, kind, comment, send_response, None)
         .await?;
     if json {
         println!("{}", serde_json::json!({ "ok": true }));

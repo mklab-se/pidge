@@ -20,6 +20,7 @@ tokio.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 tracing.workspace = true
 keyring.workspace = true
 base64.workspace = true
@@ -27,6 +28,7 @@ dirs.workspace = true
 sha2.workspace = true
 rand.workspace = true
 url.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/pidge", "crates/pidge-core", "crates/pidge-client"]
+members = ["crates/pidge", "crates/pidge-core", "crates/pidge-client", "crates/pidge-mcp"]
+# A bare `cargo build` (and the release workflow's `cargo auditable build --release`) builds the
+# CLI only; `--workspace` (CI test/clippy) still covers pidge-mcp.
+default-members = ["crates/pidge"]
 
 [workspace.package]
 version = "1.4.0"
@@ -75,6 +78,9 @@ comfy-table = { version = "8", features = ["custom_styling"] }
 linkify = "0.11"
 sha2 = "0.11"
 
+# Bounded per-user LRU for pidge-mcp's read cache
+lru = "0.18"
+
 # Inbox show: HTML rendering, image display, formatting
 html2text = "0.17"
 viuer = "0.11"
@@ -98,11 +104,30 @@ ratatui-textarea = { version = "0.9", default-features = false, features = ["cro
 # Future combinators (for join_all in multi-account fetch)
 futures = "0.3"
 
+# Object-safe async traits (pidge-client's pluggable token backend)
+async-trait = "0.1"
+
 # URL handling
 url = "2"
 
 # Testing
 tempfile = "3.27"
+
+# Remote MCP server (pidge-mcp)
+rmcp = { version = "3.4", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "form", "query"] }
+http = "1"
+tower-http = { version = "0.7", features = ["trace"] }
+tokio-util = "0.7"
+# pidge-mcp: resource limits for the markitdown subprocess (Linux).
+libc = "0.2"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# aws-lc-rs is already the TLS crypto provider (reqwest/rustls); reuse it for HS256
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
+azure_core = "1"
+azure_identity = "1"
+azure_security_keyvault_secrets = "1"
 
 # Internal crates
 pidge-core = { version = "1.4.0", path = "crates/pidge-core" }

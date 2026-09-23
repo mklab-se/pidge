@@ -268,95 +268,48 @@ fn render_body(full: &FullMessage) -> String {
 
 /// Render an HTML body into a terminal-friendly string.
 ///
-/// - Uses html2text's `raw_mode` which traverses HTML `<table>` elements as a
-///   sequence of paragraphs (every cell becomes its own row, no column layout,
-///   no ASCII borders). Marketing emails are almost entirely layout tables; this
-///   keeps the reading flow.
-/// - Wraps every `<a href="…">text</a>` span in an OSC 8 escape sequence so
-///   modern terminals make link text clickable. No reference-style footnotes.
-/// - Suppresses `<img>` alt-text entirely (no `[[Logo]]` noise from email
-///   tracking pixels and logo images).
+/// Delegates to the shared `pidge_core::render` renderer, then re-applies
+/// terminal styling to the OSC 8 link spans (see `restyle_osc8_links`).
 fn render_html_body(html: &str, width: usize) -> String {
-    use html2text::render::{RichAnnotation, TaggedLineElement};
-
-    let lines = match html2text::config::rich()
-        .raw_mode(true)
-        .lines_from_read(html.as_bytes(), width)
-    {
-        Ok(l) => l,
-        Err(_) => return html.to_string(),
-    };
-
-    let mut out = String::new();
-    for line in lines {
-        for elem in line.iter() {
-            let TaggedLineElement::Str(ts) = elem else {
-                continue;
-            };
-            let mut url: Option<&str> = None;
-            let mut is_image = false;
-            for ann in &ts.tag {
-                match ann {
-                    RichAnnotation::Image(_) => is_image = true,
-                    RichAnnotation::Link(u) => url = Some(u.as_str()),
-                    _ => {}
-                }
-            }
-            if is_image {
-                continue;
-            }
-            // html2text >= 0.13 preserves U+00A0; fold it to a plain space so
-            // NBSP-padded table cells collapse like ordinary blank runs.
-            let text = ts.s.replace('\u{00A0}', " ");
-            if let Some(u) = url {
-                // OSC 8 makes terminals like Ghostty / iTerm2 recognize the span as
-                // a hyperlink, but the modifier-click affordance is only obvious when
-                // the cursor is exactly over the link text. Style the visible text
-                // with underline + cyan so it's identifiable at a glance without
-                // hovering. `colored` respects `--no-color` / NO_COLOR, so plain
-                // pipelines stay clean.
-                let styled = text.cyan().underline().to_string();
-                out.push_str("\x1b]8;;");
-                out.push_str(u);
-                out.push_str("\x1b\\");
-                out.push_str(&styled);
-                out.push_str("\x1b]8;;\x1b\\");
-            } else {
-                out.push_str(&text);
-            }
-        }
-        out.push('\n');
-    }
-    // Collapse runs of 3+ blank lines down to 2 — raw_mode + flattened tables
-    // can leave large gaps that look worse than the original layout would.
-    collapse_blank_runs(&out)
+    // The core renderer emits OSC 8 around plain text; add the terminal
+    // styling here so `--no-color` keeps working through `colored`.
+    let rendered =
+        pidge_core::render::render_html(html, width, pidge_core::render::LinkStyle::Osc8);
+    restyle_osc8_links(&rendered)
 }
 
-fn collapse_blank_runs(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut blank_streak = 0;
-    for line in text.lines() {
-        // Strip tracking-pixel padding characters that marketing emails use to
-        // distort preview-pane summaries: zero-width non-joiner (U+200C), zero-
-        // width space (U+200B), hair space (U+200A), and combining grapheme
-        // joiner (U+034F). Then strip trailing ASCII spaces.
-        let cleaned: String = line
-            .chars()
-            .filter(|&c| !matches!(c, '\u{200C}' | '\u{200B}' | '\u{200A}' | '\u{034F}'))
-            .collect();
-        let cleaned = cleaned.trim_end_matches(' ');
-
-        if cleaned.is_empty() {
-            blank_streak += 1;
-            if blank_streak <= 2 {
-                out.push('\n');
-            }
-        } else {
-            blank_streak = 0;
-            out.push_str(cleaned);
-            out.push('\n');
-        }
+/// Underline + cyan the visible text of every OSC 8 span.
+///
+/// OSC 8 makes terminals like Ghostty / iTerm2 recognize the span as a
+/// hyperlink, but the modifier-click affordance is only obvious when the
+/// cursor is exactly over the link text. Style the visible text with
+/// underline + cyan so it's identifiable at a glance without hovering.
+/// `colored` respects `--no-color` / NO_COLOR, so plain pipelines stay clean.
+fn restyle_osc8_links(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(start) = rest.find("\x1b]8;;") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 5..];
+        let Some(url_end) = after.find("\x1b\\") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let url = &after[..url_end];
+        let body = &after[url_end + 2..];
+        let Some(close) = body.find("\x1b]8;;\x1b\\") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let text = &body[..close];
+        out.push_str("\x1b]8;;");
+        out.push_str(url);
+        out.push_str("\x1b\\");
+        out.push_str(&text.cyan().underline().to_string());
+        out.push_str("\x1b]8;;\x1b\\");
+        rest = &body[close + 7..];
     }
+    out.push_str(rest);
     out
 }
 

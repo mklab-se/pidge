@@ -42,3 +42,6 @@ coverage/
 # rendering fixtures). The anonymized versions in tests/fixtures/*.html are
 # checked in; the originals in tests/fixtures/raw/ are NEVER committed.
 crates/pidge/tests/fixtures/raw/
+
+# Local agent working notes (reports, plans); may quote real mailbox content.
+.superpowers/

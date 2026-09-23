@@ -6,11 +6,12 @@ pub mod delta;
 pub mod events;
 mod mail;
 mod me;
+mod people;
 
 pub use calendars::list_calendars;
 pub use events::{
-    EventsPage, NewEvent, RsvpKind, cancel_event, create_event, delete_event, get_event,
-    list_calendar_view, list_events_at, move_event_to_calendar, move_time, rsvp_event,
+    EventsPage, NewEvent, ProposedTime, RsvpKind, cancel_event, create_event, delete_event,
+    get_event, list_calendar_view, list_events_at, move_event_to_calendar, move_time, rsvp_event,
     update_event,
 };
 pub use mail::{
@@ -19,10 +20,12 @@ pub use mail::{
     delete_attachment, delete_mail_folder, delete_message, fetch_message_headers, forward_message,
     get_attachment_bytes, get_categories, get_message, list_attachments, list_child_folders,
     list_drafts, list_folder_messages, list_inbox, list_mail_folders, list_messages_at, mark_read,
-    mark_unread, move_message, reply_all_message, reply_message, search_messages, send_draft,
-    send_mail, set_categories, set_flag, update_draft,
+    mark_unread, move_message, reply_all_message, reply_message, search_folder_messages,
+    search_messages, send_draft, send_mail, set_categories, set_flag, unsubscribe_one_click,
+    update_draft, update_draft_recipients,
 };
 pub use me::{Me, get_me};
+pub use people::{Person, list_people};
 
 use crate::auth::AuthClient;
 use crate::auth::config;
@@ -86,11 +89,35 @@ pub(crate) async fn send_with_retry(
     }
 }
 
+/// Refuses a continuation link (`@odata.nextLink`) that doesn't lead back to
+/// Microsoft Graph, so a forged or corrupted link can never carry the bearer
+/// token elsewhere. The origin (scheme, host, port) must be
+/// `https://graph.microsoft.com`'s or, for a client built with
+/// [`GraphClient::for_test`], that of its `base_url`.
+pub(crate) fn check_continuation(url: &str, base_url: &str) -> Result<(), ClientError> {
+    let origin = |u: &str| url::Url::parse(u).ok().map(|u| u.origin());
+    let allowed = origin(url).is_some_and(|o| {
+        o.is_tuple()
+            && (Some(&o) == origin(config::GRAPH_BASE).as_ref()
+                || Some(&o) == origin(base_url).as_ref())
+    });
+    if allowed {
+        Ok(())
+    } else {
+        Err(ClientError::Graph {
+            status: 400,
+            message: "refusing to follow a continuation link off graph.microsoft.com".into(),
+        })
+    }
+}
+
 /// Stateful Microsoft Graph client. Holds an AuthClient and a shared HTTP client.
 pub struct GraphClient {
     auth: AuthClient,
     http: reqwest::Client,
     base_url: String,
+    /// Test clients may POST one-click unsubscribes to a loopback mock.
+    one_click: mail::OneClickPolicy,
 }
 
 impl GraphClient {
@@ -101,6 +128,7 @@ impl GraphClient {
                 .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
                 .build()?,
             base_url: config::GRAPH_BASE.to_string(),
+            one_click: mail::OneClickPolicy::PublicOnly,
         })
     }
 
@@ -109,6 +137,7 @@ impl GraphClient {
             auth,
             http: reqwest::Client::new(),
             base_url: base_url.into(),
+            one_click: mail::OneClickPolicy::AllowLoopback,
         }
     }
 
@@ -236,7 +265,7 @@ impl GraphClient {
         url: &str,
     ) -> Result<InboxPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
-        list_messages_at(&self.http, &token, account, url).await
+        list_messages_at(&self.http, &self.base_url, &token, account, url).await
     }
 
     pub async fn search_messages(
@@ -247,6 +276,27 @@ impl GraphClient {
     ) -> Result<InboxPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         search_messages(&self.http, &self.base_url, &token, account, query, limit).await
+    }
+
+    /// `$search` within one folder (well-known name or folder id).
+    pub async fn search_folder(
+        &self,
+        account: &str,
+        folder: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<InboxPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        search_folder_messages(
+            &self.http,
+            &self.base_url,
+            &token,
+            account,
+            folder,
+            query,
+            limit,
+        )
+        .await
     }
 
     /// PATCH /me/messages/{id} with `{ "isRead": false }`.
@@ -459,6 +509,20 @@ impl GraphClient {
         mail::update_draft(&self.http, &self.base_url, &token, message_id, message).await
     }
 
+    /// PATCH /me/messages/{id} — replace only the given recipient lists.
+    pub async fn update_draft_recipients(
+        &self,
+        account: &str,
+        message_id: &str,
+        to: Option<&[String]>,
+        cc: Option<&[String]>,
+        bcc: Option<&[String]>,
+    ) -> Result<(), ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        mail::update_draft_recipients(&self.http, &self.base_url, &token, message_id, to, cc, bcc)
+            .await
+    }
+
     /// DELETE /me/messages/{id} — moves to Deleted Items. Works for both
     /// drafts and inbox messages.
     pub async fn delete_message(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
@@ -536,6 +600,27 @@ impl GraphClient {
         mail::list_attachments(&self.http, &self.base_url, &token, message_id).await
     }
 
+    /// POST a `List-Unsubscribe=One-Click` form body (RFC 8058) to a
+    /// third-party unsubscribe URL. No bearer token — the URL belongs to
+    /// the sender, not Microsoft.
+    ///
+    /// Only https to a public host; see [`mail::unsubscribe_one_click`].
+    /// A [`Self::for_test`] client also reaches a loopback mock server.
+    pub async fn unsubscribe_one_click(&self, url: &str) -> Result<(), ClientError> {
+        mail::post_one_click(url, self.one_click).await
+    }
+
+    /// GET /me/people?$top={top}&$select=displayName,scoredEmailAddresses —
+    /// Outlook's ranked "people I interact with" list.
+    pub async fn list_people(
+        &self,
+        account: &str,
+        top: usize,
+    ) -> Result<Vec<people::Person>, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        people::list_people(&self.http, &self.base_url, &token, top).await
+    }
+
     /// GET /me/messages/{id}/attachments/{att_id} returning decoded bytes.
     pub async fn get_attachment_bytes(
         &self,
@@ -601,7 +686,7 @@ impl GraphClient {
         url: &str,
     ) -> Result<EventsPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
-        list_events_at(&self.http, &token, account, url).await
+        list_events_at(&self.http, &self.base_url, &token, account, url).await
     }
 
     /// GET /me/events/{id}.
@@ -667,6 +752,10 @@ impl GraphClient {
     }
 
     /// POST /me/events/{id}/accept | /tentativelyAccept | /decline.
+    ///
+    /// `proposed` carries a counter-proposed time; Graph only honors it on
+    /// `tentativelyAccept` and `decline` (ignored for `Accept`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn rsvp_event(
         &self,
         account: &str,
@@ -674,6 +763,7 @@ impl GraphClient {
         kind: events::RsvpKind,
         comment: &str,
         send_response: bool,
+        proposed: Option<&events::ProposedTime>,
     ) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         events::rsvp_event(
@@ -684,6 +774,7 @@ impl GraphClient {
             kind,
             comment,
             send_response,
+            proposed,
         )
         .await
     }
@@ -785,5 +876,77 @@ mod retry_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 400);
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const REFUSAL: &str = "refusing to follow a continuation link off graph.microsoft.com";
+
+    fn refused(r: Result<(), ClientError>) -> bool {
+        matches!(r, Err(ClientError::Graph { status: 400, ref message }) if message == REFUSAL)
+    }
+
+    #[test]
+    fn graph_links_are_followed_and_others_refused_in_production() {
+        let base = config::GRAPH_BASE;
+        assert!(
+            check_continuation(
+                "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=x",
+                base
+            )
+            .is_ok()
+        );
+        for url in [
+            "https://evil.example.com/v1.0/me/messages",
+            "http://graph.microsoft.com/v1.0/me/messages",
+            "https://graph.microsoft.com.evil.example.com/v1.0",
+            "https://graph.microsoft.com:8443/v1.0",
+            "not a url",
+        ] {
+            assert!(refused(check_continuation(url, base)), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_test_base_url_allows_its_own_origin_only() {
+        let base = "http://127.0.0.1:4000/v1.0";
+        assert!(check_continuation("http://127.0.0.1:4000/v1.0/page-2", base).is_ok());
+        assert!(refused(check_continuation(
+            "http://127.0.0.1:4001/v1.0/page-2",
+            base
+        )));
+    }
+
+    /// The link points at a second server (same host, other port): both
+    /// helpers refuse it without sending it anything, bearer token included.
+    #[tokio::test]
+    async fn off_graph_next_links_are_refused_without_a_request() {
+        let graph = MockServer::start().await;
+        let other = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": []
+            })))
+            .expect(0)
+            .mount(&other)
+            .await;
+        let http = reqwest::Client::new();
+        let base = format!("{}/v1.0", graph.uri());
+        let link = format!("{}/v1.0/page-2", other.uri());
+
+        let Err(err) = events::list_events_at(&http, &base, "tok", "a@b.se", &link).await else {
+            panic!("list_events_at followed an off-Graph link");
+        };
+        assert!(refused(Err(err)));
+        let Err(err) = mail::list_messages_at(&http, &base, "tok", "a@b.se", &link).await else {
+            panic!("list_messages_at followed an off-Graph link");
+        };
+        assert!(refused(Err(err)));
+        assert!(other.received_requests().await.unwrap().is_empty());
     }
 }

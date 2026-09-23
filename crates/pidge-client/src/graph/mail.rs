@@ -26,12 +26,38 @@ struct GraphMessage {
     conversation_id: Option<String>,
     #[serde(default)]
     flag: Option<GraphFlag>,
+    #[serde(rename = "toRecipients", default)]
+    to_recipients: Vec<GraphFromWrapper>,
+    #[serde(rename = "ccRecipients", default)]
+    cc_recipients: Vec<GraphFromWrapper>,
+    /// Present on derived types only, e.g. `#microsoft.graph.eventMessage`.
+    #[serde(rename = "@odata.type", default)]
+    odata_type: Option<String>,
+}
+
+/// Whether a Graph `@odata.type` names a meeting request — an invite the
+/// user can respond to. Responses and cancellations are not invites.
+fn is_event_message(odata_type: Option<&str>) -> bool {
+    odata_type == Some("#microsoft.graph.eventMessageRequest")
 }
 
 #[derive(Debug, Deserialize)]
 struct GraphFlag {
     #[serde(rename = "flagStatus", default)]
     flag_status: Option<String>,
+}
+
+fn recipient_from(addr: GraphFromAddress) -> MessageFrom {
+    MessageFrom {
+        name: addr.name.unwrap_or_default(),
+        address: addr.address.unwrap_or_default(),
+    }
+}
+
+fn unwrap_recipients(rs: Vec<GraphFromWrapper>) -> Vec<MessageFrom> {
+    rs.into_iter()
+        .map(|w| recipient_from(w.email_address))
+        .collect()
 }
 
 fn flag_status_from(g: Option<GraphFlag>) -> FlagStatus {
@@ -95,6 +121,10 @@ struct GraphFullMessage {
     has_attachments: Option<bool>,
     #[serde(default)]
     flag: Option<GraphFlag>,
+    #[serde(rename = "@odata.type", default)]
+    odata_type: Option<String>,
+    #[serde(rename = "isDraft", default)]
+    is_draft: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,7 +252,7 @@ async fn list_folder(
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
             "$select",
-            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+            "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId,toRecipients,ccRecipients",
         ),
         ("$orderby", "receivedDateTime desc"),
         ("$top", &limit.to_string()),
@@ -297,7 +327,7 @@ pub async fn list_conversation(
         .query(&[
             (
                 "$select",
-                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+                "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId,toRecipients,ccRecipients",
             ),
             // No $orderby: Graph rejects conversationId filters combined
             // with a sort ("InefficientFilter") — we sort client-side.
@@ -324,13 +354,16 @@ pub async fn list_conversation(
 }
 
 /// Fetch a page of messages at an absolute Graph URL (an `@odata.nextLink`
-/// carried in a pidge cursor). Continues any listing or search stream.
+/// carried in a pidge cursor). Continues any listing or search stream. A
+/// link off Graph (or off `base_url` in tests) is refused before any request.
 pub async fn list_messages_at(
     http: &reqwest::Client,
+    base_url: &str,
     access_token: &str,
     account: &str,
     url: &str,
 ) -> Result<InboxPage, ClientError> {
+    super::check_continuation(url, base_url)?;
     let req = http.get(url).bearer_auth(access_token);
     let resp = super::send_with_retry(req).await?;
     let status = resp.status();
@@ -361,9 +394,48 @@ pub async fn search_messages(
     query: &str,
     limit: usize,
 ) -> Result<InboxPage, ClientError> {
+    search_in(http, base_url, access_token, account, None, query, limit).await
+}
+
+/// Like [`search_messages`], restricted to one folder (a well-known name
+/// such as `inbox`, or a folder id).
+pub async fn search_folder_messages(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    folder: &str,
+    query: &str,
+    limit: usize,
+) -> Result<InboxPage, ClientError> {
+    search_in(
+        http,
+        base_url,
+        access_token,
+        account,
+        Some(folder),
+        query,
+        limit,
+    )
+    .await
+}
+
+async fn search_in(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    folder: Option<&str>,
+    query: &str,
+    limit: usize,
+) -> Result<InboxPage, ClientError> {
     // $search expects a quoted KQL string; the user passes the raw query.
-    let quoted = format!("\"{}\"", query.replace('"', "\\\""));
-    let url = format!("{base_url}/me/messages");
+    let escaped = query.replace('\\', "\\\\").replace('"', "\\\"");
+    let quoted = format!("\"{escaped}\"");
+    let url = match folder {
+        Some(f) => format!("{base_url}/me/mailFolders/{f}/messages"),
+        None => format!("{base_url}/me/messages"),
+    };
     let resp = super::send_with_retry(
         http.get(&url)
             .bearer_auth(access_token)
@@ -371,7 +443,7 @@ pub async fn search_messages(
             .query(&[
                 (
                     "$select",
-                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId",
+                    "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId,toRecipients,ccRecipients",
                 ),
                 ("$top", &limit.to_string()),
                 ("$search", &quoted),
@@ -438,6 +510,9 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
         has_attachments: g.has_attachments.unwrap_or(false),
         body,
         body_content_type,
+        to: unwrap_recipients(g.to_recipients),
+        cc: unwrap_recipients(g.cc_recipients),
+        is_invite: is_event_message(g.odata_type.as_deref()),
     }
 }
 
@@ -452,7 +527,7 @@ pub async fn get_message(
     let url = format!(
         "{base_url}/me/messages/{message_id}\
          ?$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,\
-receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
+receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId,isDraft"
     );
     let resp = super::send_with_retry(http.get(&url).bearer_auth(access_token)).await?;
     let status = resp.status();
@@ -464,16 +539,12 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         });
     }
     let g: GraphFullMessage = resp.json().await?;
-
-    fn from(addr: GraphFromAddress) -> pidge_core::MessageFrom {
-        pidge_core::MessageFrom {
-            name: addr.name.unwrap_or_default(),
-            address: addr.address.unwrap_or_default(),
-        }
-    }
-    fn unwrap_recipients(rs: Vec<GraphFromWrapper>) -> Vec<pidge_core::MessageFrom> {
-        rs.into_iter().map(|w| from(w.email_address)).collect()
-    }
+    let is_invite = is_event_message(g.odata_type.as_deref());
+    let event_id = if is_invite {
+        fetch_event_id(http, base_url, access_token, message_id).await
+    } else {
+        None
+    };
 
     let content_type = match g.body.content_type.to_lowercase().as_str() {
         "html" => pidge_core::BodyContentType::Html,
@@ -486,7 +557,7 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         conversation_id: g.conversation_id.unwrap_or_default(),
         from: g
             .from
-            .map(|w| from(w.email_address))
+            .map(|w| recipient_from(w.email_address))
             .unwrap_or_else(|| pidge_core::MessageFrom {
                 name: String::new(),
                 address: String::new(),
@@ -502,7 +573,41 @@ receivedDateTime,sentDateTime,isRead,body,hasAttachments,flag,conversationId"
         body_content: g.body.content,
         has_attachments: g.has_attachments.unwrap_or(false),
         flag_status: flag_status_from(g.flag),
+        is_invite,
+        event_id,
+        is_draft: g.is_draft.unwrap_or(false),
     })
+}
+
+/// The calendar event behind a meeting request, via Graph's documented
+/// `$expand=microsoft.graph.eventMessage/event`. Only called for messages
+/// already known to be `eventMessageRequest`, so the type-cast expand is
+/// always valid. Best effort: any failure means "no event id".
+async fn fetch_event_id(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+) -> Option<String> {
+    #[derive(Deserialize)]
+    struct WithEvent {
+        event: Option<EventRef>,
+    }
+    #[derive(Deserialize)]
+    struct EventRef {
+        id: String,
+    }
+    let url = format!("{base_url}/me/messages/{message_id}");
+    let req = http.get(&url).bearer_auth(access_token).query(&[
+        ("$select", "id"),
+        ("$expand", "microsoft.graph.eventMessage/event($select=id)"),
+    ]);
+    let resp = super::send_with_retry(req).await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: WithEvent = resp.json().await.ok()?;
+    body.event.map(|e| e.id)
 }
 
 /// GET /me/messages/{id}?$select=internetMessageHeaders — fetch just the
@@ -543,6 +648,120 @@ struct GraphHeadersResponse {
 struct GraphHeader {
     name: String,
     value: String,
+}
+
+/// Which one-click targets [`post_one_click`] accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OneClickPolicy {
+    /// https to a host name that resolves only to public addresses.
+    PublicOnly,
+    /// Also plain http and loopback (an IP literal or a name), for tests
+    /// against a local mock server. Every other non-public address is still
+    /// refused.
+    AllowLoopback,
+}
+
+/// POST `List-Unsubscribe=One-Click` to the given URL per RFC 8058. The
+/// body is form-urlencoded (the RFC says so explicitly).
+///
+/// The URL comes from a third party's e-mail header, so the request is
+/// fenced in: https only, never to an IP literal, never to a host that
+/// resolves to a loopback, private, link-local, unique-local or unspecified
+/// address (the checked addresses are the ones connected to, so a second
+/// DNS answer can't swap them), and redirects are not followed. Every
+/// failure, including a non-2xx answer, is the same
+/// [`ClientError::UnsubscribeRejected`]: the endpoint's status and body are
+/// never passed on.
+///
+/// It uses its own short-lived client — no bearer token, no shared retry
+/// policy (a broken sender's unsubscribe endpoint shouldn't get the same
+/// exponential backoff as a throttled Graph call).
+pub async fn unsubscribe_one_click(url: &str) -> Result<(), ClientError> {
+    post_one_click(url, OneClickPolicy::PublicOnly).await
+}
+
+pub(crate) async fn post_one_click(url: &str, policy: OneClickPolicy) -> Result<(), ClientError> {
+    let rejected = || ClientError::UnsubscribeRejected;
+    let loopback_ok = policy == OneClickPolicy::AllowLoopback;
+    let parsed = url::Url::parse(url).map_err(|_| rejected())?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" if loopback_ok => {}
+        _ => return Err(rejected()),
+    }
+    let (host, is_name) = match parsed.host() {
+        Some(url::Host::Domain(name)) => (name.to_string(), true),
+        Some(url::Host::Ipv4(ip)) if loopback_ok && ip.is_loopback() => (ip.to_string(), false),
+        _ => return Err(rejected()),
+    };
+    let port = parsed.port_or_known_default().ok_or_else(rejected)?;
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), port))
+        .await
+        .map_err(|_| rejected())?
+        .collect();
+    if addrs.is_empty()
+        || addrs
+            .iter()
+            .any(|a| !one_click_address_allowed(a.ip(), loopback_ok))
+    {
+        return Err(rejected());
+    }
+
+    let mut builder = reqwest::Client::builder()
+        .user_agent(format!("pidge/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none());
+    if is_name {
+        // Connect to exactly the addresses just checked.
+        builder = builder.resolve_to_addrs(&host, &addrs);
+    }
+    let client = builder.build().map_err(|_| rejected())?;
+    let resp = client
+        .post(parsed)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("List-Unsubscribe=One-Click")
+        .send()
+        .await
+        .map_err(|_| rejected())?;
+    if !resp.status().is_success() {
+        return Err(rejected());
+    }
+    Ok(())
+}
+
+/// Whether a one-click POST may connect to `ip`: public unicast only
+/// (loopback too when `loopback_ok`). IPv4-mapped IPv6 is judged as IPv4.
+fn one_click_address_allowed(ip: std::net::IpAddr, loopback_ok: bool) -> bool {
+    use std::net::IpAddr;
+    let ip = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        v4 => v4,
+    };
+    if ip.is_loopback() {
+        return loopback_ok;
+    }
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || a == 0
+                // 100.64.0.0/10, carrier-grade NAT.
+                || (a == 100 && (b & 0xc0) == 64))
+        }
+        IpAddr::V6(v6) => {
+            let first = v6.segments()[0];
+            !(v6.is_unspecified()
+                || v6.is_multicast()
+                // fc00::/7, unique local.
+                || (first & 0xfe00) == 0xfc00
+                // fe80::/10, link local.
+                || (first & 0xffc0) == 0xfe80)
+        }
+    }
 }
 
 /// GET /me/messages/{id}/attachments — list attachments without fetching bytes.
@@ -1094,6 +1313,45 @@ pub async fn update_draft(
     Ok(())
 }
 
+/// PATCH /me/messages/{id} — replace only the recipient lists that are
+/// `Some`, leaving subject and body (e.g. a reply's quoted history) intact.
+pub async fn update_draft_recipients(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    message_id: &str,
+    to: Option<&[String]>,
+    cc: Option<&[String]>,
+    bcc: Option<&[String]>,
+) -> Result<(), ClientError> {
+    let mut body = serde_json::Map::new();
+    for (field, list) in [
+        ("toRecipients", to),
+        ("ccRecipients", cc),
+        ("bccRecipients", bcc),
+    ] {
+        if let Some(list) = list {
+            let addresses: Vec<_> = list
+                .iter()
+                .map(|addr| serde_json::json!({ "emailAddress": { "address": addr } }))
+                .collect();
+            body.insert(field.to_string(), addresses.into());
+        }
+    }
+    let url = format!("{base_url}/me/messages/{message_id}");
+    let resp =
+        super::send_with_retry(http.patch(&url).bearer_auth(access_token).json(&body)).await?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Graph {
+            status: status.as_u16(),
+            message: text,
+        });
+    }
+    Ok(())
+}
+
 /// DELETE /me/messages/{id} — moves the message to Deleted Items. Same call
 /// works for drafts and for inbox messages; the destination folder differs
 /// only by what the user is currently in.
@@ -1408,8 +1666,27 @@ pub async fn delete_mail_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{header, method, path, path_regex, query_param};
+    use wiremock::matchers::{body_string, header, method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[test]
+    fn event_message_rows_are_invites_and_plain_messages_are_not() {
+        let row = |odata_type: Option<&str>| {
+            let mut v = serde_json::json!({
+                "id": "m1",
+                "receivedDateTime": "2026-09-23T08:00:00Z",
+            });
+            if let Some(t) = odata_type {
+                v["@odata.type"] = t.into();
+            }
+            message_from_delta_value(v, "a@example.com").unwrap()
+        };
+        assert!(row(Some("#microsoft.graph.eventMessageRequest")).is_invite);
+        assert!(!row(Some("#microsoft.graph.eventMessage")).is_invite);
+        assert!(!row(Some("#microsoft.graph.eventMessageResponse")).is_invite);
+        assert!(!row(Some("#microsoft.graph.message")).is_invite);
+        assert!(!row(None).is_invite);
+    }
 
     #[tokio::test]
     async fn list_inbox_parses_graph_response() {
@@ -1517,6 +1794,108 @@ mod tests {
             .messages;
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].subject, "Q4 budget review");
+    }
+
+    #[tokio::test]
+    async fn search_folder_messages_searches_within_the_folder() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/mailFolders/sentitems/messages"))
+            .and(query_param("$search", "\"budget\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": [{ "id": "S1", "receivedDateTime": "2026-05-13T22:00:00Z" }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let msgs = search_folder_messages(
+            &http,
+            &server.uri(),
+            "AT",
+            "u@e.com",
+            "sentitems",
+            "budget",
+            25,
+        )
+        .await
+        .unwrap()
+        .messages;
+        assert_eq!(msgs[0].id, "S1");
+    }
+
+    #[tokio::test]
+    async fn search_escapes_backslashes_before_quotes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages"))
+            .and(query_param("$search", r#""a\\b \"c\"""#))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "value": [] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        search_messages(&http, &server.uri(), "AT", "u@e.com", r#"a\b "c""#, 5)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_message_fetches_the_event_id_for_a_meeting_request_only() {
+        let server = MockServer::start().await;
+        let message = |id: &str, odata_type: &str| {
+            serde_json::json!({
+                "@odata.type": odata_type,
+                "id": id,
+                "receivedDateTime": "2026-09-23T08:00:00Z",
+                "sentDateTime": "2026-09-23T08:00:00Z",
+                "body": { "contentType": "text", "content": "" },
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/me/messages/INV"))
+            .and(query_param(
+                "$expand",
+                "microsoft.graph.eventMessage/event($select=id)",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "INV", "event": { "id": "EV1" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/INV"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(message("INV", "#microsoft.graph.eventMessageRequest")),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/PLAIN"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(message("PLAIN", "#microsoft.graph.message")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let inv = get_message(&http, &server.uri(), "AT", "u@e.com", "INV")
+            .await
+            .unwrap();
+        assert!(inv.is_invite);
+        assert_eq!(inv.event_id.as_deref(), Some("EV1"));
+        let plain = get_message(&http, &server.uri(), "AT", "u@e.com", "PLAIN")
+            .await
+            .unwrap();
+        assert!(!plain.is_invite);
+        assert_eq!(plain.event_id, None);
     }
 
     #[tokio::test]
@@ -1906,6 +2285,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_message_selects_and_maps_the_draft_flag() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/D1"))
+            .respond_with(move |req: &wiremock::Request| {
+                let select = req
+                    .url
+                    .query_pairs()
+                    .find(|(k, _)| k == "$select")
+                    .map(|(_, v)| v.into_owned())
+                    .unwrap_or_default();
+                assert!(select.split(',').any(|f| f == "isDraft"), "{select}");
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "id": "D1",
+                    "receivedDateTime": "2026-05-14T22:00:00Z",
+                    "sentDateTime": "2026-05-14T21:59:30Z",
+                    "body": { "contentType": "text", "content": "" },
+                    "isDraft": true
+                }))
+            })
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        let m = get_message(&http, &server.uri(), "AT", "u@e.com", "D1")
+            .await
+            .unwrap();
+        assert!(m.is_draft);
+    }
+
+    #[tokio::test]
+    async fn update_draft_recipients_patches_only_the_given_lists() {
+        let server = MockServer::start().await;
+        Mock::given(method("PATCH"))
+            .and(path("/me/messages/D1"))
+            .and(body_string(
+                serde_json::json!({
+                    "ccRecipients": [{ "emailAddress": { "address": "cc@example.com" } }]
+                })
+                .to_string(),
+            ))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let http = reqwest::Client::new();
+        update_draft_recipients(
+            &http,
+            &server.uri(),
+            "AT",
+            "D1",
+            None,
+            Some(&["cc@example.com".to_string()]),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn list_attachments_filters_file_attachments() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -2005,6 +2443,143 @@ mod tests {
         assert_eq!(headers[0].1, "<mailto:u@x>, <https://x/u>");
         assert_eq!(headers[1].0, "List-Unsubscribe-Post");
     }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_posts_exact_form_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/u"))
+            .and(body_string("List-Unsubscribe=One-Click"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        post_one_click(
+            &format!("{}/u", server.uri()),
+            OneClickPolicy::AllowLoopback,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_reports_a_500_without_its_status_or_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/u"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("nope"))
+            .mount(&server)
+            .await;
+        let err = post_one_click(
+            &format!("{}/u", server.uri()),
+            OneClickPolicy::AllowLoopback,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ClientError::UnsubscribeRejected), "{err:?}");
+        assert!(!err.to_string().contains("500"));
+        assert!(!err.to_string().contains("nope"));
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_refuses_http_without_a_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let port = server.address().port();
+        for url in [
+            format!("http://localhost:{port}/u"),
+            format!("{}/u", server.uri()),
+        ] {
+            let err = unsubscribe_one_click(&url).await.unwrap_err();
+            assert!(matches!(err, ClientError::UnsubscribeRejected), "{url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_refuses_ip_literals_and_internal_hosts() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let port = server.address().port();
+        for url in [
+            format!("https://127.0.0.1:{port}/u"),
+            "https://10.0.0.1/u".to_string(),
+            "https://[::1]/u".to_string(),
+            "https://93.184.215.14/u".to_string(),
+            // A name resolving to loopback is refused like the literal.
+            format!("https://localhost:{port}/u"),
+            "ftp://example.com/u".to_string(),
+            "not a url".to_string(),
+        ] {
+            let err = unsubscribe_one_click(&url).await.unwrap_err();
+            assert!(matches!(err, ClientError::UnsubscribeRejected), "{url}");
+        }
+        // Even the test relaxation only admits loopback.
+        let err = post_one_click("http://10.0.0.1/u", OneClickPolicy::AllowLoopback)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ClientError::UnsubscribeRejected));
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_one_click_does_not_follow_a_redirect() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/u"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", "/internal"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/internal"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let err = post_one_click(
+            &format!("{}/u", server.uri()),
+            OneClickPolicy::AllowLoopback,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, ClientError::UnsubscribeRejected), "{err:?}");
+    }
+
+    #[test]
+    fn one_click_address_policy() {
+        use std::net::IpAddr;
+        let allowed = |s: &str, lo| one_click_address_allowed(s.parse::<IpAddr>().unwrap(), lo);
+        for bad in [
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "100.64.0.1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "::ffff:10.0.0.1",
+            "::ffff:127.0.0.1",
+        ] {
+            assert!(!allowed(bad, false), "{bad}");
+        }
+        assert!(!allowed("127.0.0.1", false));
+        assert!(!allowed("::1", false));
+        assert!(allowed("127.0.0.1", true));
+        assert!(!allowed("10.0.0.1", true));
+        for good in ["93.184.215.14", "172.32.0.1", "2606:2800:220:1::1"] {
+            assert!(allowed(good, false), "{good}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2053,7 +2628,7 @@ mod cursor_paging_tests {
         assert_eq!(page1.messages.len(), 2);
         let next = page1.next_link.expect("first page links onward");
 
-        let page2 = list_messages_at(&http, "tok", "a@b.se", &next)
+        let page2 = list_messages_at(&http, &server.uri(), "tok", "a@b.se", &next)
             .await
             .unwrap();
         assert_eq!(page2.messages.len(), 1);

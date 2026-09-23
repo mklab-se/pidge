@@ -1,0 +1,6 @@
+target
+.git
+.idea
+.vscode
+crates/pidge/tests/fixtures/raw
+**/tokens

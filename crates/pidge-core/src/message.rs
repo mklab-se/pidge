@@ -36,6 +36,14 @@ pub struct Message {
     pub body: String,
     #[serde(default)]
     pub body_content_type: BodyContentType,
+    /// `To` recipients; empty for old cache entries and providers that don't list them.
+    #[serde(default)]
+    pub to: Vec<MessageFrom>,
+    #[serde(default)]
+    pub cc: Vec<MessageFrom>,
+    /// A meeting request (Graph `eventMessageRequest`).
+    #[serde(default)]
+    pub is_invite: bool,
 }
 
 /// Outlook's follow-up flag state on a message. Three values to match what
@@ -81,6 +89,15 @@ pub struct FullMessage {
     pub has_attachments: bool,
     #[serde(default)]
     pub flag_status: FlagStatus,
+    /// A meeting request (Graph `eventMessageRequest`).
+    #[serde(default)]
+    pub is_invite: bool,
+    /// For a meeting request, the calendar event it invites to.
+    #[serde(default)]
+    pub event_id: Option<String>,
+    /// An unsent draft (Graph `isDraft`).
+    #[serde(default)]
+    pub is_draft: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +145,9 @@ mod tests {
             has_attachments: false,
             body: String::new(),
             body_content_type: BodyContentType::Text,
+            to: vec![],
+            cc: vec![],
+            is_invite: false,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: Message = serde_json::from_str(&json).unwrap();
@@ -162,6 +182,9 @@ mod tests {
             body_content: "<p>Hello</p>".into(),
             has_attachments: true,
             flag_status: FlagStatus::Flagged,
+            is_invite: true,
+            event_id: Some("event-1".into()),
+            is_draft: false,
         };
         let json = serde_json::to_string(&m).unwrap();
         let m2: FullMessage = serde_json::from_str(&json).unwrap();

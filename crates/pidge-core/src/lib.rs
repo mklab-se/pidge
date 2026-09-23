@@ -4,12 +4,16 @@
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
 
 mod account;
+pub mod availability;
 mod cache;
 mod config;
-mod contacts;
+pub mod contacts;
 mod error;
 mod event;
+pub mod flags;
 mod message;
+pub mod render;
+pub mod timerange;
 
 pub use account::{Account, TokenStorage};
 pub use cache::{
