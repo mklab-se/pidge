@@ -105,7 +105,7 @@ impl PidgeMcp {
     }
 
     #[tool(
-        description = "Change account settings: default_sender, timezone, disconnect a mailbox, or trust/untrust a sender. Returns the updated accounts_list. sign_out_everywhere=true instead revokes all of the user's sessions, including this one: every client, this one too, must sign in again afterwards."
+        description = "Change account settings: default_sender, timezone, disconnect a mailbox, or trust/untrust a sender. Returns the updated accounts_list. With sign_out_everywhere=true, any other settings in the same call are applied and saved first; then every session of the user is revoked, including this one, and every client (this one too) must sign in again."
     )]
     pub(crate) async fn accounts_update(
         &self,
@@ -185,7 +185,8 @@ impl PidgeMcp {
         // Save the record first: if deleting the session then fails, the
         // mailbox is already gone from the user's view rather than listed
         // with a half-deleted session.
-        self.state
+        record.token_generation = self
+            .state
             .users
             .save(&record)
             .await
@@ -206,9 +207,10 @@ impl PidgeMcp {
         self.state.cache.invalidate_user(&signin);
         if sign_out {
             tracing::info!(user = %user_hash(&record.signin), "signed out everywhere");
-            return Ok(ok(
-                "All sessions signed out; every client must sign in again".to_string(),
-            ));
+            return Ok(ok(format!(
+                "Saved.\n\n{}\n\nAll sessions signed out; every client must sign in again",
+                self.render_accounts(&record).await
+            )));
         }
         tracing::info!(user = %user_hash(&record.signin), "account settings updated");
 
@@ -493,9 +495,10 @@ mod tests {
                 .unwrap(),
         );
         assert!(
-            out.contains("All sessions signed out; every client must sign in again"),
+            out.ends_with("All sessions signed out; every client must sign in again"),
             "{out}"
         );
+        assert!(out.contains("signed in as: jane@example.com"), "{out}");
         assert_eq!(h.record().await.token_generation, 1, "stored");
         assert_eq!(h.state.generation_for(JANE).await.unwrap(), 1, "cached");
         assert!(h.state.cache.get(JANE, "k").is_none(), "cache invalidated");

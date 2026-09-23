@@ -221,11 +221,14 @@ impl AppState {
     }
 
     /// Records `signin`'s new token generation (after a sign-out everywhere).
+    /// Like the stored value, the cached one only ever goes up.
     pub fn set_generation(&self, signin: &str, generation: u32) {
         self.generations
             .lock()
             .expect("generations lock")
-            .insert(signin.to_ascii_lowercase(), generation);
+            .entry(signin.to_ascii_lowercase())
+            .and_modify(|g| *g = (*g).max(generation))
+            .or_insert(generation);
     }
 
     /// Returns `false` if this code id was already redeemed.
