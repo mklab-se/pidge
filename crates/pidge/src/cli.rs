@@ -85,7 +85,7 @@ pub enum Commands {
         command: AccountCommands,
     },
 
-    /// Manage the connection to a hosted pidge MCP server (multi-device sync)
+    /// Manage the connection to a hosted pidge MCP server
     Mcp {
         #[command(subcommand)]
         command: McpCommands,
@@ -302,7 +302,9 @@ pub enum DefaultCommands {
 pub enum StorageBackendArg {
     /// OS-native credential store (macOS Keychain / Windows Credential Manager / libsecret)
     Keychain,
-    /// Plaintext JSON file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix)
+    /// Plaintext JSON file (mode 0600 on Unix); the exact path depends on
+    /// the command (e.g. `~/.config/pidge/tokens/<email>.json` for
+    /// `account add`, `~/.config/pidge/mcp/<host>.json` for `mcp connect`)
     File,
 }
 

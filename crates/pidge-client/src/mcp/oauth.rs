@@ -402,6 +402,14 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn callback_timeout_is_at_least_ten_minutes() {
+        // A short-lived, often manually-triggered sign-in — the user may
+        // need to switch to a browser, possibly finish a Microsoft sign-in
+        // first — needs more headroom than the 5-minute Microsoft flow.
+        assert!(CALLBACK_TIMEOUT >= Duration::from_secs(600));
+    }
+
     fn discovery_for(server: &MockServer) -> Discovery {
         Discovery {
             resource: format!("{}/mcp", server.uri()),

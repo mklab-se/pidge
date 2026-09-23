@@ -50,6 +50,11 @@ sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# `test-util` isn't part of the `full` bundle the main dependency pulls in
+# (deliberately, to keep it out of release binaries); adding it here merges
+# into the same `tokio` build for tests only, enabling `#[tokio::test(start_paused
+# = true)]` for the `mcp connect` polling tests.
+tokio = { workspace = true, features = ["test-util"] }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/pidge-v{ version }-{ target }.{ archive-format }"

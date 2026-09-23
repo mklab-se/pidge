@@ -64,6 +64,15 @@ impl McpRpc {
         self.session_id.as_deref()
     }
 
+    /// Replace the bearer token sent on every subsequent call. For a caller
+    /// holding a session across a long wait (e.g. a multi-account migration
+    /// that can span several minutes), this is how a refreshed access token
+    /// gets swapped in without discarding the session id or rebuilding the
+    /// client. The session id and request counter are left untouched.
+    pub fn set_access_token(&mut self, access_token: impl Into<String>) {
+        self.access_token = access_token.into();
+    }
+
     /// Run the MCP `initialize` handshake and send the required
     /// `notifications/initialized` follow-up. Stores the session id the
     /// server returns, if any, for subsequent calls.
@@ -379,6 +388,42 @@ mod tests {
                 .and_then(|v| v.to_str().ok())
                 == Some(expected)
         }
+    }
+
+    #[tokio::test]
+    async fn set_access_token_replaces_the_bearer_sent_on_the_next_call() {
+        let server = MockServer::start().await;
+        // Only a request bearing the NEW token succeeds; if `set_access_token`
+        // didn't take effect, the client would still send the old one and get
+        // no matching mock (wiremock's default 404 for an unmatched request).
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(headers(AUTHORIZATION.as_str(), vec!["Bearer NEW_AT"]))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(CONTENT_TYPE.as_str(), "application/json")
+                    .set_body_json(serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "content": [{"type": "text", "text": "hello"}],
+                            "isError": false
+                        }
+                    })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let mut rpc = McpRpc::new(http, format!("{}/mcp", server.uri()), "OLD_AT");
+        rpc.set_access_token("NEW_AT");
+        let result = rpc
+            .call_tool("inbox_latest", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.text, "hello");
     }
 
     #[test]
