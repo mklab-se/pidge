@@ -298,7 +298,7 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
         );
     }
     if let Some(resource) = p.resource.as_deref()
-        && resource.trim_end_matches('/') != state.config.resource_url()
+        && !state.config.accepts_resource(resource)
     {
         return redirect_with_error(
             redirect_uri,
@@ -969,7 +969,7 @@ async fn token(
         return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", "unknown client");
     }
     if let Some(resource) = p.resource.as_deref()
-        && resource.trim_end_matches('/') != state.config.resource_url()
+        && !state.config.accepts_resource(resource)
     {
         return oauth_error(
             StatusCode::BAD_REQUEST,

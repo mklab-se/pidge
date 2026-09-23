@@ -69,15 +69,30 @@ alternate host:
   issuer.
 - **With cutover**: the custom domain becomes `PIDGE_MCP_PUBLIC_URL` and the
   new issuer. The old FQDN is kept as an alt host (still reachable) and as a
-  legacy issuer via `PIDGE_MCP_LEGACY_ISSUERS`, so tokens minted before the
-  cutover keep validating until they expire and get refreshed under the new
-  issuer.
+  legacy issuer via `PIDGE_MCP_LEGACY_ISSUERS`.
 
-Changing the issuer means every connected client has to re-add the pidge
-connector once — that's unavoidable, since the issuer is baked into the
-client's OAuth discovery. It does **not** mean re-authenticating with
-Microsoft; existing refresh tokens keep working, only the issuer they're
-presented against changes.
+What the legacy-issuer grace covers, for a connector added before the
+cutover (configured with `https://<fqdn>/mcp`):
+
+- **Access tokens** minted under the old issuer keep validating at `/mcp`
+  until they expire (at most one hour).
+- **Refresh keeps working.** `/token` (and `/authorize`) accept the old
+  `resource` value, `https://<fqdn>/mcp`, as well as the current one, for
+  every configured legacy issuer. The tokens they hand back are always
+  minted for the *current* issuer and resource, and those validate too.
+  So a connector that just keeps refreshing keeps working for as long as
+  the FQDN stays in `PIDGE_MCP_LEGACY_ISSUERS`, with no re-add and no new
+  Microsoft sign-in.
+
+What still needs the connector re-added with the new URL: a client that
+re-runs OAuth discovery against the old host. The protected-resource
+metadata served there names the *new* resource (`https://<domain>/mcp`),
+and a client that follows RFC 9728 rejects metadata whose `resource`
+differs from the URL it was configured with. That happens when the
+client's refresh token is gone (expired after 30 days unused, revoked by
+a sign-out everywhere, or discarded by the client) and it has to start a
+fresh authorization. Re-adding the connector with `https://<domain>/mcp`
+fixes it for good.
 
 Whichever mode is used, the custom domain needs its own callback registered
 on the Entra app (`https://<domain>/callback`) alongside the existing one,
