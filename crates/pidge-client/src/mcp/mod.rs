@@ -96,12 +96,37 @@ pub fn normalize_origin(server_url: &str) -> Result<String, ClientError> {
             message: "MCP server URL has no host".to_string(),
         });
     }
+    // The session's bearer and refresh tokens travel to this origin on
+    // every call; plain http is only for a server on this machine.
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
+        return Err(ClientError::Graph {
+            status: 400,
+            message: "MCP server URL must use https (http is allowed for localhost only)"
+                .to_string(),
+        });
+    }
     Ok(url.origin().ascii_serialization())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_urls_must_be_https_except_on_loopback() {
+        assert_eq!(
+            normalize_origin("https://pidge.example.com/mcp").unwrap(),
+            "https://pidge.example.com"
+        );
+        assert_eq!(
+            normalize_origin("http://localhost:8080/mcp").unwrap(),
+            "http://localhost:8080"
+        );
+        assert!(normalize_origin("http://127.0.0.1:8080/mcp").is_ok());
+        let err = normalize_origin("http://pidge.example.com/mcp").unwrap_err();
+        assert!(err.to_string().contains("https"), "{err}");
+    }
 
     #[test]
     fn debug_redacts_both_tokens() {

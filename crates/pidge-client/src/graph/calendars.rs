@@ -45,7 +45,7 @@ pub async fn list_calendars(
         .map(|g| Calendar {
             account: account.to_string(),
             id: g.id,
-            name: g.name.unwrap_or_default(),
+            name: super::mail::clean(g.name),
             is_default: g.is_default_calendar.unwrap_or(false),
             color: g.color,
             can_edit: g.can_edit.unwrap_or(true),

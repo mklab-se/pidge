@@ -565,10 +565,13 @@ pub(crate) fn folder_id(folder: Option<&str>) -> Result<String, McpError> {
     Ok(id.to_string())
 }
 
-/// Graph ids are URL-safe tokens; anything that could reshape the request
-/// path or query is refused before it reaches a URL.
+/// Graph ids are base64url-like tokens (letters, digits, `-_=+.`); anything
+/// else is refused before it reaches a URL path. A denylist is not enough:
+/// the URL parser folds `\\` to `/` and collapses `..`, so
+/// `..\\users\\x\\messages\\M` would leave the caller's own mailbox.
 pub(crate) fn check_id(id: &str) -> Result<(), McpError> {
-    if id.is_empty() || id.contains(['/', '?', '#', '%']) || id.contains(char::is_whitespace) {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '=' | '+' | '.');
+    if id.is_empty() || !id.chars().all(allowed) || id.contains("..") || id == "." {
         return Err(tool_error(format!(
             "{id:?} is not a valid id; pass an id exactly as a pidge tool returned it"
         )));
@@ -635,6 +638,28 @@ mod tests {
 
     use super::*;
     use crate::tools::tests::{ToolHarness, access_token, text};
+
+    #[test]
+    fn ids_are_confined_to_graphs_token_alphabet() {
+        for ok in ["AAMkAGI2-_=+abc", "inbox", "a.b"] {
+            assert!(check_id(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "",
+            "..",
+            ".",
+            "a..b",
+            "..\\..\\users\\bob@contoso.com\\messages\\M1",
+            "M1/move",
+            "M1?x=1",
+            "M1#f",
+            "M1%2F",
+            "M 1",
+            "bob@contoso.com",
+        ] {
+            assert!(check_id(bad).is_err(), "{bad:?}");
+        }
+    }
     use crate::users::UserStore;
 
     const JANE: &str = "jane@example.com";

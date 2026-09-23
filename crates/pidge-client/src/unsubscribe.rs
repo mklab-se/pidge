@@ -37,6 +37,31 @@ pub enum UnsubscribeMethod {
 /// Pick the best `UnsubscribeMethod` for the given message headers.
 ///
 /// Header name comparison is case-insensitive (RFC 5322).
+/// Characters of a `List-Unsubscribe` mailto subject that are used.
+const MAILTO_SUBJECT_CAP: usize = 100;
+
+/// The subject of the unsubscribe e-mail for a `mailto:` method: the
+/// header's subject on one line, capped at [`MAILTO_SUBJECT_CAP`]
+/// characters, or `unsubscribe` when it gives none. The header's `body` is
+/// never used: the sender chooses it, and the e-mail goes out as the user.
+pub fn mailto_subject(subject: Option<&str>) -> String {
+    let subject: String = subject
+        .unwrap_or_default()
+        .split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAILTO_SUBJECT_CAP)
+        .collect();
+    let subject = subject.trim();
+    if subject.is_empty() {
+        "unsubscribe".into()
+    } else {
+        subject.to_string()
+    }
+}
+
 pub fn parse_unsubscribe(headers: &[(String, String)]) -> UnsubscribeMethod {
     let Some(raw) = find_header(headers, "List-Unsubscribe") else {
         return UnsubscribeMethod::None;
@@ -136,6 +161,17 @@ fn parse_mailto(rest: &str) -> Option<(String, Option<String>, Option<String>)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mailto_subject_is_one_capped_line_defaulting_to_unsubscribe() {
+        assert_eq!(mailto_subject(None), "unsubscribe");
+        assert_eq!(mailto_subject(Some("   ")), "unsubscribe");
+        assert_eq!(
+            mailto_subject(Some("unsubscribe\nX-Injected: yes\x1b[2K list-42")),
+            "unsubscribe X-Injected: yes [2K list-42"
+        );
+        assert_eq!(mailto_subject(Some(&"s".repeat(300))).chars().count(), 100);
+    }
 
     fn hdr(name: &str, value: &str) -> (String, String) {
         (name.to_string(), value.to_string())

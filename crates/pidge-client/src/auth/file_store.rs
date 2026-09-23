@@ -20,6 +20,13 @@ impl FileStore {
     fn dir() -> Result<PathBuf, ClientError> {
         let dir = crate::base_config_dir()?.join("pidge").join("tokens");
         std::fs::create_dir_all(&dir)?;
+        // The files inside are 0600; the directory listing (one file per
+        // signed-in address) is private too.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
         Ok(dir)
     }
 

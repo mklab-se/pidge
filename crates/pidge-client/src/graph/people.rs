@@ -59,7 +59,7 @@ pub async fn list_people(
         .filter_map(|p| {
             let address = p.scored_email_addresses.into_iter().next()?.address;
             Some(Person {
-                display_name: p.display_name.unwrap_or_default(),
+                display_name: super::mail::clean(p.display_name),
                 address,
             })
         })

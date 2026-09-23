@@ -185,7 +185,12 @@ async fn harness_with_hosts(alt_hosts: Vec<String>, legacy_issuers: Vec<String>)
     }
 }
 
-/// A pending entry with no OAuth client attached, as `accounts_connect` makes.
+/// The callback nonce [`pending_stub`] entries carry, as if their Continue
+/// step had run; [`callback`] presents it.
+const STUB_CALLBACK_NONCE: &str = "stub-callback-nonce";
+
+/// A pending entry with no OAuth client attached, as `accounts_connect`
+/// makes, whose Continue step has already sent a browser to Microsoft.
 fn pending_stub() -> PendingAuthorization {
     PendingAuthorization {
         kind: PendingKind::SignIn,
@@ -195,8 +200,31 @@ fn pending_stub() -> PendingAuthorization {
         code_challenge: String::new(),
         microsoft_verifier: "stub-verifier".into(),
         consent_nonce: None,
+        callback_nonce: Some(STUB_CALLBACK_NONCE.into()),
         created_at: chrono::Utc::now(),
     }
+}
+
+/// `GET /callback?{query}` from the browser [`pending_stub`]'s Continue
+/// step sent to Microsoft (it presents [`STUB_CALLBACK_NONCE`]).
+async fn callback(h: &Harness, query: &str) -> axum::response::Response {
+    get_with_cookie(
+        h,
+        &format!("/callback?{query}"),
+        &format!("pidge_callback={STUB_CALLBACK_NONCE}"),
+    )
+    .await
+}
+
+/// The `name=value` of the first cookie `resp` sets.
+fn set_cookie(resp: &axum::response::Response) -> String {
+    resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
 }
 
 async fn body_json(resp: axum::response::Response) -> serde_json::Value {
@@ -286,16 +314,18 @@ async fn sign_in(h: &Harness, client_id: &str, verifier: &str) -> axum::response
         format!("{PUBLIC}/callback")
     );
     let ms_state = query(&location, "state").unwrap();
+    let callback_cookie = set_cookie(&resp);
+    assert!(
+        callback_cookie.starts_with("pidge_callback="),
+        "{callback_cookie}"
+    );
 
-    h.app
-        .clone()
-        .oneshot(
-            Request::get(format!("/callback?code=ms-code&state={ms_state}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap()
+    get_with_cookie(
+        h,
+        &format!("/callback?code=ms-code&state={ms_state}"),
+        &callback_cookie,
+    )
+    .await
 }
 
 fn urlenc(s: &str) -> String {
@@ -496,16 +526,7 @@ async fn microsoft_callback_state_is_single_use() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    let resp = h
-        .app
-        .clone()
-        .oneshot(
-            Request::get("/callback?code=x&state=unknown")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = callback(&h, "code=x&state=unknown").await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -629,16 +650,7 @@ async fn connect_invalidates_the_owners_read_cache() {
         .cache
         .put("jane@example.com", "k".into(), "v".into());
 
-    let resp = h
-        .app
-        .clone()
-        .oneshot(
-            Request::get("/callback?code=x&state=s1")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::OK);
     assert!(h.state.cache.get("jane@example.com", "k").is_none());
 }
@@ -661,16 +673,7 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
         .save(&UserRecord::new("jane@example.com"))
         .await
         .unwrap();
-    let resp = h
-        .app
-        .clone()
-        .oneshot(
-            Request::get("/callback?code=x&state=s1")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let page = body_text(resp).await;
     assert!(
@@ -710,16 +713,7 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
             ..pending_stub()
         },
     );
-    let resp = h
-        .app
-        .clone()
-        .oneshot(
-            Request::get("/callback?code=x&state=s2")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = callback(&h, "code=x&state=s2").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     let anna = UserStore::new(h.secrets.clone())
         .load("anna@example.com")
@@ -860,7 +854,7 @@ async fn connect_failures_render_a_page_instead_of_redirecting() {
     let h = harness("second@example.com").await;
     h.state
         .insert_pending("denied".into(), connect_pending("jane@example.com"));
-    let resp = get(&h, "/callback?error=access_denied&state=denied").await;
+    let resp = callback(&h, "error=access_denied&state=denied").await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert!(resp.headers().get(header::LOCATION).is_none());
 
@@ -875,7 +869,7 @@ async fn connect_failures_render_a_page_instead_of_redirecting() {
         .await;
     h.state
         .insert_pending("badcode".into(), connect_pending("jane@example.com"));
-    let resp = get(&h, "/callback?code=x&state=badcode").await;
+    let resp = callback(&h, "code=x&state=badcode").await;
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     assert!(resp.headers().get(header::LOCATION).is_none());
     assert!(
@@ -899,7 +893,7 @@ async fn connect_refuses_another_users_sign_in_identity() {
         .unwrap();
     h.state
         .insert_pending("s1".into(), connect_pending("jane@example.com"));
-    let resp = get(&h, "/callback?code=x&state=s1").await;
+    let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert!(
         users
@@ -924,7 +918,7 @@ async fn connect_refuses_an_owner_no_longer_on_the_allowlist() {
     let h = harness("second@example.com").await;
     h.state
         .insert_pending("s1".into(), connect_pending("mallory@example.com"));
-    let resp = get(&h, "/callback?code=x&state=s1").await;
+    let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert!(
         UserStore::new(h.secrets.clone())
@@ -1202,7 +1196,7 @@ async fn connect_binds_the_principal_name_and_pins_its_identity() {
         .unwrap();
     h.state
         .insert_pending("s1".into(), connect_pending("jane@example.com"));
-    let resp = get(&h, "/callback?code=x&state=s1").await;
+    let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let mailbox = users
         .load_mailbox("second@example.com")
@@ -1238,7 +1232,7 @@ async fn connect_binds_the_principal_name_and_pins_its_identity() {
         .unwrap();
     h2.state
         .insert_pending("s2".into(), connect_pending("jane@example.com"));
-    let resp = get(&h2, "/callback?code=x&state=s2").await;
+    let resp = callback(&h2, "code=x&state=s2").await;
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         users2
@@ -1259,9 +1253,9 @@ async fn microsoft_error_text_never_reaches_the_log() {
     let (logs, _guard) = LogCapture::start();
     h.state
         .insert_pending("denied".into(), connect_pending("jane@example.com"));
-    let resp = get(
+    let resp = callback(
         &h,
-        "/callback?error=access_denied&error_description=user%20jane%40example.com%20cancelled&state=denied",
+        "error=access_denied&error_description=user%20jane%40example.com%20cancelled&state=denied",
     )
     .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1277,7 +1271,7 @@ async fn microsoft_error_text_never_reaches_the_log() {
         .await;
     h.state
         .insert_pending("badcode".into(), connect_pending("jane@example.com"));
-    let resp = get(&h, "/callback?code=x&state=badcode").await;
+    let resp = callback(&h, "code=x&state=badcode").await;
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     let logged = logs.text();
@@ -1759,7 +1753,7 @@ async fn connect_refuses_a_sign_in_with_a_different_mailbox_than_the_link_was_fo
         .save(&UserRecord::new("jane@example.com"))
         .await
         .unwrap();
-    let resp = get(&h, "/callback?code=x&state=s1").await;
+    let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let page = body_text(resp).await;
     assert!(
@@ -1798,11 +1792,149 @@ async fn connect_accepts_the_named_mailbox_regardless_of_case() {
         .save(&UserRecord::new("jane@example.com"))
         .await
         .unwrap();
-    let resp = get(&h, "/callback?code=x&state=s1").await;
+    let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::OK);
     let page = body_text(resp).await;
     assert!(
         page.contains("Mailbox connected to jane@example.com"),
         "{page}"
+    );
+}
+
+/// The attack the callback cookie exists for: someone starts a sign-in in
+/// their own browser, takes the Microsoft URL its Continue step redirects
+/// to, and gets the victim to open it. The victim signs in at Microsoft,
+/// which sends them to `/callback` with the starter's state.
+#[tokio::test]
+async fn a_sign_in_finished_in_another_browser_stores_nothing_and_issues_no_code() {
+    let h = harness("jane@example.com").await;
+    let client_id = register(&h.app).await;
+    let verifier = "verifier-verifier-verifier-verifier-verifier";
+    let (go, cookie) = consent(&h, &client_id, verifier).await;
+    let resp = get_with_cookie(&h, &go, &cookie).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let ms_state = query(&location, "state").unwrap();
+    let callback_cookie = set_cookie(&resp);
+    assert!(
+        callback_cookie.starts_with("pidge_callback="),
+        "{callback_cookie}"
+    );
+    let set = resp.headers()[header::SET_COOKIE].to_str().unwrap();
+    assert!(set.contains("Path=/callback"), "{set}");
+    assert!(set.contains("HttpOnly"), "{set}");
+    assert!(set.contains("SameSite=Lax"), "{set}");
+
+    // The victim's browser has no cookie for this flow…
+    let resp = get(&h, &format!("/callback?code=ms-code&state={ms_state}")).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        resp.headers().get(header::LOCATION).is_none(),
+        "never redirects to the (possibly hostile) client"
+    );
+    let page = body_text(resp).await;
+    assert!(page.contains("different browser"), "{page}");
+    assert_nothing_stored(&h, &["jane@example.com"]);
+
+    // …and the state was consumed, so even the starter can't finish it now.
+    let resp = get_with_cookie(
+        &h,
+        &format!("/callback?code=ms-code&state={ms_state}"),
+        &callback_cookie,
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_nothing_stored(&h, &["jane@example.com"]);
+
+    // A guessed cookie is no better than none.
+    let (go, cookie) = consent(&h, &client_id, verifier).await;
+    let resp = get_with_cookie(&h, &go, &cookie).await;
+    let location = resp.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    let ms_state = query(&location, "state").unwrap();
+    let resp = get_with_cookie(
+        &h,
+        &format!("/callback?code=ms-code&state={ms_state}"),
+        "pidge_callback=guess",
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_nothing_stored(&h, &["jane@example.com"]);
+}
+
+/// Same for connect links: a pidge user who lifts the Microsoft URL from
+/// their own connect flow can't have someone else's sign-in bind that
+/// mailbox to them.
+#[tokio::test]
+async fn a_connect_finished_in_another_browser_connects_nothing() {
+    let h = harness("second@example.com").await;
+    let users = UserStore::new(h.secrets.clone());
+    users
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    h.state.insert_pending(
+        "s1".into(),
+        PendingAuthorization {
+            callback_nonce: None,
+            ..connect_pending("jane@example.com")
+        },
+    );
+    let resp = get(&h, "/connect?state=s1").await;
+    let cookie = set_cookie(&resp);
+    let resp = get_with_cookie(&h, "/connect/go?state=s1", &cookie).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    assert!(set_cookie(&resp).starts_with("pidge_callback="));
+
+    let resp = get(&h, "/callback?code=x&state=s1").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(body_text(resp).await.contains("different browser"));
+    assert!(
+        users
+            .load_mailbox("second@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        users
+            .load("jane@example.com")
+            .await
+            .unwrap()
+            .unwrap()
+            .mailboxes,
+        vec!["jane@example.com"]
+    );
+}
+
+/// A pending entry whose Continue step never ran (no Microsoft URL was
+/// ever issued for it) can't be completed by a callback at all.
+#[tokio::test]
+async fn a_callback_for_a_flow_that_never_went_through_continue_is_refused() {
+    let h = harness("second@example.com").await;
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    h.state.insert_pending(
+        "s1".into(),
+        PendingAuthorization {
+            callback_nonce: None,
+            ..connect_pending("jane@example.com")
+        },
+    );
+    let resp = callback(&h, "code=x&state=s1").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        UserStore::new(h.secrets.clone())
+            .load_mailbox("second@example.com")
+            .await
+            .unwrap()
+            .is_none()
     );
 }

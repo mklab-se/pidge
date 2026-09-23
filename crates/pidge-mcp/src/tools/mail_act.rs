@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use pidge_client::graph::batch::{BatchRequest, BatchResponse};
-use pidge_client::{ClientError, Outgoing, UnsubscribeMethod, parse_unsubscribe};
+use pidge_client::{ClientError, Outgoing, UnsubscribeMethod, mailto_subject, parse_unsubscribe};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::service::RequestContext;
@@ -61,8 +61,6 @@ pub struct ActArgs {
 
 /// Characters of a manual unsubscribe link shown.
 const MANUAL_URL_CAP: usize = 500;
-/// Characters of a `List-Unsubscribe` mailto subject used.
-const MAILTO_SUBJECT_CAP: usize = 100;
 
 const NOT_FOUND: &str = "not found in any of your mailboxes";
 
@@ -399,19 +397,6 @@ fn batch_outcome(r: &BatchResponse) -> Outcome {
 
 /// The unsubscribe e-mail's subject: the header's, on one line and capped
 /// at [`MAILTO_SUBJECT_CAP`] characters, or "unsubscribe".
-fn mailto_subject(subject: Option<&str>) -> String {
-    let subject: String = one_line(subject.unwrap_or_default())
-        .chars()
-        .take(MAILTO_SUBJECT_CAP)
-        .collect();
-    let subject = subject.trim();
-    if subject.is_empty() {
-        "unsubscribe".into()
-    } else {
-        subject.to_string()
-    }
-}
-
 /// A failure reason for one id: a status or a fixed phrase, never a Graph
 /// (or third-party) response body, and never an address.
 fn failure(e: &ClientError) -> String {

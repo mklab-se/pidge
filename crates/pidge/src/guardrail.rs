@@ -91,7 +91,13 @@ pub enum Gate {
 /// On `Gate::DryRun` the caller prints nothing else and returns — this
 /// helper already printed the "would ..." report (human or JSON).
 pub fn gate(action: GuardrailAction, description: &str) -> anyhow::Result<Gate> {
-    let config = Config::load().unwrap_or_default();
+    // Fail closed: an unreadable config must not turn `deny` into `allow`.
+    let config = Config::load().map_err(|e| {
+        anyhow::anyhow!(
+            "guardrails: config.yaml could not be read ({e}); refusing '{}' rather than assuming it is allowed",
+            action.key()
+        )
+    })?;
     if dry_run_active() {
         let mode = mode_for(&config, action);
         let policy = match mode {

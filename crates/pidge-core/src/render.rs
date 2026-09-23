@@ -14,6 +14,23 @@ pub enum LinkStyle {
     Plain,
 }
 
+/// Removes control characters from third-party text before it can reach a
+/// terminal: everything `char::is_control` matches (C0, DEL, C1) except
+/// `\n`, `\r` and `\t`. An e-mail can otherwise carry `ESC ] 8 ; ;` to
+/// forge a hyperlink, move the cursor over earlier lines, retitle the
+/// window, or write the clipboard. Applied where Graph data becomes
+/// `pidge-core` types, and again on rendered HTML (entities decode late).
+pub fn strip_controls(text: &str) -> String {
+    if !text.chars().any(is_hostile_control) {
+        return text.to_string();
+    }
+    text.chars().filter(|&c| !is_hostile_control(c)).collect()
+}
+
+fn is_hostile_control(c: char) -> bool {
+    c.is_control() && !matches!(c, '\n' | '\r' | '\t')
+}
+
 /// Render an HTML body to text.
 ///
 /// - Uses html2text's `raw_mode` which traverses HTML `<table>` elements as a
@@ -51,8 +68,9 @@ pub fn render_html(html: &str, width: usize, links: LinkStyle) -> String {
             if is_image {
                 continue;
             }
-            let text = ts.s.replace('\u{00A0}', " ");
-            match (url, links) {
+            let text = strip_controls(&ts.s).replace('\u{00A0}', " ");
+            let url = url.map(strip_controls);
+            match (url.as_deref(), links) {
                 (Some(u), LinkStyle::Osc8) => {
                     out.push_str("\x1b]8;;");
                     out.push_str(u);
@@ -126,6 +144,33 @@ pub fn strip_quoted_history(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_controls_drops_escapes_and_c1_but_keeps_line_structure() {
+        assert_eq!(
+            strip_controls("a\x1b]8;;https://evil.test\x1b\\b\n\tc\r\n\u{85}\u{7f}d"),
+            "a]8;;https://evil.test\\b\n\tc\r\nd"
+        );
+        assert_eq!(strip_controls("plain åäö"), "plain åäö");
+    }
+
+    #[test]
+    fn render_html_strips_control_characters_including_decoded_entities() {
+        // `&#27;` decodes to ESC only after parsing, so stripping at the
+        // Graph boundary would miss it.
+        let html = r#"<p>Hi &#27;]8;;https://evil.test&#27;\see&#27;]8;;&#27;\ <a href="https://ok.test/&#27;x">link</a></p>"#;
+        for style in [LinkStyle::Plain, LinkStyle::Inline] {
+            let out = render_html(html, 80, style);
+            assert!(!out.contains('\x1b'), "{out:?}");
+        }
+        let out = render_html(html, 80, LinkStyle::Osc8);
+        assert_eq!(
+            out.matches("\x1b]8;;").count(),
+            2,
+            "only pidge's own link escapes: {out:?}"
+        );
+        assert!(out.contains("\x1b]8;;https://ok.test/x\x1b\\"), "{out:?}");
+    }
 
     #[test]
     fn inline_links_render_as_text_and_url() {

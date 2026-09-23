@@ -14,6 +14,12 @@
 //! `mail` attribute) and pinned to the immutable tenant and object id from
 //! the ID token the first time it is seen.
 //!
+//! Each flow is pinned to one browser twice over: the confirmation page's
+//! Continue only works with the cookie that page set, and `/callback` only
+//! completes with the cookie the Continue step set when it sent the browser
+//! to Microsoft. So a Microsoft sign-in URL taken from one browser and
+//! opened in another (a victim's) stores nothing and issues nothing.
+//!
 //! No database: clients, codes and tokens are all signed JWTs (see [`jwt`]).
 //! The only in-memory state is the minutes-long window between `/authorize`
 //! and `/callback`, and the set of already-redeemed codes.
@@ -324,6 +330,7 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
             code_challenge: code_challenge.to_string(),
             microsoft_verifier: jwt::random_id() + &jwt::random_id(),
             consent_nonce: Some(nonce.clone()),
+            callback_nonce: None,
             created_at: chrono::Utc::now(),
         },
     );
@@ -372,7 +379,21 @@ async fn authorize_go(
         &jwt::pkce_challenge(&pending.microsoft_verifier),
         key,
     );
-    Redirect::to(&microsoft_url).into_response()
+    to_microsoft(&state, key, &microsoft_url)
+}
+
+/// Sends the browser to Microsoft, binding the flow's callback to it: a
+/// fresh nonce goes onto the pending entry and into a cookie scoped to
+/// `/callback`, which the callback must present.
+fn to_microsoft(state: &SharedState, key: &str, microsoft_url: &str) -> Response {
+    let nonce = jwt::random_id();
+    state.set_callback_nonce(key, nonce.clone());
+    with_consent_cookie(
+        Redirect::to(microsoft_url).into_response(),
+        &CALLBACK_COOKIE,
+        &nonce,
+        state,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -448,13 +469,36 @@ fn owned_by_other_page(mailbox: &str) -> Response {
     )
 }
 
-async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackParams>) -> Response {
+async fn callback(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(p): Query<CallbackParams>,
+) -> Response {
     let Some(pending) = p.state.as_deref().and_then(|s| state.take_pending(s)) else {
         return pages::error(
             StatusCode::BAD_REQUEST,
             "This sign-in link has expired or was already used. Start again from your AI client.",
         );
     };
+
+    // Only the browser that clicked Continue may finish the flow. Anyone
+    // can start one and pass its Microsoft URL to someone else; without
+    // this, that someone's sign-in would land in the starter's client (or
+    // bind their mailbox to the starter's account). The pending entry is
+    // already consumed, so the lifted URL is burnt either way. Nothing is
+    // redirected to the waiting client: it may be the attacker's.
+    let presented = consent_nonce_from(&headers, &CALLBACK_COOKIE);
+    if pending.callback_nonce.is_none() || presented != pending.callback_nonce {
+        tracing::warn!(
+            kind = %pending.kind_name(),
+            "callback refused: not from the browser that started the sign-in"
+        );
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "This sign-in was started in a different browser, so nothing was connected. \
+             Start again from your AI client and finish in the browser it opens.",
+        );
+    }
 
     if let Some(err) = p.error.as_deref() {
         // Only the code: `error_description` is free text from the URL.
@@ -802,6 +846,14 @@ const SIGN_IN_CONSENT: ConsentCookie = ConsentCookie {
     path: "/authorize",
 };
 
+/// For either flow's last leg: the Continue step (`/authorize/go` or
+/// `/connect/go`) → Microsoft → `/callback`. `SameSite=Lax` still sends it
+/// on Microsoft's top-level redirect back.
+const CALLBACK_COOKIE: ConsentCookie = ConsentCookie {
+    name: "pidge_callback",
+    path: "/callback",
+};
+
 /// `Set-Cookie` value for a consent nonce: scoped to the flow's path, gone
 /// with the pending entry's lifetime, `Secure` whenever we're served over https.
 fn consent_cookie(cookie: &ConsentCookie, nonce: &str, secure: bool) -> String {
@@ -891,7 +943,7 @@ async fn connect_go(
         &key,
         mailbox.as_deref(),
     );
-    Redirect::to(&microsoft_url).into_response()
+    to_microsoft(&state, &key, &microsoft_url)
 }
 
 fn urlencode(s: &str) -> String {
@@ -1145,6 +1197,10 @@ mod tests {
         assert_eq!(
             consent_cookie(&SIGN_IN_CONSENT, "n", true),
             "pidge_authorize=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/authorize"
+        );
+        assert_eq!(
+            consent_cookie(&CALLBACK_COOKIE, "n", true),
+            "pidge_callback=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/callback"
         );
 
         let mut headers = HeaderMap::new();

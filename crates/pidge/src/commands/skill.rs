@@ -374,9 +374,11 @@ These are sketches, not contracts. Always check `--help` for exact flags.
 - **Unsubscribe from a sender**: `{invoke} mail unsubscribe <hash> -y`.
   Reads the message's RFC 2369 `List-Unsubscribe` header and acts:
   RFC 8058 one-click HTTPS POST when the sender offers it, otherwise a
-  `mailto:` send from the receiving account, otherwise prints the URL
-  for a manual browser click. Use this when the user asks to
-  unsubscribe from a sender or to stop e-mails from someone.
+  `mailto:` send from the receiving account (always with the body
+  `unsubscribe` and at most 100 characters of the header's subject, and
+  gated by `guardrails.send` as well as `guardrails.unsubscribe`),
+  otherwise prints the URL for a manual browser click. Use this when the
+  user asks to unsubscribe from a sender or to stop e-mails from someone.
 
   **Default follow-up:** users who ask to unsubscribe almost always
   want the triggering message gone too. After a successful

@@ -26,6 +26,7 @@ use super::mail_read::{check_id, per_account};
 use crate::cache::ReadCache;
 use crate::context::{ToolContext, graph_error, tool_error};
 use crate::render::{cap_inline, event_line, local, one_line, untrusted};
+use crate::state::SENDS_PER_HOUR;
 use crate::users::user_hash;
 
 /// Events per calendarView request.
@@ -36,6 +37,13 @@ const PER_CALENDAR: usize = 1_000;
 const MAX_SLOTS: usize = 20;
 /// Why update and cancel refuse an event someone else organizes.
 const NOT_ORGANIZER: &str = "You are not the organizer; use calendar_respond";
+
+/// The per-user send cap is used up (see [`SENDS_PER_HOUR`]).
+fn send_limit() -> McpError {
+    tool_error(format!(
+        "Send limit reached ({SENDS_PER_HOUR} per hour); try again later"
+    ))
+}
 
 #[derive(Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgendaArgs {
@@ -331,18 +339,31 @@ impl PidgeMcp {
             RsvpResponse::Tentative => (RsvpKind::Tentative, "Tentatively accepted"),
             RsvpResponse::Decline => (RsvpKind::Decline, "Declined"),
         };
-        self.state
+        // A note to the organizer is an e-mail the agent wrote: charged
+        // like a send. A bare accept/decline is Outlook's own notice.
+        let message = args.message.as_deref().unwrap_or("");
+        let charged = send_response && !message.trim().is_empty();
+        if charged && !self.state.reserve_send(&tc.user.email) {
+            return Err(send_limit());
+        }
+        if let Err(e) = self
+            .state
             .graph
             .rsvp_event(
                 &event.account,
                 &args.id,
                 kind,
-                args.message.as_deref().unwrap_or(""),
+                message,
                 send_response,
                 proposed.as_ref(),
             )
             .await
-            .map_err(graph_error)?;
+        {
+            if charged {
+                self.state.release_send(&tc.user.email);
+            }
+            return Err(graph_error(e));
+        }
         self.state.cache.invalidate_user(&tc.user.email);
         tracing::info!(
             user = %user_hash(&tc.user.email),
@@ -418,11 +439,22 @@ impl PidgeMcp {
             online_meeting: args.online_meeting.unwrap_or(false),
             reminder: Reminder::default(),
         };
+        // Outlook mails every attendee the invitation, body included:
+        // charged like a send.
+        let charged = !new.required_attendees.is_empty();
+        if charged && !self.state.reserve_send(&tc.user.email) {
+            return Err(send_limit());
+        }
         let graph = &self.state.graph;
-        let id = graph
-            .create_event(&account, None, &new)
-            .await
-            .map_err(graph_error)?;
+        let id = match graph.create_event(&account, None, &new).await {
+            Ok(id) => id,
+            Err(e) => {
+                if charged {
+                    self.state.release_send(&tc.user.email);
+                }
+                return Err(graph_error(e));
+            }
+        };
         self.state.cache.invalidate_user(&tc.user.email);
         tracing::info!(
             user = %user_hash(&tc.user.email),
@@ -497,10 +529,17 @@ impl PidgeMcp {
             reminder: Reminder::default(),
         };
         let graph = &self.state.graph;
-        graph
-            .update_event(&event.account, id, &new)
-            .await
-            .map_err(graph_error)?;
+        // A new attendee list means invitations (and cancellations) go out.
+        let charged = args.attendees.as_ref().is_some_and(|a| !a.is_empty());
+        if charged && !self.state.reserve_send(&tc.user.email) {
+            return Err(send_limit());
+        }
+        if let Err(e) = graph.update_event(&event.account, id, &new).await {
+            if charged {
+                self.state.release_send(&tc.user.email);
+            }
+            return Err(graph_error(e));
+        }
         self.state.cache.invalidate_user(&tc.user.email);
         tracing::info!(user = %user_hash(&tc.user.email), "updated an event");
         let updated = graph.get_event(&event.account, id).await.map_err(|e| {
@@ -525,11 +564,24 @@ impl PidgeMcp {
         if !event.is_organizer {
             return Err(tool_error(NOT_ORGANIZER));
         }
-        self.state
+        // The cancellation note goes to every attendee as the agent wrote
+        // it: charged like a send. A bare cancel is Outlook's own notice.
+        let message = args.message.as_deref().unwrap_or("");
+        let charged = !message.trim().is_empty();
+        if charged && !self.state.reserve_send(&tc.user.email) {
+            return Err(send_limit());
+        }
+        if let Err(e) = self
+            .state
             .graph
-            .cancel_event(&event.account, id, args.message.as_deref().unwrap_or(""))
+            .cancel_event(&event.account, id, message)
             .await
-            .map_err(graph_error)?;
+        {
+            if charged {
+                self.state.release_send(&tc.user.email);
+            }
+            return Err(graph_error(e));
+        }
         self.state.cache.invalidate_user(&tc.user.email);
         tracing::info!(user = %user_hash(&tc.user.email), "cancelled an event");
         Ok(format!("Cancelled \"{}\"", title(&event)))
@@ -1703,6 +1755,7 @@ mod tests {
         )
         .await
         .unwrap();
+        assert_eq!(sends_used(&h), 1, "an invitation is charged like a send");
         assert!(
             out.starts_with(
                 "Created in work@example.com:\n<untrusted-email-content>\n- 14:00–15:00 Mon 7 Jan  Planning   [work@example.com]  id=NEW1"
@@ -1971,6 +2024,38 @@ mod tests {
         .unwrap();
         assert_eq!(out, "Cancelled \"subject E1\"");
         assert!(h.state.cache.get(JANE, "k").is_none(), "cache not cleared");
+        assert_eq!(
+            sends_used(&h),
+            1,
+            "a cancellation note is charged like a send"
+        );
+    }
+
+    /// Sends `h`'s user has claimed in the current hour.
+    fn sends_used(h: &ToolHarness) -> usize {
+        h.state.sends.lock().unwrap().get(JANE).map_or(0, Vec::len)
+    }
+
+    #[tokio::test]
+    async fn invitations_and_notes_stop_at_the_send_cap() {
+        let h = ToolHarness::new(&[JANE]).await;
+        for _ in 0..crate::state::SENDS_PER_HOUR {
+            assert!(h.state.reserve_send(JANE));
+        }
+        let err = event(
+            &h,
+            EventArgs {
+                attendees: Some(vec!["carl@example.org".into()]),
+                ..create(
+                    "Planning",
+                    "2030-01-07T14:00:00",
+                    Some("2030-01-07T15:00:00"),
+                )
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(err.message.contains("Send limit reached"), "{err:?}");
     }
 
     #[tokio::test]
