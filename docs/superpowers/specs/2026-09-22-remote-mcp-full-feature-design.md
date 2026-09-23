@@ -245,9 +245,19 @@ refresh tokens leave the machine.
 
 ### 1.7 Security
 
-- Identity: unchanged from the spike. Every tool reads
-  `AuthenticatedUser` from the request and resolves mailboxes through the
-  user record; an id from another user's mailbox fails as not found.
+- Identity: every tool reads `AuthenticatedUser` from the request and
+  resolves mailboxes through the user record; an id from another user's
+  mailbox fails as not found.
+- Sign-in identity comes from Microsoft's `userPrincipalName` (a verified
+  domain), never from the mutable `mail` attribute, and the immutable
+  `tid`/`oid` pair from the ID token is pinned on the user record and on
+  every mailbox record at first bind and enforced on every later sign-in or
+  bind. This closes the "nOAuth" class of attack against multi-tenant apps.
+- Consent before any code is issued: `/authorize` shows an interstitial
+  naming the client and its redirect host, bound to the browser by a nonce
+  cookie, before redirecting to Microsoft; `/connect` does the same naming
+  the owning account. A link alone can never complete a sign-in or a
+  mailbox connection.
 - Account ownership is enforced on write (bind) and read (every tool).
 - Prompt injection: bodies wrapped and capped; tool descriptions and the
   server instructions repeat the rule; `mail_send` only by draft id; sends
