@@ -37,6 +37,32 @@ use crate::state::{AppState, SharedState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Diagnostic: `pidge-mcp --convert-check <path>` converts a local file
+    // through the production markitdown path and exits; no server config.
+    let mut args = std::env::args_os().skip(1);
+    if args.next().is_some_and(|a| a == "--convert-check") {
+        let code = match args.next() {
+            Some(path) => {
+                let bin = config::markitdown_from_env();
+                match markitdown::convert_check(&bin, std::path::Path::new(&path)).await {
+                    Ok(chars) => {
+                        println!("converted {chars} chars");
+                        0
+                    }
+                    Err(e) => {
+                        println!("conversion failed: {e}");
+                        1
+                    }
+                }
+            }
+            None => {
+                eprintln!("usage: pidge-mcp --convert-check <path>");
+                1
+            }
+        };
+        std::process::exit(code);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();

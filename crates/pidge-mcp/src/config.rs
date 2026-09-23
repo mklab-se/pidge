@@ -32,6 +32,15 @@ pub struct Config {
     pub markitdown: PathBuf,
 }
 
+/// `PIDGE_MCP_MARKITDOWN`, default `markitdown` (looked up on `PATH`).
+/// Separate from [`Config::from_env`] so `--convert-check` needs no other
+/// configuration.
+pub fn markitdown_from_env() -> PathBuf {
+    std::env::var_os("PIDGE_MCP_MARKITDOWN")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| PathBuf::from("markitdown"), PathBuf::from)
+}
+
 impl Config {
     pub fn from_env() -> Result<Self> {
         let port = match std::env::var("PORT") {
@@ -78,9 +87,7 @@ impl Config {
             }
         };
 
-        let markitdown = std::env::var_os("PIDGE_MCP_MARKITDOWN")
-            .filter(|v| !v.is_empty())
-            .map_or_else(|| PathBuf::from("markitdown"), PathBuf::from);
+        let markitdown = markitdown_from_env();
 
         Ok(Self {
             markitdown,

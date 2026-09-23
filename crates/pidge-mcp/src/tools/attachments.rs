@@ -18,7 +18,7 @@ use super::PidgeMcp;
 use super::mail_read::check_id;
 use crate::cache::ReadCache;
 use crate::context::{ToolContext, graph_error, tool_error};
-use crate::markitdown::{self, ConvertError, MAX_INPUT_BYTES};
+use crate::markitdown::{self, CONVERT_TIMEOUT, ConvertError, MAX_INPUT_BYTES};
 use crate::render::{cap, one_line, untrusted};
 use crate::users::user_hash;
 
@@ -26,7 +26,9 @@ use crate::users::user_hash;
 const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 /// Characters of converted text per call; `offset` pages through the rest.
 const TEXT_CAP: usize = 30_000;
-const CONVERT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Converted Markdown up to this size (bytes) is cached; longer documents
+/// are converted again per call rather than held in memory.
+const CACHE_MAX_MARKDOWN: usize = 256 * 1024;
 /// How long a conversion waits for one of the server's conversion slots.
 const SLOT_WAIT: Duration = Duration::from_secs(10);
 /// Image types a vision model accepts as image content; other `image/*`
@@ -80,8 +82,8 @@ impl PidgeMcp {
         check_id(&args.attachment_id)?;
         let mode = args.mode.unwrap_or_default();
         let offset = args.offset.unwrap_or(0);
-        // A document's Markdown is cached per attachment, not per offset, so
-        // paging converts once. Links are minted per call and pictures are
+        // A document's Markdown (up to CACHE_MAX_MARKDOWN) is cached per
+        // attachment, not per offset, so paging converts once. Links are minted per call and pictures are
         // cheap to fetch (and too big to hold), so neither is cached.
         let key = ReadCache::key("mail_attachment", &(&args.id, &args.attachment_id));
         if mode == AttachmentMode::Read
@@ -122,7 +124,9 @@ impl PidgeMcp {
             }
             AttachmentMode::Read => {
                 let doc = self.convert_document(&tc, &message, attachment).await?;
-                if let Ok(json) = serde_json::to_string(&doc) {
+                if doc.markdown.len() <= CACHE_MAX_MARKDOWN
+                    && let Ok(json) = serde_json::to_string(&doc)
+                {
                     self.state.cache.put(&tc.user.email, key, json);
                 }
                 Ok(text_result(render_document(&message.id, &doc, offset)?))
@@ -688,6 +692,42 @@ pub(crate) mod tests {
         let out = text(&result);
         assert!(out.contains("type=image/svg+xml"), "{out}");
         assert!(out.contains("# converted\n<svg></svg>"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn markdown_over_256_kb_is_converted_again_on_each_read() {
+        let _guard = conversion_lock().await;
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_message(&h, JANE, "M1").await;
+        let body = "z".repeat(300 * 1024);
+        mount_listing(
+            &h,
+            JANE,
+            "M1",
+            vec![listing_row(
+                "A1",
+                "big.txt",
+                "text/plain",
+                body.len() as u64,
+            )],
+        )
+        .await;
+        // Too big to cache: both reads fetch and convert.
+        mount_bytes(&h, JANE, "M1", "A1", body.as_bytes(), 2).await;
+        for offset in [None, Some(30_000)] {
+            let out = text(
+                &call(
+                    &h,
+                    AttachmentArgs {
+                        offset,
+                        ..args("M1", "A1")
+                    },
+                )
+                .await
+                .unwrap(),
+            );
+            assert!(out.contains("zzzz"), "{}", &out[..200]);
+        }
     }
 
     #[tokio::test]

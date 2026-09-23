@@ -19,9 +19,15 @@ pub const MAX_INPUT_BYTES: u64 = 25 * 1024 * 1024;
 /// The most converted text pidge accepts from one conversion.
 const MAX_OUTPUT_BYTES: u64 = 2 * 1024 * 1024;
 
-/// Address-space limit for the markitdown process (Linux only).
+/// Address-space limit for the markitdown process (Linux only). It bounds
+/// reserved address space, not resident memory, so it sits well above what
+/// Python and its native libraries map at start-up; the output cap and the
+/// timeout are the practical bounds.
 #[cfg(target_os = "linux")]
-const MAX_CHILD_MEMORY: libc::rlim_t = 1024 * 1024 * 1024;
+const MAX_CHILD_MEMORY: libc::rlim_t = 4 * 1024 * 1024 * 1024;
+
+/// How long one conversion may run.
+pub const CONVERT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Temp files are named `<TEMP_PREFIX><random>.<ext>`.
 const TEMP_PREFIX: &str = "pidge-mcp-att-";
@@ -117,7 +123,13 @@ fn scrub_environment(command: &mut Command) {
         .env("TMPDIR", &tmp)
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
-        .env("PYTHONDONTWRITEBYTECODE", "1");
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        // markitdown's ML runtime otherwise starts a native thread per core
+        // at import; under the address-space limit that aborts the process.
+        .env("OMP_NUM_THREADS", "1")
+        .env("OPENBLAS_NUM_THREADS", "1")
+        .env("MKL_NUM_THREADS", "1")
+        .env("TOKENIZERS_PARALLELISM", "false");
 }
 
 /// Caps the child's address space at [`MAX_CHILD_MEMORY`] on Linux (where
@@ -143,6 +155,23 @@ fn limit_resources(command: &mut Command) {
 
 #[cfg(not(target_os = "linux"))]
 fn limit_resources(_command: &mut Command) {}
+
+/// `pidge-mcp --convert-check <path>`: converts a local file exactly as
+/// `mail_attachment` would (same spawn path, limits and timeout) and returns
+/// the number of characters produced, or the error as text.
+pub async fn convert_check(bin: &Path, path: &Path) -> Result<usize, String> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    convert(bin, &bytes, &name, CONVERT_TIMEOUT)
+        .await
+        .map(|markdown| markdown.chars().count())
+        .map_err(|e| e.to_string())
+}
 
 /// Deletes our temp files older than `max_age`: the ones a killed process
 /// never got to remove. Best effort; returns how many were deleted.
@@ -331,13 +360,17 @@ pub(crate) mod tests {
             .await
             .unwrap();
         // Only the variables we set, plus what the shell adds itself.
-        const ALLOWED: [&str; 10] = [
+        const ALLOWED: [&str; 14] = [
             "PATH",
             "HOME",
             "TMPDIR",
             "LANG",
             "LC_ALL",
             "PYTHONDONTWRITEBYTECODE",
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "TOKENIZERS_PARALLELISM",
             "PWD",
             "OLDPWD",
             "SHLVL",
@@ -360,6 +393,12 @@ pub(crate) mod tests {
         assert!(env.contains("LANG=C.UTF-8\n"), "{env}");
         assert!(env.contains("LC_ALL=C.UTF-8\n"), "{env}");
         assert!(env.contains("PYTHONDONTWRITEBYTECODE=1\n"), "{env}");
+        // One native thread per library: markitdown's ML runtime otherwise
+        // starts one per core at import, which the address-space limit kills.
+        for var in ["OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"] {
+            assert!(env.contains(&format!("{var}=1\n")), "{var}: {env}");
+        }
+        assert!(env.contains("TOKENIZERS_PARALLELISM=false\n"), "{env}");
     }
 
     #[tokio::test]
@@ -375,7 +414,7 @@ pub(crate) mod tests {
 
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn the_child_runs_under_a_1_gib_address_space_limit() {
+    async fn the_child_runs_under_a_4_gib_address_space_limit() {
         const LIMITS: &str = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/limits-markitdown.sh"
@@ -384,7 +423,7 @@ pub(crate) mod tests {
         let out = convert(LIMITS.as_ref(), b"x", "a.pdf", Duration::from_secs(5))
             .await
             .unwrap();
-        assert_eq!(out.trim(), "1048576");
+        assert_eq!(out.trim(), "4194304");
     }
 
     #[tokio::test]
@@ -415,6 +454,26 @@ pub(crate) mod tests {
         for p in [&fresh, &other] {
             std::fs::remove_file(p).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn convert_check_reports_characters_or_the_error() {
+        let _guard = conversion_lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "hello").unwrap();
+        // "# converted\nhello" is 17 characters.
+        assert_eq!(convert_check(FAKE.as_ref(), &file).await, Ok(17));
+
+        let broken = dir.path().join("b.fail");
+        std::fs::write(&broken, "x").unwrap();
+        let err = convert_check(FAKE.as_ref(), &broken).await.unwrap_err();
+        assert!(err.contains("exit status: 3"), "{err}");
+
+        let err = convert_check(FAKE.as_ref(), &dir.path().join("missing.txt"))
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("cannot read "), "{err}");
     }
 
     #[test]
