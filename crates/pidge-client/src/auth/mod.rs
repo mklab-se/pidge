@@ -90,13 +90,28 @@ impl AuthClient {
     /// the Entra app). The caller owns `state` and the PKCE verifier behind
     /// `code_challenge`; pair with [`Self::exchange_code`].
     pub fn authorize_url(&self, redirect_uri: &str, code_challenge: &str, state: &str) -> String {
-        browser_flow::build_authorize_url(
+        self.authorize_url_with_hint(redirect_uri, code_challenge, state, None)
+    }
+
+    /// [`Self::authorize_url`] with a `login_hint`: the address Microsoft
+    /// preselects in its account picker. The picker is still shown
+    /// (`prompt=select_account`), so the user can pick another account; the
+    /// hint only makes the expected one the obvious choice.
+    pub fn authorize_url_with_hint(
+        &self,
+        redirect_uri: &str,
+        code_challenge: &str,
+        state: &str,
+        login_hint: Option<&str>,
+    ) -> String {
+        browser_flow::build_authorize_url_with_hint(
             &self.authority_base,
             &self.client_id,
             redirect_uri,
             &self.scope,
             code_challenge,
             state,
+            login_hint,
         )
     }
 

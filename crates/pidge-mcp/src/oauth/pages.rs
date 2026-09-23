@@ -26,12 +26,22 @@ pub fn done(message: &str) -> Response {
     page(StatusCode::OK, "pidge", message)
 }
 
-/// The interstitial before a connect link goes to Microsoft: names the pidge
-/// account the mailbox will join, with a Continue link to `go_url`.
-pub fn confirm_connect(owner: &str, go_url: &str) -> Response {
-    let message = format!(
-        "You are about to connect a mailbox to the pidge account {owner}. Continue only if that is your account."
-    );
+/// The interstitial before a connect link goes to Microsoft: names the
+/// mailbox being connected (when the link was issued for one) and the pidge
+/// account it will join, with a Continue link to `go_url`.
+pub fn confirm_connect(owner: &str, mailbox: Option<&str>, go_url: &str) -> Response {
+    let message = match mailbox {
+        Some(mailbox) => format!(
+            "You are about to connect the mailbox {mailbox} to the pidge account {owner}. \
+             At Microsoft, sign in as {mailbox}; signing in with any other account connects nothing. \
+             Continue only if {owner} is your pidge account."
+        ),
+        None => format!(
+            "You are about to connect a mailbox to the pidge account {owner}. \
+             At Microsoft, sign in with the mailbox you want to connect. \
+             Continue only if {owner} is your pidge account."
+        ),
+    };
     let action = format!(
         r#"<p><a class="go" href="{}">Continue to Microsoft sign-in</a></p>"#,
         html_escape(go_url)
