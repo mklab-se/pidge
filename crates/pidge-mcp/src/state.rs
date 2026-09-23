@@ -38,8 +38,15 @@ pub enum PendingKind {
     /// signed-in user (and their first mailbox).
     SignIn,
     /// An `accounts_connect` link: the Microsoft account becomes an
-    /// additional mailbox owned by `owner` (a sign-in address).
-    Connect { owner: String },
+    /// additional mailbox owned by `owner` (a sign-in address). `mailbox`
+    /// is the address the link was issued for, when the caller said which:
+    /// shown on the confirmation page, preselected at Microsoft, and
+    /// enforced at the callback so signing in with a different account
+    /// connects nothing instead of the wrong mailbox.
+    Connect {
+        owner: String,
+        mailbox: Option<String>,
+    },
 }
 
 /// An authorization the user has started but not finished at Microsoft.

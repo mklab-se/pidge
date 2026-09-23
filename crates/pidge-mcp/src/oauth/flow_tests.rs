@@ -616,6 +616,7 @@ async fn connect_invalidates_the_owners_read_cache() {
         PendingAuthorization {
             kind: PendingKind::Connect {
                 owner: "jane@example.com".into(),
+                mailbox: None,
             },
             ..pending_stub()
         },
@@ -651,6 +652,7 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
         PendingAuthorization {
             kind: PendingKind::Connect {
                 owner: "jane@example.com".into(),
+                mailbox: None,
             },
             ..pending_stub()
         },
@@ -703,6 +705,7 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
         PendingAuthorization {
             kind: PendingKind::Connect {
                 owner: "anna@example.com".into(),
+                mailbox: None,
             },
             ..pending_stub()
         },
@@ -730,6 +733,7 @@ fn connect_pending(owner: &str) -> PendingAuthorization {
     PendingAuthorization {
         kind: PendingKind::Connect {
             owner: owner.into(),
+            mailbox: None,
         },
         ..pending_stub()
     }
@@ -1668,4 +1672,137 @@ async fn http_request_log_line_names_the_route_template_or_unmatched() {
     assert!(lines[5].contains("route=/mcp "), "{}", lines[5]);
     assert!(!logged.contains("secret-token"), "{logged}");
     assert!(!logged.contains("made-up"), "{logged}");
+}
+
+fn connect_pending_for(owner: &str, mailbox: &str) -> PendingAuthorization {
+    PendingAuthorization {
+        kind: PendingKind::Connect {
+            owner: owner.into(),
+            mailbox: Some(mailbox.into()),
+        },
+        ..pending_stub()
+    }
+}
+
+#[tokio::test]
+async fn connect_link_names_the_mailbox_and_preselects_it_at_microsoft() {
+    let h = harness("second@example.com").await;
+    h.state.insert_pending(
+        "s1".into(),
+        connect_pending_for("jane@example.com", "second@example.com"),
+    );
+
+    let resp = get(&h, "/connect?state=s1").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cookie = resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let page = body_text(resp).await;
+    assert!(
+        page.contains(
+            "connect the mailbox second@example.com to the pidge account jane@example.com"
+        ),
+        "{page}"
+    );
+    assert!(page.contains("sign in as second@example.com"), "{page}");
+
+    let resp = get_with_cookie(&h, "/connect/go?state=s1", &cookie).await;
+    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    let location = resp.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        query(&location, "login_hint").as_deref(),
+        Some("second@example.com")
+    );
+    assert_eq!(
+        query(&location, "prompt").as_deref(),
+        Some("select_account")
+    );
+}
+
+#[tokio::test]
+async fn connect_link_without_a_mailbox_sends_no_login_hint() {
+    let h = harness("second@example.com").await;
+    h.state
+        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+    let resp = get(&h, "/connect?state=s1").await;
+    let cookie = resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let resp = get_with_cookie(&h, "/connect/go?state=s1", &cookie).await;
+    let location = resp.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(query(&location, "login_hint").is_none(), "{location}");
+}
+
+#[tokio::test]
+async fn connect_refuses_a_sign_in_with_a_different_mailbox_than_the_link_was_for() {
+    // Microsoft mock signs in as second@…, but the link was for work@….
+    let h = harness("second@example.com").await;
+    h.state.insert_pending(
+        "s1".into(),
+        connect_pending_for("jane@example.com", "work@example.com"),
+    );
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    let resp = get(&h, "/callback?code=x&state=s1").await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let page = body_text(resp).await;
+    assert!(
+        page.contains("This link was for work@example.com"),
+        "{page}"
+    );
+    assert!(
+        page.contains("signed in at Microsoft as second@example.com"),
+        "{page}"
+    );
+    assert!(page.contains("Nothing was connected"), "{page}");
+    // Neither mailbox was bound.
+    let rec = UserStore::new(h.secrets.clone())
+        .load("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.mailboxes, vec!["jane@example.com"]);
+    assert!(
+        UserStore::new(h.secrets.clone())
+            .load_mailbox("second@example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn connect_accepts_the_named_mailbox_regardless_of_case() {
+    let h = harness("second@example.com").await;
+    h.state.insert_pending(
+        "s1".into(),
+        connect_pending_for("jane@example.com", "Second@Example.com"),
+    );
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    let resp = get(&h, "/callback?code=x&state=s1").await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let page = body_text(resp).await;
+    assert!(
+        page.contains("Mailbox connected to jane@example.com"),
+        "{page}"
+    );
 }

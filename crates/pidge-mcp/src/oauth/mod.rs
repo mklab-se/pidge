@@ -524,7 +524,25 @@ async fn callback(State(state): State<SharedState>, Query(p): Query<CallbackPara
         PendingKind::SignIn => {
             sign_in_complete(&state, &pending, &email, &identity, success.tokens).await
         }
-        PendingKind::Connect { owner } => {
+        PendingKind::Connect { owner, mailbox } => {
+            if let Some(expected) = mailbox
+                && !expected.eq_ignore_ascii_case(&email)
+            {
+                tracing::warn!(
+                    user = %user_hash(owner),
+                    expected = %user_hash(expected),
+                    got = %user_hash(&email),
+                    "connect refused: signed in with a different mailbox than the link was for"
+                );
+                return pages::error(
+                    StatusCode::BAD_REQUEST,
+                    &format!(
+                        "This link was for {expected}, but you signed in at Microsoft as {email}. \
+                         Nothing was connected. Open the link again and choose {expected}, \
+                         or ask your AI client for a connect link for {email}."
+                    ),
+                );
+            }
             connect_complete(&state, &pending, owner, &email, &identity, success.tokens).await
         }
     }
@@ -747,11 +765,13 @@ struct ConnectParams {
 fn connect_pending(
     state: &SharedState,
     p: &ConnectParams,
-) -> Option<(String, String, PendingAuthorization)> {
+) -> Option<(String, String, Option<String>, PendingAuthorization)> {
     let key = p.state.as_deref()?;
     let pending = state.peek_pending(key)?;
     match &pending.kind {
-        PendingKind::Connect { owner } => Some((key.to_string(), owner.clone(), pending)),
+        PendingKind::Connect { owner, mailbox } => {
+            Some((key.to_string(), owner.clone(), mailbox.clone(), pending))
+        }
         PendingKind::SignIn => None,
     }
 }
@@ -828,7 +848,7 @@ fn consent_nonce_from(headers: &HeaderMap, cookie: &ConsentCookie) -> Option<Str
 /// stranger's link doesn't connect their mailbox to it unawares, and binds
 /// the Continue step to this browser with a cookie nonce.
 async fn connect(State(state): State<SharedState>, Query(p): Query<ConnectParams>) -> Response {
-    let Some((key, owner, _)) = connect_pending(&state, &p) else {
+    let Some((key, owner, mailbox, _)) = connect_pending(&state, &p) else {
         return expired_connect_link();
     };
     let nonce = jwt::random_id();
@@ -839,7 +859,7 @@ async fn connect(State(state): State<SharedState>, Query(p): Query<ConnectParams
         urlencode(&key)
     );
     with_consent_cookie(
-        pages::confirm_connect(&owner, &go),
+        pages::confirm_connect(&owner, mailbox.as_deref(), &go),
         &CONNECT_CONSENT,
         &nonce,
         &state,
@@ -853,7 +873,7 @@ async fn connect_go(
     headers: HeaderMap,
     Query(p): Query<ConnectParams>,
 ) -> Response {
-    let Some((key, _, pending)) = connect_pending(&state, &p) else {
+    let Some((key, _, mailbox, pending)) = connect_pending(&state, &p) else {
         return expired_connect_link();
     };
     let presented = consent_nonce_from(&headers, &CONNECT_CONSENT);
@@ -863,10 +883,13 @@ async fn connect_go(
             "Open the connect link itself (not this page's address) and confirm the account there.",
         );
     }
-    let microsoft_url = state.graph.auth().authorize_url(
+    // The link names the mailbox: preselect it at Microsoft so the account
+    // picker's obvious choice is the right one.
+    let microsoft_url = state.graph.auth().authorize_url_with_hint(
         &state.config.microsoft_callback_url(),
         &jwt::pkce_challenge(&pending.microsoft_verifier),
         &key,
+        mailbox.as_deref(),
     );
     Redirect::to(&microsoft_url).into_response()
 }

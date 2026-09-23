@@ -153,22 +153,50 @@ pub(crate) fn build_authorize_url(
     challenge: &str,
     state: &str,
 ) -> String {
+    build_authorize_url_with_hint(
+        authority_base,
+        client_id,
+        redirect_uri,
+        scope,
+        challenge,
+        state,
+        None,
+    )
+}
+
+/// [`build_authorize_url`] with an optional `login_hint`: the address
+/// Microsoft should preselect in its account picker, for flows where the
+/// caller already knows which mailbox the user is expected to sign in with.
+pub(crate) fn build_authorize_url_with_hint(
+    authority_base: &str,
+    client_id: &str,
+    redirect_uri: &str,
+    scope: &str,
+    challenge: &str,
+    state: &str,
+    login_hint: Option<&str>,
+) -> String {
     let mut url = url::Url::parse(&format!("{authority_base}/oauth2/v2.0/authorize"))
         .expect("authority_base is a valid URL");
-    url.query_pairs_mut()
-        .append_pair("client_id", client_id)
-        .append_pair("response_type", "code")
-        .append_pair("redirect_uri", redirect_uri)
-        .append_pair("response_mode", "query")
-        .append_pair("scope", scope)
-        .append_pair("state", state)
-        .append_pair("code_challenge", challenge)
-        .append_pair("code_challenge_method", "S256")
-        // `prompt=select_account` forces Microsoft to show the account picker
-        // even if the user is already signed in to *some* account — this is
-        // what stops "browser is already signed in to my M365 account so
-        // pidge auto-grabs that one when I wanted my live.com account".
-        .append_pair("prompt", "select_account");
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("client_id", client_id)
+            .append_pair("response_type", "code")
+            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("response_mode", "query")
+            .append_pair("scope", scope)
+            .append_pair("state", state)
+            .append_pair("code_challenge", challenge)
+            .append_pair("code_challenge_method", "S256")
+            // `prompt=select_account` forces Microsoft to show the account picker
+            // even if the user is already signed in to *some* account — this is
+            // what stops "browser is already signed in to my M365 account so
+            // pidge auto-grabs that one when I wanted my live.com account".
+            .append_pair("prompt", "select_account");
+        if let Some(hint) = login_hint.map(str::trim).filter(|h| !h.is_empty()) {
+            q.append_pair("login_hint", hint);
+        }
+    }
     url.into()
 }
 
@@ -472,6 +500,32 @@ mod tests {
         // redirect_uri is percent-encoded inside the query string.
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A47821"));
         assert!(url.contains("prompt=select_account"));
+        assert!(!url.contains("login_hint"));
+    }
+
+    #[test]
+    fn authorize_url_carries_the_login_hint_when_given() {
+        let url = build_authorize_url_with_hint(
+            "https://login.microsoftonline.com/common",
+            "client-id-here",
+            "http://localhost:47821",
+            "scope-here",
+            "challenge-here",
+            "state-here",
+            Some("jane.doe@example.com"),
+        );
+        assert!(url.contains("login_hint=jane.doe%40example.com"), "{url}");
+        assert!(url.contains("prompt=select_account"));
+        let blank = build_authorize_url_with_hint(
+            "https://login.microsoftonline.com/common",
+            "c",
+            "http://localhost:1",
+            "s",
+            "ch",
+            "st",
+            Some("  "),
+        );
+        assert!(!blank.contains("login_hint"));
     }
 
     #[test]

@@ -71,12 +71,19 @@ impl PidgeMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tc = ToolContext::from_request(&self.state, &ctx).await?;
+        let requested = args
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .map(str::to_ascii_lowercase);
         let microsoft_state = random_id();
         self.state.insert_pending(
             microsoft_state.clone(),
             PendingAuthorization {
                 kind: PendingKind::Connect {
                     owner: tc.record.signin.clone(),
+                    mailbox: requested.clone(),
                 },
                 client_id: String::new(),
                 client_redirect_uri: String::new(),
@@ -89,12 +96,7 @@ impl PidgeMcp {
         );
         tracing::info!(user = %user_hash(&tc.record.signin), "connect link issued");
 
-        let target = args
-            .email
-            .as_deref()
-            .map(str::trim)
-            .filter(|e| !e.is_empty())
-            .unwrap_or("the mailbox");
+        let target = requested.as_deref().unwrap_or("the mailbox");
         Ok(ok(format!(
             "Connect {target} by opening: {}/connect?state={microsoft_state}  (valid {} minutes)\n\
              The user signs in at Microsoft with that mailbox's account.\n\
@@ -597,7 +599,13 @@ mod tests {
             .next()
             .unwrap();
         let pending = h.state.peek_pending(state).expect("pending entry");
-        assert_eq!(pending.kind, PendingKind::Connect { owner: JANE.into() });
+        assert_eq!(
+            pending.kind,
+            PendingKind::Connect {
+                owner: JANE.into(),
+                mailbox: Some("work@example.com".into()),
+            }
+        );
         assert!(pending.created_at <= Utc::now());
         assert!(!pending.microsoft_verifier.is_empty());
 
