@@ -1,16 +1,14 @@
 name: Deploy MCP
 
+# Deploys whenever CI goes green on main (not on every push — a commit that
+# compiles but fails tests or clippy must not deploy), plus a manual trigger
+# for redeploys that don't need a new commit (e.g. after rotating
+# PIDGE_MCP_ALLOWED_EMAILS).
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "crates/pidge-mcp/**"
-      - "crates/pidge-client/**"
-      - "crates/pidge-core/**"
-      - "deploy/azure/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/deploy-mcp.yml"
   workflow_dispatch:
 
 permissions:
@@ -25,22 +23,29 @@ jobs:
   deploy:
     name: Deploy
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6 # v2.3.1
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # --skip-entra: the deploy identity has no rights on the Entra app, and
-      # the callback URI is already registered by the human-run initial
-      # deploy. --skip-certificate: the custom-domain certificate flow is
-      # interactive-ish (polls up to 15 minutes) and is run once by a human;
-      # CI asserts the binding is already SniEnabled instead of trying to
-      # create it. Both flags are no-ops when PIDGE_MCP_CUSTOM_DOMAIN is unset.
+      # --skip-entra: skips Phase 4 (Entra callback registration) entirely.
+      # The deploy identity has no Microsoft Graph directory-read rights,
+      # which even reading the Entra app's existing redirect URIs requires,
+      # and the callback URI is registered once, by hand, during the
+      # initial deploy. --skip-certificate: the custom-domain certificate
+      # flow is interactive-ish (polls up to 15 minutes) and is run once by
+      # a human; CI asserts the binding is already SniEnabled instead of
+      # trying to create it. --skip-certificate is a no-op when
+      # PIDGE_MCP_CUSTOM_DOMAIN is unset; --skip-entra always changes
+      # behaviour (it always skips Phase 4, custom domain or not).
       - name: Deploy pidge-mcp
         id: deploy
         shell: bash
@@ -57,34 +62,46 @@ jobs:
           fi
           echo "url=${url%/mcp}" >> "$GITHUB_OUTPUT"
         env:
-          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ github.event.workflow_run.head_sha || github.sha }}
           PIDGE_MCP_ALLOWED_EMAILS: ${{ secrets.PIDGE_MCP_ALLOWED_EMAILS }}
           PIDGE_MCP_CUSTOM_DOMAIN: ${{ vars.PIDGE_MCP_CUSTOM_DOMAIN }}
           PIDGE_MCP_CUTOVER: ${{ vars.PIDGE_MCP_CUTOVER }}
 
       - name: Smoke test
         shell: bash
+        env:
+          URL: ${{ steps.deploy.outputs.url }}
         run: |
           set -euo pipefail
-          url="${{ steps.deploy.outputs.url }}"
+          url="$URL"
           echo "Smoke testing $url"
 
-          health="$(curl -fsS "$url/healthz")"
+          curl_retry=(--retry 5 --retry-delay 5 --retry-all-errors --max-time 30)
+
+          health="$(curl -fsS "${curl_retry[@]}" "$url/healthz")"
           if [[ "$health" != "ok" ]]; then
             echo "error: /healthz returned '$health', expected 'ok'" >&2
             exit 1
           fi
 
-          issuer="$(curl -fsS "$url/.well-known/oauth-authorization-server" | jq -r '.issuer // empty')"
-          if [[ -z "$issuer" ]]; then
-            echo "error: discovery document is missing an issuer" >&2
+          as_metadata="$(curl -fsS "${curl_retry[@]}" "$url/.well-known/oauth-authorization-server")"
+          issuer="$(jq -r '.issuer // empty' <<<"$as_metadata")"
+          if [[ "$issuer" != "$url" ]]; then
+            echo "error: discovery issuer '$issuer' does not match the deployed URL '$url'" >&2
             exit 1
           fi
 
-          status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$url/mcp")"
+          resource_metadata="$(curl -fsS "${curl_retry[@]}" "$url/.well-known/oauth-protected-resource")"
+          resource="$(jq -r '.resource // empty' <<<"$resource_metadata")"
+          if [[ "$resource" != "$url/mcp" ]]; then
+            echo "error: protected-resource metadata resource '$resource' does not match '$url/mcp'" >&2
+            exit 1
+          fi
+
+          status="$(curl -s -o /dev/null -w '%{http_code}' "${curl_retry[@]}" -X POST "$url/mcp")"
           if [[ "$status" != "401" ]]; then
             echo "error: POST $url/mcp without a bearer token returned $status, expected 401" >&2
             exit 1
           fi
 
-          echo "Smoke test passed: healthz ok, issuer=$issuer, unauthenticated /mcp -> 401"
+          echo "Smoke test passed: healthz ok, issuer=$issuer, resource=$resource, unauthenticated /mcp -> 401"

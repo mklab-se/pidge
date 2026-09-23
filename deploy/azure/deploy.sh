@@ -17,6 +17,11 @@
 #   4. Register the server's OAuth callback(s) on the pidge Entra app. With a
 #      custom domain this only ever prints the command — it touches
 #      production auth config for a domain cutover, so a human runs it.
+#      Skipped entirely with --skip-entra: the read of the Entra app
+#      (needed even to detect what's already registered) requires
+#      Microsoft Graph directory-read rights a CI deploy identity should
+#      not hold, so --skip-entra must avoid touching Graph at all rather
+#      than just skipping the write.
 #
 # Requires: az CLI logged in to the subscription that owns the resource group.
 set -euo pipefail
@@ -137,7 +142,7 @@ bind_custom_domain_certificate() {
   existing_cert="$(az containerapp env certificate list \
     --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_ENV" \
     --managed-certificates-only \
-    --query "[?name=='pidge-mcp-managed']" -o json)"
+    --query "[?name=='pidge-mcp-managed']" -o json 2>/dev/null || true)"
 
   if [[ "$(jq 'length' <<<"$existing_cert")" == "0" ]]; then
     log "Phase 3b: creating managed certificate pidge-mcp-managed for $CUSTOM_DOMAIN"
@@ -156,7 +161,7 @@ bind_custom_domain_certificate() {
     state="$(az containerapp env certificate list \
       --resource-group "$RESOURCE_GROUP" --name "$CONTAINER_ENV" \
       --managed-certificates-only \
-      --query "[?name=='pidge-mcp-managed'].properties.provisioningState | [0]" -o tsv)"
+      --query "[?name=='pidge-mcp-managed'].properties.provisioningState | [0]" -o tsv 2>/dev/null || true)"
     [[ "$state" == "Succeeded" ]] && break
     sleep 20
     waited=$((waited + 20))
@@ -187,37 +192,37 @@ PHASE3="$(az deployment group create \
 PUBLIC_URL="$(jq -r .publicUrl.value <<<"$PHASE3")"
 APP_FQDN="$(jq -r .appFqdn.value <<<"$PHASE3")"
 
-log "Phase 4: Entra callback registration"
-CURRENT="$(az ad app show --id "$ENTRA_APP_ID" --query 'publicClient.redirectUris' -o json)"
-
-REQUIRED_CALLBACKS=("https://$APP_FQDN/callback")
-if [[ -n "$CUSTOM_DOMAIN" ]]; then
-  REQUIRED_CALLBACKS+=("https://$CUSTOM_DOMAIN/callback")
-fi
-
-MISSING=()
-for cb in "${REQUIRED_CALLBACKS[@]}"; do
-  if ! jq -e --arg u "$cb" 'index($u)' <<<"$CURRENT" >/dev/null; then
-    MISSING+=("$cb")
-  fi
-done
-
-if [[ ${#MISSING[@]} -eq 0 ]]; then
-  log "Phase 4: all required redirect URIs already registered on Entra app $ENTRA_APP_ID"
-elif [[ -n "$CUSTOM_DOMAIN" ]]; then
-  log "Phase 4: custom domain callback missing. Register it yourself (needs app-owner rights), keeping every existing redirect URI:"
-  # shellcheck disable=SC2046
-  echo "  az ad app update --id $ENTRA_APP_ID --public-client-redirect-uris $(jq -r '.[]' <<<"$CURRENT" | tr '\n' ' ')${MISSING[*]}"
-elif [[ "$SKIP_ENTRA" == true ]]; then
-  log "Phase 4 skipped. Register the callback yourself (needs app-owner rights):"
-  # shellcheck disable=SC2046
-  echo "  az ad app update --id $ENTRA_APP_ID --public-client-redirect-uris $(jq -r '.[]' <<<"$CURRENT" | tr '\n' ' ')${MISSING[*]}"
+if [[ "$SKIP_ENTRA" == true ]]; then
+  log "Phase 4 skipped (--skip-entra)"
 else
-  log "Phase 4: adding ${MISSING[*]} as redirect URI(s) on Entra app $ENTRA_APP_ID"
-  # shellcheck disable=SC2046
-  az ad app update --id "$ENTRA_APP_ID" \
-    --public-client-redirect-uris $(jq -r '.[]' <<<"$CURRENT") "${MISSING[@]}" >/dev/null
-  log "Redirect URI(s) added"
+  log "Phase 4: Entra callback registration"
+  CURRENT="$(az ad app show --id "$ENTRA_APP_ID" --query 'publicClient.redirectUris' -o json)"
+
+  REQUIRED_CALLBACKS=("https://$APP_FQDN/callback")
+  if [[ -n "$CUSTOM_DOMAIN" ]]; then
+    REQUIRED_CALLBACKS+=("https://$CUSTOM_DOMAIN/callback")
+  fi
+
+  MISSING=()
+  for cb in "${REQUIRED_CALLBACKS[@]}"; do
+    if ! jq -e --arg u "$cb" 'index($u)' <<<"$CURRENT" >/dev/null; then
+      MISSING+=("$cb")
+    fi
+  done
+
+  if [[ ${#MISSING[@]} -eq 0 ]]; then
+    log "Phase 4: all required redirect URIs already registered on Entra app $ENTRA_APP_ID"
+  elif [[ -n "$CUSTOM_DOMAIN" ]]; then
+    log "Phase 4: custom domain callback missing. Register it yourself (needs app-owner rights), keeping every existing redirect URI:"
+    # shellcheck disable=SC2046
+    echo "  az ad app update --id $ENTRA_APP_ID --public-client-redirect-uris $(jq -r '.[]' <<<"$CURRENT" | tr '\n' ' ')${MISSING[*]}"
+  else
+    log "Phase 4: adding ${MISSING[*]} as redirect URI(s) on Entra app $ENTRA_APP_ID"
+    # shellcheck disable=SC2046
+    az ad app update --id "$ENTRA_APP_ID" \
+      --public-client-redirect-uris $(jq -r '.[]' <<<"$CURRENT") "${MISSING[@]}" >/dev/null
+    log "Redirect URI(s) added"
+  fi
 fi
 
 cat <<SUMMARY

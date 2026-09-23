@@ -74,20 +74,30 @@ by hand.
 
 ## CI/CD
 
-`.github/workflows/deploy-mcp.yml` redeploys `pidge-mcp` automatically on
-every push to `main` that touches `crates/pidge-mcp`, `crates/pidge-client`,
-`crates/pidge-core`, `deploy/azure`, `Cargo.toml`, `Cargo.lock`, or the
-workflow file itself. It can also be run manually from the Actions tab
-(`workflow_dispatch`). Runs are serialized: a `deploy-mcp` concurrency group
-with `cancel-in-progress: false` means a second push queues behind a
-deploy already in progress rather than racing or cancelling it.
+`.github/workflows/deploy-mcp.yml` redeploys `pidge-mcp` whenever CI (the
+`CI` workflow) finishes successfully on `main` — every green CI run on
+`main` deploys, not every push, so a commit that compiles but fails tests or
+clippy is never deployed. It checks out the commit CI just tested
+(`github.event.workflow_run.head_sha`) and tags the image with that SHA. It
+can also be run manually from the Actions tab (`workflow_dispatch`), which
+deploys the checked-out branch's current commit — useful for a redeploy
+that doesn't need a new commit, e.g. after rotating
+`PIDGE_MCP_ALLOWED_EMAILS` (see below). Runs are serialized: a `deploy-mcp`
+concurrency group with `cancel-in-progress: false` means a second trigger
+queues behind a deploy already in progress rather than racing or
+cancelling it.
 
 The workflow authenticates to Azure via GitHub's OIDC federation — no Azure
 credential is stored in GitHub. It runs
-`deploy/azure/deploy.sh --skip-entra --skip-certificate` with `IMAGE_TAG` set
-to the commit SHA, then smoke-tests the result: `/healthz` must return `ok`,
-`/.well-known/oauth-authorization-server` must include an `issuer`, and an
-unauthenticated `POST /mcp` must return 401. `--skip-entra` is safe because
+`deploy/azure/deploy.sh --skip-entra --skip-certificate`, then smoke-tests
+the result: `/healthz` must return `ok`, the issuer in
+`/.well-known/oauth-authorization-server` must equal the deployed URL, the
+`resource` in `/.well-known/oauth-protected-resource` must equal
+`<url>/mcp`, and an unauthenticated `POST /mcp` must return 401 — each check
+retries a few times to ride out a cold start. `--skip-entra` always skips
+Phase 4 (Entra callback registration) entirely: the deploy identity has no
+Microsoft Graph directory-read rights, which even reading the app's
+existing redirect URIs requires, so CI must not touch that step at all, and
 the callback URI is registered once, by hand, during the initial deploy.
 `--skip-certificate` asserts the custom domain (if any) already has a
 `SniEnabled` certificate binding instead of trying to provision one from CI —
@@ -106,8 +116,11 @@ by hand, from a workstation logged in with both `az login` and
 PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y deploy/azure/setup-github-oidc.sh
 ```
 
-It's idempotent — re-running it after partial setup or to rotate the
-allowlist is safe. It creates, if missing:
+It's idempotent — re-running it after partial setup, or to rotate the
+allowlist, is safe. Rotating the allowlist only updates the GitHub secret;
+it takes effect on the *next* deploy, so trigger one afterwards with
+`workflow_dispatch` if you're not already about to push. It creates, if
+missing:
 
 - A user-assigned managed identity, `id-pidge-deploy`, in the resource
   group.
@@ -120,7 +133,11 @@ allowlist is safe. It creates, if missing:
   `Contributor` (to deploy the Bicep template and build images) and
   `Role Based Access Control Administrator` (because the Bicep template
   itself creates role assignments, e.g. ACR pull and Key Vault Secrets
-  Officer, for the app's own identity).
+  Officer, for the app's own identity) — conditioned so it can only
+  assign or remove those same two roles (AcrPull, Key Vault Secrets
+  Officer), never anything broader like Owner. Re-running the script
+  replaces an older, unconditioned assignment from before this condition
+  existed.
 
 It then always sets the GitHub repository configuration the workflow reads:
 
