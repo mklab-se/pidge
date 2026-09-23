@@ -11,11 +11,12 @@
 //! - File: `${XDG_CONFIG_HOME:-~/.config}/pidge/mcp/<host>.json`, where
 //!   `<host>` is `host[:port]` with `:` replaced by `_` (mode 0600 on Unix).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use pidge_core::TokenStorage;
 
 use super::{McpTokens, normalize_origin};
+use crate::auth::file_store::write_private;
 use crate::error::ClientError;
 
 const SERVICE_NAME: &str = "pidge-mcp";
@@ -83,10 +84,7 @@ impl McpTokenStore {
     // --- file -----------------------------------------------------------
 
     fn dir() -> Result<PathBuf, ClientError> {
-        let dir = dirs::config_dir()
-            .ok_or(ClientError::NoConfigDir)?
-            .join("pidge")
-            .join("mcp");
+        let dir = crate::base_config_dir()?.join("pidge").join("mcp");
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
     }
@@ -124,64 +122,15 @@ impl McpTokenStore {
     }
 }
 
-#[cfg(unix)]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    f.write_all(contents.as_bytes())?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents)
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use chrono::{Duration, Utc};
 
     use super::*;
 
-    // File-backend tests mutate process-wide env vars (HOME / XDG_CONFIG_HOME)
-    // to point `dirs::config_dir()` at a tempdir, same approach as
-    // `auth::file_store`'s tests — they must serialize themselves.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     fn with_temp_config_dir<F: FnOnce()>(f: F) {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
-        let prev_home = std::env::var_os("HOME");
-        // SAFETY: serialized by ENV_LOCK above; both vars are restored before
-        // the guard drops.
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            std::env::set_var("HOME", tmp.path());
-        }
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
-        }
+        crate::test_support::with_base_dir(tmp.path(), f);
     }
 
     fn fake_tokens(server: &str) -> McpTokens {

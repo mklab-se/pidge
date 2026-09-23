@@ -32,17 +32,25 @@ use crate::error::ClientError;
 
 /// A signed-in session against one pidge MCP server.
 ///
-/// `server` is the MCP endpoint URL (e.g. `https://mcp.example.com/mcp`) —
-/// it doubles as the `resource` parameter on every authorize/token call and
-/// as the key [`McpTokenStore`] persists under. `client_id` is the JWT the
-/// server's dynamic-client-registration endpoint issued; it's re-sent on
-/// every refresh grant since the server is a public (secret-less) client
+/// `server` is the canonical MCP resource URL (`Discovery::resource` at the
+/// time of sign-in/refresh, e.g. `https://mcp.example.com/mcp`) — it doubles
+/// as the `resource` parameter on every authorize/token/refresh call and as
+/// the key [`McpTokenStore`] persists under. It's the value to pass back in
+/// as `mcp_url` to [`oauth::valid_access_token`] and as the URL
+/// [`rpc::McpRpc`] posts to. `client_id` is the JWT the server's
+/// dynamic-client-registration endpoint issued; it's re-sent on every
+/// refresh grant since the server is a public (secret-less) client
 /// registry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpTokens {
     pub server: String,
+    /// Bearer token sent as `Authorization: Bearer <access_token>` on `/mcp`
+    /// calls (see [`rpc::McpRpc`]).
     pub access_token: String,
+    /// Redeemed for a new access/refresh pair via [`oauth::refresh`] once
+    /// `access_token` is within 60 seconds of `expires_at`.
     pub refresh_token: String,
+    /// When `access_token` expires; see [`Self::needs_refresh`].
     pub expires_at: DateTime<Utc>,
     pub client_id: String,
 }
@@ -52,6 +60,22 @@ impl McpTokens {
     /// expired). Mirrors `auth::TokenSet::needs_refresh`.
     pub fn needs_refresh(&self) -> bool {
         Utc::now() + Duration::seconds(60) >= self.expires_at
+    }
+}
+
+/// Hand-written so `access_token`/`refresh_token` are never printed by an
+/// incidental `{:?}` — this struct is `pub` and handled by the CLI, so a
+/// stray debug print (a log line, a test failure message, …) shouldn't leak
+/// bearer credentials.
+impl std::fmt::Debug for McpTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpTokens")
+            .field("server", &self.server)
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("client_id", &self.client_id)
+            .finish()
     }
 }
 
@@ -71,4 +95,29 @@ pub(crate) fn normalize_origin(server_url: &str) -> Result<String, ClientError> 
         });
     }
     Ok(url.origin().ascii_serialization())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_both_tokens() {
+        let tokens = McpTokens {
+            server: "https://mcp.example.com/mcp".into(),
+            access_token: "super-secret-access".into(),
+            refresh_token: "super-secret-refresh".into(),
+            expires_at: Utc::now(),
+            client_id: "client-jwt".into(),
+        };
+
+        let debug = format!("{tokens:?}");
+
+        assert!(!debug.contains("super-secret-access"));
+        assert!(!debug.contains("super-secret-refresh"));
+        assert!(debug.contains("<redacted>"));
+        // Non-secret fields still show up, so a debug print stays useful.
+        assert!(debug.contains("mcp.example.com"));
+        assert!(debug.contains("client-jwt"));
+    }
 }

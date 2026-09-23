@@ -38,9 +38,15 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 #[derive(Debug, Clone)]
 pub struct Discovery {
     /// The canonical `resource` identifier the protected-resource metadata
-    /// advertised (normally the MCP endpoint URL itself).
+    /// advertised (normally the MCP endpoint URL itself). This is what must
+    /// be sent back as the `resource` parameter on `/authorize` and
+    /// `/token` — the server compares it verbatim (modulo a trailing
+    /// slash), so using the user-typed URL instead can fail with
+    /// `invalid_target` if it isn't already in exactly this form.
     pub resource: String,
+    /// Where to send the user to authorize (PKCE `/authorize`).
     pub authorization_endpoint: String,
+    /// Where to redeem an authorization code or refresh token for tokens.
     pub token_endpoint: String,
     /// `None` if the server doesn't support RFC 7591 dynamic client
     /// registration — [`register`] fails with a clear error in that case.
@@ -70,6 +76,11 @@ struct AuthorizationServerMetadata {
 /// back to the bare `<origin>/.well-known/oauth-protected-resource`. Then
 /// fetches `<authorization_server>/.well-known/oauth-authorization-server`
 /// for the actual endpoints.
+///
+/// This assumes pidge's own layout: the MCP endpoint lives at the origin's
+/// root (`/mcp`, with no additional path prefix), and both well-known
+/// metadata documents are fetched relative to that origin rather than to
+/// `mcp_url`'s full path.
 pub async fn discover(http: &reqwest::Client, mcp_url: &str) -> Result<Discovery, ClientError> {
     let origin = super::normalize_origin(mcp_url)?;
     let suffixed = format!("{origin}/.well-known/oauth-protected-resource/mcp");
@@ -198,14 +209,14 @@ pub async fn sign_in<F: FnOnce(&str)>(
         &redirect_uri,
         &challenge,
         &state,
-        mcp_url,
+        &discovery.resource,
     )?;
     on_open(&authorize_url);
 
     let CallbackParams {
         code,
         state: returned_state,
-    } = wait_for_callback(listener, CALLBACK_TIMEOUT).await?;
+    } = wait_for_callback(listener, CALLBACK_TIMEOUT, "MCP sign-in").await?;
     if returned_state != state {
         return Err(ClientError::Graph {
             status: 400,
@@ -220,7 +231,7 @@ pub async fn sign_in<F: FnOnce(&str)>(
         &code,
         &verifier,
         &redirect_uri,
-        mcp_url,
+        &discovery.resource,
     )
     .await
 }
@@ -305,8 +316,11 @@ async fn exchange_code(
 
 /// Redeem `current`'s refresh token for a new access/refresh pair.
 ///
-/// Errors with `ClientError::SessionExpired { email: current.server }` if the
-/// server rejects the refresh token as `invalid_grant` (revoked or expired).
+/// Errors with `ClientError::SessionExpired { email: current.server }` if
+/// the server rejects the request as `invalid_grant` (the refresh token
+/// itself is revoked or expired) or `invalid_client` (the server no longer
+/// recognises `current.client_id`, e.g. after a signing-key rotation) —
+/// both require the same fix from the user: sign in again.
 pub async fn refresh(
     http: &reqwest::Client,
     discovery: &Discovery,
@@ -332,7 +346,7 @@ pub async fn refresh(
                 status: status.as_u16(),
                 message: String::from_utf8_lossy(&bytes).into_owned(),
             })?;
-        if err.error == "invalid_grant" {
+        if matches!(err.error.as_str(), "invalid_grant" | "invalid_client") {
             return Err(ClientError::SessionExpired {
                 email: current.server.clone(),
             });
@@ -357,6 +371,10 @@ pub async fn refresh(
 
 /// Return a valid access token for `tokens`, refreshing in place if it's
 /// within 60 seconds of expiring (or already expired).
+///
+/// Pass `tokens.server` as `mcp_url` — it's already the canonical resource
+/// URL from the sign-in that produced `tokens`, so re-discovery lands on the
+/// same authorization server.
 ///
 /// Discovery is re-run on every refresh since this is a low-frequency path
 /// (tokens are typically valid for the better part of an hour) and it saves
@@ -612,6 +630,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_maps_invalid_client_to_session_expired() {
+        // A server that no longer recognises the client id (e.g. after a
+        // signing-key rotation) needs the same fix as a revoked refresh
+        // token: sign in again.
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "error": "invalid_client",
+                "error_description": "unknown client"
+            })))
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let discovery = discovery_for(&server);
+        let tokens = sample_tokens(&server);
+
+        let err = refresh(&http, &discovery, &tokens).await.unwrap_err();
+        match err {
+            ClientError::SessionExpired { email } => assert_eq!(email, tokens.server),
+            other => panic!("expected SessionExpired, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn fresh_token_skips_the_network_entirely() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -630,5 +674,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(access, "OLD_AT");
+    }
+
+    #[test]
+    fn build_authorize_url_contains_every_query_pair() {
+        let url = build_authorize_url(
+            "https://mcp.example.com/authorize",
+            "client-id-here",
+            "http://localhost:54321",
+            "challenge-here",
+            "state-here",
+            "https://mcp.example.com/mcp",
+        )
+        .unwrap();
+
+        assert!(url.starts_with("https://mcp.example.com/authorize?"));
+        assert!(url.contains("response_type=code"));
+        assert!(url.contains("client_id=client-id-here"));
+        // redirect_uri is percent-encoded inside the query string.
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A54321"));
+        assert!(url.contains("state=state-here"));
+        assert!(url.contains("code_challenge=challenge-here"));
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("resource=https%3A%2F%2Fmcp.example.com%2Fmcp"));
+    }
+
+    fn query_param(url: &str, key: &str) -> Option<String> {
+        Url::parse(url)
+            .ok()?
+            .query_pairs()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.into_owned())
+    }
+
+    #[tokio::test]
+    async fn sign_in_reports_state_mismatch_when_callback_state_is_wrong() {
+        let server = MockServer::start().await;
+        mount_protected_resource(&server, true).await;
+        mount_as_metadata(&server, Some(&format!("{}/register", server.uri()))).await;
+        Mock::given(method("POST"))
+            .and(path("/register"))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({"client_id": "cid-1"})),
+            )
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        let result = sign_in(&http, &format!("{}/mcp", server.uri()), "pidge", |url| {
+            // Simulate the browser hitting our own callback, but with the
+            // WRONG state — as if the link were replayed or forged.
+            let redirect_uri =
+                query_param(url, "redirect_uri").expect("redirect_uri present in authorize URL");
+            let callback_url = format!("{redirect_uri}/?code=ignored-code&state=totally-wrong");
+            tokio::spawn(async move {
+                let _ = reqwest::Client::new().get(&callback_url).send().await;
+            });
+        })
+        .await;
+
+        match result {
+            Err(ClientError::Graph { status, message }) => {
+                assert_eq!(status, 400);
+                assert!(message.contains("state mismatch"), "{message}");
+            }
+            other => panic!("expected a state-mismatch Graph error, got {other:?}"),
+        }
     }
 }

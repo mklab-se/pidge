@@ -20,11 +20,15 @@ const SESSION_HEADER: &str = "Mcp-Session-Id";
 const PROTOCOL_HEADER: &str = "MCP-Protocol-Version";
 
 /// The text content of a `tools/call` response, with content blocks
-/// concatenated. `is_error` mirrors the JSON-RPC result's `isError` flag —
-/// tool errors come back as a normal (non-JSON-RPC-error) result with this
-/// set, per the MCP spec.
+/// concatenated.
+#[derive(Debug, Clone)]
 pub struct ToolResult {
+    /// The concatenated text of every `type: "text"` content block, in
+    /// order, with no separator between blocks.
     pub text: String,
+    /// The JSON-RPC result's `isError` flag — a tool-level failure reported
+    /// as a normal result rather than a JSON-RPC `error` response, per the
+    /// MCP spec.
     pub is_error: bool,
 }
 
@@ -119,7 +123,7 @@ impl McpRpc {
         self.next_id += 1;
         let body = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
 
-        let (session_id, value) = self.send(&body).await?;
+        let (session_id, value) = self.send(&body, Some(id)).await?;
         if session_id.is_some() {
             self.session_id = session_id;
         }
@@ -144,7 +148,7 @@ impl McpRpc {
     /// Send a JSON-RPC notification (no `id`, no response body expected).
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), ClientError> {
         let body = json!({"jsonrpc": "2.0", "method": method, "params": params});
-        let (session_id, _) = self.send(&body).await?;
+        let (session_id, _) = self.send(&body, None).await?;
         if session_id.is_some() {
             self.session_id = session_id;
         }
@@ -152,9 +156,18 @@ impl McpRpc {
     }
 
     /// POST one JSON-RPC frame and parse whatever comes back — JSON or SSE.
-    /// Returns the server's `Mcp-Session-Id` (if present) and the decoded
-    /// JSON-RPC message (if the body wasn't empty, as for notifications).
-    async fn send(&self, body: &Value) -> Result<(Option<String>, Option<Value>), ClientError> {
+    /// `expected_id` is the id of the request we sent (`None` for a
+    /// notification); for an SSE body it picks out the one event that is
+    /// our actual response among any the server also chose to interleave
+    /// (progress notifications, server-initiated requests, …) in the same
+    /// stream. Returns the server's `Mcp-Session-Id` (if present) and the
+    /// decoded JSON-RPC message (if the body wasn't empty, as for
+    /// notifications).
+    async fn send(
+        &self,
+        body: &Value,
+        expected_id: Option<u64>,
+    ) -> Result<(Option<String>, Option<Value>), ClientError> {
         let mut req = self
             .http
             .post(&self.mcp_url)
@@ -194,7 +207,7 @@ impl McpRpc {
 
         let text = String::from_utf8_lossy(&bytes);
         let value = if content_type.contains("text/event-stream") {
-            parse_sse_last_data(&text)?
+            select_sse_response(&text, expected_id)
         } else {
             Some(serde_json::from_str(&text)?)
         };
@@ -206,22 +219,58 @@ fn header_to_str(v: &HeaderValue) -> Option<&str> {
     v.to_str().ok()
 }
 
-/// Parse an SSE body and return the JSON-decoded payload of its last `data:`
-/// line — the Streamable HTTP transport sends one event per JSON-RPC
-/// message, and a single request yields exactly one response event.
-fn parse_sse_last_data(text: &str) -> Result<Option<Value>, ClientError> {
-    let mut last = None;
+/// Split an SSE body into its individual events. Lines are grouped on blank
+/// lines (the SSE event boundary); a `data:` field that spans several lines
+/// is reassembled by joining them with `"\n"`, per the SSE spec. Only the
+/// `data:` field is used — `event:`, `id:`, `retry:` and comment lines are
+/// ignored, since the Streamable HTTP transport only needs the JSON-RPC
+/// payload. An event whose joined `data:` doesn't parse as JSON is silently
+/// dropped rather than failing the whole body.
+fn parse_sse_events(text: &str) -> Vec<Value> {
+    let mut events = Vec::new();
+    let mut data_lines: Vec<&str> = Vec::new();
+
+    let flush = |data_lines: &mut Vec<&str>, events: &mut Vec<Value>| {
+        if data_lines.is_empty() {
+            return;
+        }
+        let payload = data_lines.join("\n");
+        data_lines.clear();
+        if let Ok(value) = serde_json::from_str::<Value>(&payload) {
+            events.push(value);
+        }
+    };
+
     for line in text.lines() {
-        let Some(data) = line.strip_prefix("data:") else {
-            continue;
-        };
-        let data = data.trim();
-        if data.is_empty() {
+        if line.is_empty() {
+            flush(&mut data_lines, &mut events);
             continue;
         }
-        last = Some(serde_json::from_str(data)?);
+        if let Some(data) = line.strip_prefix("data:") {
+            data_lines.push(data.strip_prefix(' ').unwrap_or(data));
+        }
     }
-    Ok(last)
+    flush(&mut data_lines, &mut events);
+
+    events
+}
+
+/// Pick the event that is our actual JSON-RPC response out of an SSE body.
+///
+/// With `expected_id`, selects the event whose top-level `id` matches — the
+/// Streamable HTTP transport can interleave server notifications (no `id`)
+/// or server-initiated requests (a different `id`) into the same stream
+/// before or after our response. Without an expected id (we sent a
+/// notification), there's nothing to match against, so this falls back to
+/// the last event, matching the common case of a single-event stream.
+fn select_sse_response(text: &str, expected_id: Option<u64>) -> Option<Value> {
+    let events = parse_sse_events(text);
+    match expected_id {
+        Some(id) => events
+            .into_iter()
+            .find(|event| event.get("id").and_then(Value::as_u64) == Some(id)),
+        None => events.into_iter().next_back(),
+    }
 }
 
 #[cfg(test)]
@@ -330,5 +379,59 @@ mod tests {
                 .and_then(|v| v.to_str().ok())
                 == Some(expected)
         }
+    }
+
+    #[test]
+    fn parse_sse_events_joins_multiline_data_and_skips_unparsable() {
+        // A multi-line `data:` field is reassembled by joining with "\n" —
+        // `{"a":\n1}` is still valid JSON, so this also proves the join
+        // happened rather than each line being parsed on its own.
+        let text = "data: {\"a\":\ndata: 1}\n\ndata: not json\n\ndata: {\"b\":2}\n\n";
+
+        let events = parse_sse_events(text);
+
+        assert_eq!(events, vec![json!({"a": 1}), json!({"b": 2})]);
+    }
+
+    #[tokio::test]
+    async fn call_tool_selects_the_response_matching_the_request_id_amid_other_sse_events() {
+        // The stream carries a server notification (no `id`) before our
+        // response and a server-initiated request (a different `id`) after
+        // it — the client must pick out only the event matching the id it
+        // sent, not just take the last event in the stream.
+        let sse_body = concat!(
+            "event: message\n",
+            "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n",
+            "\n",
+            "event: message\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":",
+            "[{\"type\":\"text\",\"text\":\"picked\"}],\"isError\":false}}\n",
+            "\n",
+            "event: message\n",
+            "data: {\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"sampling/createMessage\",",
+            "\"params\":{}}\n",
+            "\n",
+        );
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header(CONTENT_TYPE.as_str(), "text/event-stream")
+                    .set_body_raw(sse_body, "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let http = reqwest::Client::new();
+        // A fresh McpRpc's first call sends id 1, matching the response
+        // event above (and not the notification or the id-99 event).
+        let mut rpc = McpRpc::new(http, format!("{}/mcp", server.uri()), "AT");
+        let result = rpc
+            .call_tool("inbox_latest", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.text, "picked");
     }
 }

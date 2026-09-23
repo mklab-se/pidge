@@ -18,10 +18,7 @@ pub struct FileStore;
 
 impl FileStore {
     fn dir() -> Result<PathBuf, ClientError> {
-        let dir = dirs::config_dir()
-            .ok_or(ClientError::NoConfigDir)?
-            .join("pidge")
-            .join("tokens");
+        let dir = crate::base_config_dir()?.join("pidge").join("tokens");
         std::fs::create_dir_all(&dir)?;
         Ok(dir)
     }
@@ -77,10 +74,13 @@ fn safe_filename(email: &str) -> String {
     s
 }
 
+/// Write `contents` to `path`, creating it if necessary, with mode 0600 on
+/// Unix (a no-op permissions-wise on other platforms — we rely on the
+/// default ACL there). Shared by [`FileStore`] and `crate::mcp::store`.
 #[cfg(unix)]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let mut f = std::fs::OpenOptions::new()
         .write(true)
@@ -88,12 +88,18 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
         .truncate(true)
         .mode(0o600)
         .open(path)?;
+    // `.mode(0o600)` only takes effect when the file is newly created (per
+    // `open(2)`'s handling of the mode argument). Tighten permissions
+    // explicitly so a pre-existing file with looser permissions — left over
+    // from before this hardening, or created some other way — gets locked
+    // down too, not just newly-created ones.
+    f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     f.write_all(contents.as_bytes())?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     std::fs::write(path, contents)
 }
 
@@ -101,40 +107,10 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
-    use std::sync::Mutex;
-
-    // Tests in this module mutate process-wide env vars (HOME / XDG_CONFIG_HOME)
-    // so that FileStore::dir() points at a temp directory. They must serialize
-    // themselves — cargo's default parallel-test execution would otherwise race
-    // on the env vars and either leak temp paths between tests or pick up the
-    // wrong directory mid-save.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_temp_config_dir<F: FnOnce(&std::path::Path)>(f: F) {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
-        let prev_home = std::env::var_os("HOME");
-        // SAFETY: serialized by ENV_LOCK above; we restore both vars before
-        // dropping the guard.
-        unsafe {
-            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
-            std::env::set_var("HOME", tmp.path());
-        }
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
-        unsafe {
-            match prev_xdg {
-                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-                None => std::env::remove_var("XDG_CONFIG_HOME"),
-            }
-            match prev_home {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
-        if let Err(payload) = result {
-            std::panic::resume_unwind(payload);
-        }
+        crate::test_support::with_base_dir(tmp.path(), || f(tmp.path()));
     }
 
     fn fake_tokens() -> TokenSet {
@@ -185,6 +161,26 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "tokens file must be user-only readable");
             FileStore::delete(email).unwrap();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_tightens_pre_existing_looser_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        with_temp_config_dir(|_| {
+            let path = FileStore::path_for("loose@example.com").unwrap();
+            std::fs::write(&path, "stale").unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+            write_private(&path, "{}").unwrap();
+
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "write_private must tighten a pre-existing file's permissions, not just set them on create"
+            );
         });
     }
 }

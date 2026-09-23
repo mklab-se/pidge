@@ -95,7 +95,7 @@ pub async fn run<F: FnOnce(&str)>(
     let CallbackParams {
         code,
         state: returned_state,
-    } = wait_for_callback(listener, Duration::from_secs(300)).await?;
+    } = wait_for_callback(listener, Duration::from_secs(300), "Microsoft sign-in").await?;
     if returned_state != state {
         return Err(ClientError::Graph {
             status: 400,
@@ -180,29 +180,43 @@ pub(crate) struct CallbackParams {
 /// Accept a single connection on the listener, parse the request line for
 /// query parameters, write a success/error response, close. Single-shot.
 ///
-/// `timeout` bounds how long we'll wait for the browser to hit the callback.
-/// The Microsoft flow uses 5 minutes (matching Microsoft's own OAuth code
-/// TTL); the MCP sign-in flow (see `crate::mcp::oauth`) uses a longer window
-/// since it's a separate, often manually-triggered, sign-in step.
+/// `timeout` bounds how long we'll wait for the browser to hit the callback,
+/// covering both the initial connection *and* the request read that follows
+/// — a client that opens the socket and never sends a request line still
+/// hits the deadline rather than hanging forever. The Microsoft flow uses 5
+/// minutes (matching Microsoft's own OAuth code TTL); the MCP sign-in flow
+/// (see `crate::mcp::oauth`) uses a longer window since it's a separate,
+/// often manually-triggered, sign-in step.
+///
+/// `label` identifies who this callback is for (e.g. `"Microsoft sign-in"`
+/// or `"MCP sign-in"`) — it prefixes the error message when the remote party
+/// reports `error`/`error_description`, so an MCP-server error isn't
+/// misattributed to Microsoft.
 pub(crate) async fn wait_for_callback(
     listener: TcpListener,
     timeout: Duration,
+    label: &str,
 ) -> Result<CallbackParams, ClientError> {
-    let accept = listener.accept();
-    let (mut stream, _) = tokio::time::timeout(timeout, accept)
+    let deadline = tokio::time::Instant::now() + timeout;
+    let timed_out = || ClientError::Graph {
+        status: 408,
+        message: format!(
+            "timed out waiting for browser sign-in ({}s)",
+            timeout.as_secs()
+        ),
+    };
+
+    let (mut stream, _) = tokio::time::timeout_at(deadline, listener.accept())
         .await
-        .map_err(|_| ClientError::Graph {
-            status: 408,
-            message: format!(
-                "timed out waiting for browser sign-in ({}s)",
-                timeout.as_secs()
-            ),
-        })?
+        .map_err(|_| timed_out())?
         .map_err(ClientError::Io)?;
 
     // We only need the first ~1KB to parse the request line "GET /?...".
     let mut buf = [0u8; 2048];
-    let n = stream.read(&mut buf).await.map_err(ClientError::Io)?;
+    let n = tokio::time::timeout_at(deadline, stream.read(&mut buf))
+        .await
+        .map_err(|_| timed_out())?
+        .map_err(ClientError::Io)?;
     let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let first_line = request.lines().next().unwrap_or("");
     let path_and_query =
@@ -242,7 +256,7 @@ pub(crate) async fn wait_for_callback(
             .ok();
         return Err(ClientError::Graph {
             status: 400,
-            message: format!("Microsoft sign-in: {e} — {detail}"),
+            message: format!("{label}: {e} — {detail}"),
         });
     }
 
@@ -295,6 +309,8 @@ p { color: #6e6e73; }
 </body></html>"#;
 
 fn error_page_html(err: &str, description: &str) -> String {
+    let err = html_escape(err);
+    let description = html_escape(description);
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Sign-in failed</title>
 <style>
@@ -313,6 +329,25 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; text-align: center; }}
   <p>You can close this window. Return to the terminal for next steps.</p>
 </body></html>"#
     )
+}
+
+/// Escape the five HTML-significant characters. `err` and `error_description`
+/// are fixed strings from pidge's own server, but the MCP flow (see
+/// `crate::mcp::oauth`) can point this callback at any server the user
+/// configures, so this page must not trust its input to be markup-free.
+fn html_escape(s: &str) -> String {
+    s.chars()
+        .fold(String::with_capacity(s.len()), |mut acc, c| {
+            match c {
+                '&' => acc.push_str("&amp;"),
+                '<' => acc.push_str("&lt;"),
+                '>' => acc.push_str("&gt;"),
+                '"' => acc.push_str("&quot;"),
+                '\'' => acc.push_str("&#39;"),
+                _ => acc.push(c),
+            }
+            acc
+        })
 }
 
 // --- PKCE helpers ----------------------------------------------------------
@@ -428,5 +463,13 @@ mod tests {
         let b = make_random(32);
         assert_ne!(a, b);
         assert_eq!(URL_SAFE_NO_PAD.decode(&a).unwrap().len(), 32);
+    }
+
+    #[test]
+    fn error_page_html_escapes_html_special_characters() {
+        let page = error_page_html("<script>alert(1)</script>", "quote\" apostrophe' amp&");
+        assert!(!page.contains("<script>"));
+        assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(page.contains("quote&quot; apostrophe&#39; amp&amp;"));
     }
 }
