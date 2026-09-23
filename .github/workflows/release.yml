@@ -246,9 +246,12 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/mklab-se/pidge-mcp
+          # flavor: latest=auto only tags `latest` for a non-prerelease semver
+          # match, so a tag like v1.5.0-rc.1 never moves `latest`.
+          flavor: |
+            latest=auto
           tags: |
             type=semver,pattern={{version}}
-            type=raw,value=latest
 
       - name: Build and push
         uses: docker/build-push-action@v6
