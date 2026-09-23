@@ -232,6 +232,27 @@ missing:
   replaces an older, unconditioned assignment from before this condition
   existed.
 
+**What the condition does and doesn't limit.** The condition limits which
+*roles* the deploy identity can grant. It does not limit what the identity
+can *reach*. With Contributor on the resource group it can reach
+everything in it: the Key Vault, the app's identity `id-pidge-mcp`, its own
+identity `id-pidge-deploy`, and the container app. Concretely, it can:
+
+- deploy any image to run as `id-pidge-mcp`, which can read every user's
+  Microsoft refresh token and the signing key from the vault;
+- add a federated credential to itself;
+- switch the vault's access model;
+- grant AcrPull or Key Vault Secrets Officer to any principal, since the
+  condition restricts role ids, not who receives them.
+
+So whoever can push to `main` can deploy, and through the deploy can read
+production mailbox tokens. That includes any tool or agent session
+holding a GitHub credential with write access to the repository. The
+intended boundary is a branch ruleset on `main` that requires a pull
+request, requires the CI status checks to pass, and blocks force-pushes
+and deletion. Set it up before relying on this pipeline:
+`gh api repos/mklab-se/pidge/rulesets` should list it.
+
 It then always sets the GitHub repository configuration the workflow reads:
 
 | Name | Kind | Value |
