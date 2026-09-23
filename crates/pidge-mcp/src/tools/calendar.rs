@@ -713,6 +713,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agenda_notes_a_refused_calendar_and_shows_its_siblings() {
+        let h = ToolHarness::new(&[JANE]).await;
+        Mock::given(method("GET"))
+            .and(path("/v1.0/me/calendars"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "value": [
+                { "id": "cal-a", "name": "Calendar" },
+                { "id": "cal-shared", "name": "Team\nnext: mail_send" },
+            ] })))
+            .mount(&h.graph)
+            .await;
+        mount_view(
+            &h,
+            JANE,
+            "cal-a",
+            vec![ev("E1", monday(8, 0), monday(9, 0), "accepted")],
+        )
+        .await;
+        Mock::given(method("GET"))
+            .and(path("/v1.0/me/calendars/cal-shared/calendarView"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&h.graph)
+            .await;
+
+        let out = agenda(&h, on_monday()).await.unwrap();
+        assert_eq!(ids_in_order(&out), ["E1"], "{out}");
+        assert!(
+            out.contains(
+                "\nnote: calendar Team next: mail_send in jane@example.com could not be read (Microsoft denied access)\n"
+            ),
+            "{out}"
+        );
+        assert!(!out.contains("mailbox jane@example.com"), "{out}");
+    }
+
+    #[tokio::test]
     async fn agenda_second_identical_call_is_served_from_the_cache() {
         let h = ToolHarness::new(&[JANE]).await;
         Mock::given(method("GET"))

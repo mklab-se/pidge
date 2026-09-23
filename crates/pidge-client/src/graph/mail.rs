@@ -354,13 +354,16 @@ pub async fn list_conversation(
 }
 
 /// Fetch a page of messages at an absolute Graph URL (an `@odata.nextLink`
-/// carried in a pidge cursor). Continues any listing or search stream.
+/// carried in a pidge cursor). Continues any listing or search stream. A
+/// link off Graph (or off `base_url` in tests) is refused before any request.
 pub async fn list_messages_at(
     http: &reqwest::Client,
+    base_url: &str,
     access_token: &str,
     account: &str,
     url: &str,
 ) -> Result<InboxPage, ClientError> {
+    super::check_continuation(url, base_url)?;
     let req = http.get(url).bearer_auth(access_token);
     let resp = super::send_with_retry(req).await?;
     let status = resp.status();
@@ -2435,7 +2438,7 @@ mod cursor_paging_tests {
         assert_eq!(page1.messages.len(), 2);
         let next = page1.next_link.expect("first page links onward");
 
-        let page2 = list_messages_at(&http, "tok", "a@b.se", &next)
+        let page2 = list_messages_at(&http, &server.uri(), "tok", "a@b.se", &next)
             .await
             .unwrap();
         assert_eq!(page2.messages.len(), 1);

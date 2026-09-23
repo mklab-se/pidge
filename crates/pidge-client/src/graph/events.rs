@@ -410,13 +410,16 @@ pub(crate) fn event_from_delta_value(
 }
 
 /// Fetch a page of calendar-view events at an absolute Graph URL (an
-/// `@odata.nextLink` carried in a pidge cursor).
+/// `@odata.nextLink` carried in a pidge cursor). A link off Graph (or off
+/// `base_url` in tests) is refused before any request.
 pub async fn list_events_at(
     http: &reqwest::Client,
+    base_url: &str,
     access_token: &str,
     account: &str,
     url: &str,
 ) -> Result<EventsPage, ClientError> {
+    super::check_continuation(url, base_url)?;
     let resp = super::send_with_retry(
         http.get(url)
             .bearer_auth(access_token)

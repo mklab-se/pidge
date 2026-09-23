@@ -89,6 +89,28 @@ pub(crate) async fn send_with_retry(
     }
 }
 
+/// Refuses a continuation link (`@odata.nextLink`) that doesn't lead back to
+/// Microsoft Graph, so a forged or corrupted link can never carry the bearer
+/// token elsewhere. The origin (scheme, host, port) must be
+/// `https://graph.microsoft.com`'s or, for a client built with
+/// [`GraphClient::for_test`], that of its `base_url`.
+pub(crate) fn check_continuation(url: &str, base_url: &str) -> Result<(), ClientError> {
+    let origin = |u: &str| url::Url::parse(u).ok().map(|u| u.origin());
+    let allowed = origin(url).is_some_and(|o| {
+        o.is_tuple()
+            && (Some(&o) == origin(config::GRAPH_BASE).as_ref()
+                || Some(&o) == origin(base_url).as_ref())
+    });
+    if allowed {
+        Ok(())
+    } else {
+        Err(ClientError::Graph {
+            status: 400,
+            message: "refusing to follow a continuation link off graph.microsoft.com".into(),
+        })
+    }
+}
+
 /// Stateful Microsoft Graph client. Holds an AuthClient and a shared HTTP client.
 pub struct GraphClient {
     auth: AuthClient,
@@ -239,7 +261,7 @@ impl GraphClient {
         url: &str,
     ) -> Result<InboxPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
-        list_messages_at(&self.http, &token, account, url).await
+        list_messages_at(&self.http, &self.base_url, &token, account, url).await
     }
 
     pub async fn search_messages(
@@ -657,7 +679,7 @@ impl GraphClient {
         url: &str,
     ) -> Result<EventsPage, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
-        list_events_at(&self.http, &token, account, url).await
+        list_events_at(&self.http, &self.base_url, &token, account, url).await
     }
 
     /// GET /me/events/{id}.
@@ -847,5 +869,77 @@ mod retry_tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), 400);
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const REFUSAL: &str = "refusing to follow a continuation link off graph.microsoft.com";
+
+    fn refused(r: Result<(), ClientError>) -> bool {
+        matches!(r, Err(ClientError::Graph { status: 400, ref message }) if message == REFUSAL)
+    }
+
+    #[test]
+    fn graph_links_are_followed_and_others_refused_in_production() {
+        let base = config::GRAPH_BASE;
+        assert!(
+            check_continuation(
+                "https://graph.microsoft.com/v1.0/me/messages?$skiptoken=x",
+                base
+            )
+            .is_ok()
+        );
+        for url in [
+            "https://evil.example.com/v1.0/me/messages",
+            "http://graph.microsoft.com/v1.0/me/messages",
+            "https://graph.microsoft.com.evil.example.com/v1.0",
+            "https://graph.microsoft.com:8443/v1.0",
+            "not a url",
+        ] {
+            assert!(refused(check_continuation(url, base)), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_test_base_url_allows_its_own_origin_only() {
+        let base = "http://127.0.0.1:4000/v1.0";
+        assert!(check_continuation("http://127.0.0.1:4000/v1.0/page-2", base).is_ok());
+        assert!(refused(check_continuation(
+            "http://127.0.0.1:4001/v1.0/page-2",
+            base
+        )));
+    }
+
+    /// The link points at a second server (same host, other port): both
+    /// helpers refuse it without sending it anything, bearer token included.
+    #[tokio::test]
+    async fn off_graph_next_links_are_refused_without_a_request() {
+        let graph = MockServer::start().await;
+        let other = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "value": []
+            })))
+            .expect(0)
+            .mount(&other)
+            .await;
+        let http = reqwest::Client::new();
+        let base = format!("{}/v1.0", graph.uri());
+        let link = format!("{}/v1.0/page-2", other.uri());
+
+        let Err(err) = events::list_events_at(&http, &base, "tok", "a@b.se", &link).await else {
+            panic!("list_events_at followed an off-Graph link");
+        };
+        assert!(refused(Err(err)));
+        let Err(err) = mail::list_messages_at(&http, &base, "tok", "a@b.se", &link).await else {
+            panic!("list_messages_at followed an off-Graph link");
+        };
+        assert!(refused(Err(err)));
+        assert!(other.received_requests().await.unwrap().is_empty());
     }
 }
