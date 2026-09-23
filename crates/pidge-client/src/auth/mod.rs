@@ -5,7 +5,7 @@ mod backend;
 pub mod browser_flow;
 pub mod config;
 pub mod device_code;
-mod file_store;
+pub(crate) mod file_store;
 mod jwt;
 pub mod refresh;
 mod store;

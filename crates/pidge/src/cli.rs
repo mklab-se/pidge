@@ -85,6 +85,12 @@ pub enum Commands {
         command: AccountCommands,
     },
 
+    /// Manage the connection to a hosted pidge MCP server
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+
     /// Read, search, send, reply, forward, flag, archive, or delete e-mail
     Mail {
         #[command(subcommand)]
@@ -255,6 +261,47 @@ pub enum AccountCommands {
 }
 
 #[derive(clap::Subcommand)]
+pub enum McpCommands {
+    /// Sign in to a hosted pidge MCP server and migrate local accounts to it
+    Connect {
+        /// URL of the hosted MCP server (e.g. https://<host>/mcp)
+        url: String,
+
+        /// Where to store the MCP session tokens (`keychain` = OS-native, `file` = plaintext JSON in pidge's config dir; see docs/mcp.md)
+        #[arg(long, value_enum, default_value_t = StorageBackendArg::Keychain)]
+        store: StorageBackendArg,
+
+        /// Skip interactive prompts; poll each new mailbox until it shows as connected
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Show the current hosted MCP connection status
+    Status {
+        /// URL of the hosted MCP server (e.g. https://<host>/mcp). Omit it if you're only
+        /// connected to one — with several, this lists them and asks you
+        /// to pick.
+        url: Option<String>,
+
+        /// Look in this backend first (the other is still tried);
+        /// defaults to whichever backend the server index says was used
+        #[arg(long, value_enum)]
+        store: Option<StorageBackendArg>,
+    },
+    /// Forget the stored session for a hosted pidge MCP server (local only).
+    /// To revoke sessions on the server, call its `accounts_update` tool
+    /// with `sign_out_everywhere`
+    Logout {
+        /// URL of the hosted MCP server whose stored session to forget
+        url: String,
+
+        /// Look in this backend first (the other is still tried);
+        /// defaults to whichever backend the server index says was used
+        #[arg(long, value_enum)]
+        store: Option<StorageBackendArg>,
+    },
+}
+
+#[derive(clap::Subcommand)]
 pub enum DefaultCommands {
     /// Set the default account used for sending and reading e-mail
     #[command(name = "e-mail")]
@@ -275,7 +322,9 @@ pub enum DefaultCommands {
 pub enum StorageBackendArg {
     /// OS-native credential store (macOS Keychain / Windows Credential Manager / libsecret)
     Keychain,
-    /// Plaintext JSON file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix)
+    /// Plaintext JSON file (mode 0600 on Unix) in pidge's config dir:
+    /// `tokens/<email>.json` for `account add`, `mcp/<host>.json` for
+    /// `mcp connect` (see docs/mcp.md for the per-platform location)
     File,
 }
 
@@ -1308,6 +1357,7 @@ impl Cli {
             Some(Commands::Account { command }) => {
                 crate::commands::account::run(command, self.json).await
             }
+            Some(Commands::Mcp { command }) => crate::commands::mcp::run(command, self.json).await,
             Some(Commands::Mail { command }) => {
                 crate::commands::mail::run(command, self.json).await
             }

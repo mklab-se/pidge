@@ -33,6 +33,16 @@ pub enum ClientError {
     #[error("session expired for {email}. Run `pidge account add` to re-add this account.")]
     SessionExpired { email: String },
 
+    /// A hosted pidge MCP session (`pidge mcp connect` et al.) turned out to
+    /// be unrefreshable. Distinct from [`Self::SessionExpired`], which hints
+    /// at `pidge account add` — the fix for a Microsoft account's own
+    /// session, not a hosted MCP one — so this carries its own message and
+    /// its own `exitcode::classify` arm.
+    #[error(
+        "session expired for the hosted pidge server. Run `pidge mcp connect {server}` to sign in again."
+    )]
+    McpSessionExpired { server: String },
+
     #[error("http: {0}")]
     Http(#[from] reqwest::Error),
 

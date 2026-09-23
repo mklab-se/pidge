@@ -95,7 +95,7 @@ pub async fn run<F: FnOnce(&str)>(
     let CallbackParams {
         code,
         state: returned_state,
-    } = wait_for_callback(listener).await?;
+    } = wait_for_callback(listener, Duration::from_secs(300), "Microsoft sign-in").await?;
     if returned_state != state {
         return Err(ClientError::Graph {
             status: 400,
@@ -172,28 +172,61 @@ pub(crate) fn build_authorize_url(
     url.into()
 }
 
-struct CallbackParams {
-    code: String,
-    state: String,
+pub(crate) struct CallbackParams {
+    pub(crate) code: String,
+    pub(crate) state: String,
 }
 
 /// Accept a single connection on the listener, parse the request line for
 /// query parameters, write a success/error response, close. Single-shot.
-async fn wait_for_callback(listener: TcpListener) -> Result<CallbackParams, ClientError> {
-    // Generous timeout: users might take a minute or two to authenticate,
-    // especially on MFA. 5 minutes matches Microsoft's own OAuth code TTL.
-    let accept = listener.accept();
-    let (mut stream, _) = tokio::time::timeout(Duration::from_secs(300), accept)
+///
+/// `timeout` bounds how long we'll wait for the browser to hit the callback,
+/// covering both the initial connection *and* the request read that follows
+/// — a client that opens the socket and never sends a request line still
+/// hits the deadline rather than hanging forever. The Microsoft flow uses 5
+/// minutes (matching Microsoft's own OAuth code TTL); the MCP sign-in flow
+/// (see `crate::mcp::oauth`) uses a longer window since it's a separate,
+/// often manually-triggered, sign-in step.
+///
+/// `label` identifies who this callback is for (e.g. `"Microsoft sign-in"`
+/// or `"MCP sign-in"`) — it prefixes the error message when the remote party
+/// reports `error`/`error_description`, so an MCP-server error isn't
+/// misattributed to Microsoft.
+/// A timeout for the user to read: whole minutes as "5 min", else seconds.
+fn timeout_label(timeout: Duration) -> String {
+    let secs = timeout.as_secs();
+    if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
+}
+
+pub(crate) async fn wait_for_callback(
+    listener: TcpListener,
+    timeout: Duration,
+    label: &str,
+) -> Result<CallbackParams, ClientError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    let timed_out = || ClientError::Graph {
+        status: 408,
+        message: format!(
+            "timed out waiting for browser sign-in ({})",
+            timeout_label(timeout)
+        ),
+    };
+
+    let (mut stream, _) = tokio::time::timeout_at(deadline, listener.accept())
         .await
-        .map_err(|_| ClientError::Graph {
-            status: 408,
-            message: "timed out waiting for browser sign-in (5 min)".to_string(),
-        })?
+        .map_err(|_| timed_out())?
         .map_err(ClientError::Io)?;
 
     // We only need the first ~1KB to parse the request line "GET /?...".
     let mut buf = [0u8; 2048];
-    let n = stream.read(&mut buf).await.map_err(ClientError::Io)?;
+    let n = tokio::time::timeout_at(deadline, stream.read(&mut buf))
+        .await
+        .map_err(|_| timed_out())?
+        .map_err(ClientError::Io)?;
     let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let first_line = request.lines().next().unwrap_or("");
     let path_and_query =
@@ -233,7 +266,7 @@ async fn wait_for_callback(listener: TcpListener) -> Result<CallbackParams, Clie
             .ok();
         return Err(ClientError::Graph {
             status: 400,
-            message: format!("Microsoft sign-in: {e} — {detail}"),
+            message: format!("{label}: {e} — {detail}"),
         });
     }
 
@@ -286,6 +319,8 @@ p { color: #6e6e73; }
 </body></html>"#;
 
 fn error_page_html(err: &str, description: &str) -> String {
+    let err = html_escape(err);
+    let description = html_escape(description);
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8"><title>Sign-in failed</title>
 <style>
@@ -306,27 +341,46 @@ h1 {{ font-size: 22px; margin: 16px 0 8px; text-align: center; }}
     )
 }
 
+/// Escape the five HTML-significant characters. `err` and `error_description`
+/// are fixed strings from pidge's own server, but the MCP flow (see
+/// `crate::mcp::oauth`) can point this callback at any server the user
+/// configures, so this page must not trust its input to be markup-free.
+fn html_escape(s: &str) -> String {
+    s.chars()
+        .fold(String::with_capacity(s.len()), |mut acc, c| {
+            match c {
+                '&' => acc.push_str("&amp;"),
+                '<' => acc.push_str("&lt;"),
+                '>' => acc.push_str("&gt;"),
+                '"' => acc.push_str("&quot;"),
+                '\'' => acc.push_str("&#39;"),
+                _ => acc.push(c),
+            }
+            acc
+        })
+}
+
 // --- PKCE helpers ----------------------------------------------------------
 
 /// RFC 7636 says the code_verifier is "a high-entropy cryptographic random
 /// STRING, using the unreserved characters … with a minimum length of 43
 /// characters and a maximum length of 128 characters." 64 alphanumerics is
 /// comfortably inside the spec and gives ~380 bits of entropy.
-fn make_code_verifier() -> String {
+pub(crate) fn make_code_verifier() -> String {
     let mut rng = rng();
     (0..64).map(|_| rng.sample(Alphanumeric) as char).collect()
 }
 
 /// `base64url(SHA256(code_verifier))` per RFC 7636 §4.2. URL_SAFE_NO_PAD is
 /// the exact encoding the OAuth spec requires.
-fn make_code_challenge(verifier: &str) -> String {
+pub(crate) fn make_code_challenge(verifier: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(hasher.finalize())
 }
 
 /// 32 bytes of OS random → URL-safe base64. Used for the `state` CSRF nonce.
-fn make_random(byte_len: usize) -> String {
+pub(crate) fn make_random(byte_len: usize) -> String {
     let mut buf = vec![0u8; byte_len];
     rng().fill_bytes(&mut buf);
     URL_SAFE_NO_PAD.encode(&buf)
@@ -375,6 +429,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn timeout_label_uses_minutes_when_whole() {
+        assert_eq!(timeout_label(Duration::from_secs(300)), "5 min");
+        assert_eq!(timeout_label(Duration::from_secs(600)), "10 min");
+        assert_eq!(timeout_label(Duration::from_secs(45)), "45s");
+    }
+
+    #[test]
     fn code_verifier_is_64_alphanumerics() {
         let v = make_code_verifier();
         assert_eq!(v.len(), 64);
@@ -419,5 +480,13 @@ mod tests {
         let b = make_random(32);
         assert_ne!(a, b);
         assert_eq!(URL_SAFE_NO_PAD.decode(&a).unwrap().len(), 32);
+    }
+
+    #[test]
+    fn error_page_html_escapes_html_special_characters() {
+        let page = error_page_html("<script>alert(1)</script>", "quote\" apostrophe' amp&");
+        assert!(!page.contains("<script>"));
+        assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(page.contains("quote&quot; apostrophe&#39; amp&amp;"));
     }
 }

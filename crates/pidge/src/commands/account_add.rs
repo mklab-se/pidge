@@ -97,7 +97,9 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
     Ok(())
 }
 
-fn open_browser(url: &str) -> std::io::Result<()> {
+/// Best-effort open `url` in the user's default browser. Shared with `pidge
+/// mcp connect`, which reuses the same sign-in UX.
+pub(crate) fn open_browser(url: &str) -> std::io::Result<()> {
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")

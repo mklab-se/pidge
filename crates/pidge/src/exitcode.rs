@@ -52,6 +52,20 @@ pub fn classify(err: &anyhow::Error) -> (ExitKind, Envelope) {
                         },
                     );
                 }
+                ClientError::McpSessionExpired { server } => {
+                    return (
+                        ExitKind::AuthExpired,
+                        Envelope {
+                            code: "auth_expired",
+                            message: client.to_string(),
+                            hint: Some(format!(
+                                "run `pidge mcp connect {server}` to sign in again"
+                            )),
+                            account: None,
+                            retry_after: None,
+                        },
+                    );
+                }
                 ClientError::Throttled { retry_after } => {
                     return (
                         ExitKind::Throttled,
@@ -143,6 +157,29 @@ pub fn classify(err: &anyhow::Error) -> (ExitKind, Envelope) {
                 },
             );
         }
+        if let Some(mcp_usage) = cause.downcast_ref::<crate::commands::mcp::McpUsageError>() {
+            use crate::commands::mcp::McpUsageError;
+            let (kind, code, hint) = match mcp_usage {
+                McpUsageError::NoServerConnected | McpUsageError::NotConnected { .. } => {
+                    (ExitKind::NotFound, "not_found", None)
+                }
+                McpUsageError::AmbiguousServer { example, .. } => (
+                    ExitKind::Usage,
+                    "ambiguous",
+                    Some(format!("run `{example}`")),
+                ),
+            };
+            return (
+                kind,
+                Envelope {
+                    code,
+                    message: mcp_usage.to_string(),
+                    hint,
+                    account: None,
+                    retry_after: None,
+                },
+            );
+        }
         if let Some(cursor) = cause.downcast_ref::<pidge_client::CursorError>() {
             return (
                 ExitKind::Usage,
@@ -182,6 +219,43 @@ mod tests {
         assert_eq!(env.code, "auth_expired");
         assert!(env.hint.unwrap().contains("pidge account add"));
         assert_eq!(env.account.as_deref(), Some("a@b.se"));
+    }
+
+    #[test]
+    fn mcp_session_expired_maps_to_auth_exit_3_with_a_connect_hint() {
+        let err = anyhow::Error::from(ClientError::McpSessionExpired {
+            server: "https://mcp.example.com".into(),
+        });
+        let (kind, env) = classify(&err);
+        assert_eq!(kind as i32, 3);
+        assert_eq!(env.code, "auth_expired");
+        assert!(
+            env.hint
+                .unwrap()
+                .contains("pidge mcp connect https://mcp.example.com")
+        );
+        assert_eq!(env.account, None);
+    }
+
+    #[test]
+    fn mcp_usage_errors_map_to_not_found_or_usage() {
+        use crate::commands::mcp::McpUsageError;
+
+        let err = anyhow::Error::from(McpUsageError::NoServerConnected);
+        assert_eq!(classify(&err).0 as i32, 4);
+
+        let err = anyhow::Error::from(McpUsageError::NotConnected {
+            server: "https://mcp.example.com".into(),
+        });
+        assert_eq!(classify(&err).0 as i32, 4);
+
+        let err = anyhow::Error::from(McpUsageError::AmbiguousServer {
+            servers: "https://a.example.com, https://b.example.com".into(),
+            example: "https://a.example.com".into(),
+        });
+        let (kind, env) = classify(&err);
+        assert_eq!(kind as i32, 2);
+        assert_eq!(env.code, "ambiguous");
     }
 
     #[test]
