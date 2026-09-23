@@ -1,0 +1,90 @@
+name: Deploy MCP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/pidge-mcp/**"
+      - "crates/pidge-client/**"
+      - "crates/pidge-core/**"
+      - "deploy/azure/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/deploy-mcp.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-mcp
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # --skip-entra: the deploy identity has no rights on the Entra app, and
+      # the callback URI is already registered by the human-run initial
+      # deploy. --skip-certificate: the custom-domain certificate flow is
+      # interactive-ish (polls up to 15 minutes) and is run once by a human;
+      # CI asserts the binding is already SniEnabled instead of trying to
+      # create it. Both flags are no-ops when PIDGE_MCP_CUSTOM_DOMAIN is unset.
+      - name: Deploy pidge-mcp
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          deploy/azure/deploy.sh --skip-entra --skip-certificate | tee deploy-output.log
+
+          url="$(grep -oE 'MCP endpoint *: https://[^[:space:]]+/mcp' deploy-output.log | awk '{print $NF}' || true)"
+          if [[ -z "$url" ]]; then
+            echo "warning: could not parse MCP endpoint from deploy output; re-deriving from the Container App" >&2
+            fqdn="$(az containerapp show --resource-group pidge --name ca-pidge-mcp \
+              --query properties.configuration.ingress.fqdn -o tsv)"
+            url="https://$fqdn/mcp"
+          fi
+          echo "url=${url%/mcp}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          PIDGE_MCP_ALLOWED_EMAILS: ${{ secrets.PIDGE_MCP_ALLOWED_EMAILS }}
+          PIDGE_MCP_CUSTOM_DOMAIN: ${{ vars.PIDGE_MCP_CUSTOM_DOMAIN }}
+          PIDGE_MCP_CUTOVER: ${{ vars.PIDGE_MCP_CUTOVER }}
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="${{ steps.deploy.outputs.url }}"
+          echo "Smoke testing $url"
+
+          health="$(curl -fsS "$url/healthz")"
+          if [[ "$health" != "ok" ]]; then
+            echo "error: /healthz returned '$health', expected 'ok'" >&2
+            exit 1
+          fi
+
+          issuer="$(curl -fsS "$url/.well-known/oauth-authorization-server" | jq -r '.issuer // empty')"
+          if [[ -z "$issuer" ]]; then
+            echo "error: discovery document is missing an issuer" >&2
+            exit 1
+          fi
+
+          status="$(curl -s -o /dev/null -w '%{http_code}' -X POST "$url/mcp")"
+          if [[ "$status" != "401" ]]; then
+            echo "error: POST $url/mcp without a bearer token returned $status, expected 401" >&2
+            exit 1
+          fi
+
+          echo "Smoke test passed: healthz ok, issuer=$issuer, unauthenticated /mcp -> 401"

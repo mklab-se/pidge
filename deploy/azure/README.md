@@ -72,6 +72,71 @@ in play — it only prints the `az ad app update` command, listing every
 existing redirect URI plus both hosts' `/callback`, for the app owner to run
 by hand.
 
+## CI/CD
+
+`.github/workflows/deploy-mcp.yml` redeploys `pidge-mcp` automatically on
+every push to `main` that touches `crates/pidge-mcp`, `crates/pidge-client`,
+`crates/pidge-core`, `deploy/azure`, `Cargo.toml`, `Cargo.lock`, or the
+workflow file itself. It can also be run manually from the Actions tab
+(`workflow_dispatch`). Runs are serialized: a `deploy-mcp` concurrency group
+with `cancel-in-progress: false` means a second push queues behind a
+deploy already in progress rather than racing or cancelling it.
+
+The workflow authenticates to Azure via GitHub's OIDC federation — no Azure
+credential is stored in GitHub. It runs
+`deploy/azure/deploy.sh --skip-entra --skip-certificate` with `IMAGE_TAG` set
+to the commit SHA, then smoke-tests the result: `/healthz` must return `ok`,
+`/.well-known/oauth-authorization-server` must include an `issuer`, and an
+unauthenticated `POST /mcp` must return 401. `--skip-entra` is safe because
+the callback URI is registered once, by hand, during the initial deploy.
+`--skip-certificate` asserts the custom domain (if any) already has a
+`SniEnabled` certificate binding instead of trying to provision one from CI —
+that flow polls for up to 15 minutes and is meant to be run interactively by
+a human once, per [Custom domain](#custom-domain); it's a no-op when
+`PIDGE_MCP_CUSTOM_DOMAIN` is unset.
+
+### One-time setup
+
+Before the workflow can run, `deploy/azure/setup-github-oidc.sh` wires up the
+trust relationship and the repository configuration it reads. Run it once,
+by hand, from a workstation logged in with both `az login` and
+`gh auth login`:
+
+```bash
+PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y deploy/azure/setup-github-oidc.sh
+```
+
+It's idempotent — re-running it after partial setup or to rotate the
+allowlist is safe. It creates, if missing:
+
+- A user-assigned managed identity, `id-pidge-deploy`, in the resource
+  group.
+- A federated credential on that identity, `github-main`, trusting GitHub
+  Actions runs for `repo:mklab-se/pidge:ref:refs/heads/main` (issuer
+  `https://token.actions.githubusercontent.com`, audience
+  `api://AzureADTokenExchange`) — this is what lets the workflow get an
+  Azure access token with no stored secret.
+- Two role assignments for that identity on the resource group:
+  `Contributor` (to deploy the Bicep template and build images) and
+  `Role Based Access Control Administrator` (because the Bicep template
+  itself creates role assignments, e.g. ACR pull and Key Vault Secrets
+  Officer, for the app's own identity).
+
+It then always sets the GitHub repository configuration the workflow reads:
+
+| Name | Kind | Value |
+|---|---|---|
+| `AZURE_CLIENT_ID` | variable | `id-pidge-deploy`'s client id |
+| `AZURE_TENANT_ID` | variable | the Azure AD tenant id |
+| `AZURE_SUBSCRIPTION_ID` | variable | the subscription id |
+| `PIDGE_MCP_ALLOWED_EMAILS` | secret | from the environment variable of the same name (required; the script refuses to run without it, and never echoes the value) |
+| `PIDGE_MCP_CUSTOM_DOMAIN` | variable | from the environment variable of the same name, only if set |
+
+`PIDGE_MCP_CUTOVER` isn't set by the script — it's a plain repository
+variable to flip by hand (`gh variable set PIDGE_MCP_CUTOVER --body 1`) when
+you're ready to make the custom domain the public URL, per
+[Custom domain](#custom-domain).
+
 ## Connect a client
 
 Give the harness the MCP URL printed by the script (`https://<fqdn>/mcp`). It
