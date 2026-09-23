@@ -287,9 +287,11 @@ pub enum McpCommands {
         #[arg(long, value_enum)]
         store: Option<StorageBackendArg>,
     },
-    /// Sign out of the hosted MCP server and delete its stored tokens
+    /// Forget the stored session for a hosted pidge MCP server (local only).
+    /// To revoke sessions on the server, call its `accounts_update` tool
+    /// with `sign_out_everywhere`
     Logout {
-        /// Base URL of the hosted MCP server to sign out of
+        /// Base URL of the hosted MCP server whose stored session to forget
         url: String,
 
         /// Look in this backend first (the other is still tried);

@@ -1,6 +1,7 @@
-//! `pidge mcp logout <url>` — delete the stored session for a hosted pidge
-//! MCP server from every backend that holds it, and drop its server-index
-//! entry. Idempotent: logging out of a server with no stored session is not
+//! `pidge mcp logout <url>` — forget the stored session for a hosted pidge
+//! MCP server (local only): delete it from every backend that holds it, and
+//! drop its server-index entry. Nothing is revoked on the server; the
+//! `accounts_update` tool's `sign_out_everywhere` does that. Idempotent: logging out of a server with no stored session is not
 //! an error. `--dry-run` reports what would be removed without touching
 //! anything.
 
@@ -39,7 +40,10 @@ pub async fn run(url: String, store: Option<TokenStorage>, json_output: bool) ->
     if json_output {
         println!("{}", json!({ "server": url, "removed": removed }));
     } else if removed {
-        println!("Signed out of {url} and removed its stored session.");
+        println!("Forgot the stored session for {url} (local only).");
+        eprintln!(
+            "To revoke sessions on the server, call its accounts_update tool with sign_out_everywhere."
+        );
     } else {
         println!("No stored session found for {url}; nothing to remove.");
     }
@@ -79,7 +83,7 @@ fn run_dry(url: &str, candidates: &[TokenStorage], json_output: bool) -> Result<
             .collect::<Vec<_>>()
             .join(", ");
         println!(
-            "Dry run: would sign out of {url}, removing its session from: {names} (and its server-index entry)."
+            "Dry run: would forget the stored session for {url} (local only), removing it from: {names} (and its server-index entry)."
         );
     }
     Ok(())

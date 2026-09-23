@@ -99,10 +99,13 @@ preferred one has nothing stored. Without `--store`, the preferred backend
 is whichever one the local server index remembers for that url, or the OS
 keychain if there's no index entry for it — so on a machine with no usable
 keychain (headless, no Secret Service), pass `--store file` explicitly, or
-`status`/`logout` will fail trying the keychain first. `logout` removes the
-session from both backends and from the local server index; `--dry-run`
-reports what it would remove without touching anything. If the server
-has revoked your session (see
+`status`/`logout` will fail trying the keychain first. `logout` forgets the
+stored session for that server, locally only: it removes the session from
+both backends and from the local server index, but revokes nothing on the
+server. To revoke every session on the server as well, call the
+`accounts_update` tool with `sign_out_everywhere: true` (see Operations
+below). `--dry-run` reports what it would remove without touching
+anything. If the server has revoked your session (see
 [Revoke a user's sessions](../deploy/azure/README.md#revoke-a-users-sessions)
 in the deploy README), `status` exits with code 3 and points you back at
 `pidge mcp connect`.
