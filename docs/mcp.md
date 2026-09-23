@@ -94,9 +94,14 @@ pidge mcp logout https://<your-server>/mcp
 
 `status` and `logout` take an optional `--store keychain|file`: it names
 which backend to try first, but the other backend is still tried if the
-preferred one has nothing stored, so a stale or missing local index never
-blocks you. `logout` removes the session from both backends and from the
-local server index. If the server has revoked your session (see
+preferred one has nothing stored. Without `--store`, the preferred backend
+is whichever one the local server index remembers for that url, or the OS
+keychain if there's no index entry for it — so on a machine with no usable
+keychain (headless, no Secret Service), pass `--store file` explicitly, or
+`status`/`logout` will fail trying the keychain first. `logout` removes the
+session from both backends and from the local server index; `--dry-run`
+reports what it would remove without touching anything. If the server
+has revoked your session (see
 [Revoke a user's sessions](../deploy/azure/README.md#revoke-a-users-sessions)
 in the deploy README), `status` exits with code 3 and points you back at
 `pidge mcp connect`.

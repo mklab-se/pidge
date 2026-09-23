@@ -128,6 +128,7 @@ impl McpTokenStore {
             server: origin,
             storage,
         });
+        Self::ensure_dir()?;
         write_private(
             &Self::servers_index_path()?,
             &serde_json::to_string_pretty(&entries)?,
@@ -141,6 +142,7 @@ impl McpTokenStore {
         let before = entries.len();
         entries.retain(|e| e.server != origin);
         if entries.len() != before {
+            Self::ensure_dir()?;
             write_private(
                 &Self::servers_index_path()?,
                 &serde_json::to_string_pretty(&entries)?,
@@ -182,8 +184,20 @@ impl McpTokenStore {
 
     // --- file -----------------------------------------------------------
 
+    /// The `mcp` config directory's path. Pure — no I/O, no side effect —
+    /// so a read (`list`, `load_file`) never creates anything just by
+    /// consulting it. Write paths that need the directory to actually
+    /// exist use [`Self::ensure_dir`] instead.
     fn dir() -> Result<PathBuf, ClientError> {
-        let dir = crate::base_config_dir()?.join("pidge").join("mcp");
+        Ok(crate::base_config_dir()?.join("pidge").join("mcp"))
+    }
+
+    /// [`Self::dir`], creating it (and tightening it to 0700 on Unix) if it
+    /// doesn't exist yet. Called only from the write paths that are about
+    /// to put a file in it (`save_file`, and the index writes in
+    /// `upsert_index`/`remove_from_index`) — never from a mere read.
+    fn ensure_dir() -> Result<PathBuf, ClientError> {
+        let dir = Self::dir()?;
         std::fs::create_dir_all(&dir)?;
         // `create_dir_all` leaves the default umask (typically 0755) —
         // tighten it to user-only. The token and index files inside are
@@ -214,6 +228,7 @@ impl McpTokenStore {
     }
 
     fn save_file(tokens: &McpTokens) -> Result<(), ClientError> {
+        Self::ensure_dir()?;
         let path = Self::path_for(&tokens.server)?;
         let json = serde_json::to_string_pretty(tokens)?;
         write_private(&path, &json)?;
@@ -316,6 +331,20 @@ mod tests {
     fn list_is_empty_before_anything_is_saved() {
         with_temp_config_dir(|| {
             assert!(McpTokenStore::list().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn reads_never_create_the_mcp_directory() {
+        with_temp_config_dir(|| {
+            let dir = McpTokenStore::dir().unwrap();
+            assert!(!dir.exists());
+
+            McpTokenStore::list().unwrap();
+            assert!(!dir.exists(), "list() must not create the mcp directory");
+
+            McpTokenStore::load("https://nowhere.example.com/mcp", TokenStorage::File).unwrap();
+            assert!(!dir.exists(), "load() must not create the mcp directory");
         });
     }
 
@@ -452,6 +481,7 @@ mod tests {
     fn list_treats_a_corrupt_index_file_as_empty_instead_of_erroring() {
         with_temp_config_dir(|| {
             let path = McpTokenStore::servers_index_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, "not valid json").unwrap();
 
             assert_eq!(McpTokenStore::list().unwrap(), Vec::new());
@@ -462,6 +492,7 @@ mod tests {
     fn save_succeeds_and_repairs_a_corrupt_index() {
         with_temp_config_dir(|| {
             let path = McpTokenStore::servers_index_path().unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, "not valid json").unwrap();
 
             let tokens = fake_tokens("https://mcp.example.com/mcp");

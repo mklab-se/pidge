@@ -18,7 +18,7 @@ use pidge_core::TokenStorage;
 
 use crate::commands::mcp::McpUsageError;
 use crate::commands::mcp_session::{
-    McpCalls, RefreshingRpc, SessionLookup, backend_name, indexed_backend, lookup_session,
+    McpCalls, RefreshingRpc, SessionLookup, backend_name, lookup_session, preferred_backend_for,
 };
 
 pub async fn run(
@@ -26,19 +26,32 @@ pub async fn run(
     store: Option<TokenStorage>,
     json_output: bool,
 ) -> Result<()> {
-    let servers = McpTokenStore::list()?;
-    let server_url = match url {
-        Some(u) => u,
-        None => match resolve_default_server(&servers) {
-            ServerResolution::Only(s) => s.server,
-            ServerResolution::None => return Err(McpUsageError::NoServerConnected.into()),
-            ServerResolution::Many(list) => {
-                return Err(ambiguous_server_error(&list, "pidge mcp status"));
-            }
-        },
+    // `McpTokenStore::list` is only consulted when actually needed: to
+    // resolve which server a url-less call means, or (when a url is given)
+    // to seed the `--store` preference from what the index already knows —
+    // never for its own sake, and never twice for the same run.
+    let (server_url, preferred) = match url {
+        Some(u) => {
+            let preferred = match store {
+                Some(s) => s,
+                None => preferred_backend_for(&u, &McpTokenStore::list()?),
+            };
+            (u, preferred)
+        }
+        None => {
+            let servers = McpTokenStore::list()?;
+            let server_url = match resolve_default_server(&servers) {
+                ServerResolution::Only(s) => s.server,
+                ServerResolution::None => return Err(McpUsageError::NoServerConnected.into()),
+                ServerResolution::Many(list) => {
+                    return Err(ambiguous_server_error(&list, "pidge mcp status"));
+                }
+            };
+            let preferred = store.unwrap_or_else(|| preferred_backend_for(&server_url, &servers));
+            (server_url, preferred)
+        }
     };
 
-    let preferred = store.unwrap_or_else(|| indexed_backend(&server_url));
     let http = reqwest::Client::new();
     let lookup = lookup_session(&http, &server_url, preferred).await?;
     let (tokens, backend) = session_or_error(lookup, &server_url)
@@ -220,6 +233,26 @@ mod tests {
             ServerResolution::Many(list) => assert_eq!(list, entries),
             _ => panic!("expected Many"),
         }
+    }
+
+    // --- preferred_backend_for (explicit-url path, N1) --------------------
+
+    #[test]
+    fn explicit_url_preference_comes_from_the_index_when_store_is_not_given() {
+        let servers = vec![server("https://mcp.example.com", TokenStorage::File)];
+        assert_eq!(
+            preferred_backend_for("https://mcp.example.com", &servers),
+            TokenStorage::File
+        );
+    }
+
+    #[test]
+    fn explicit_url_preference_defaults_to_keychain_when_unindexed() {
+        let servers = vec![server("https://other.example.com", TokenStorage::File)];
+        assert_eq!(
+            preferred_backend_for("https://mcp.example.com", &servers),
+            TokenStorage::Keychain
+        );
     }
 
     // --- ambiguous_server_error ------------------------------------------

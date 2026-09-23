@@ -12,7 +12,8 @@ use anyhow::Result;
 
 use pidge_client::ClientError;
 use pidge_client::mcp::{
-    McpRpc, McpTokenStore, McpTokens, ToolResult, normalize_origin, valid_access_token,
+    McpRpc, McpTokenStore, McpTokens, StoredServer, ToolResult, normalize_origin,
+    valid_access_token,
 };
 use pidge_core::TokenStorage;
 
@@ -129,18 +130,22 @@ pub(crate) fn find_stored_tokens(
     })?)
 }
 
-/// The backend recorded in the server index for `url`, if any, else the OS
+/// The backend recorded for `url` in `servers`, if any, else the OS
 /// keychain. Used as the default `--store` preference for an explicit-url
 /// `status`/`logout`, so they try the backend actually known to hold the
 /// session first instead of always defaulting to the keychain and hard
-/// -erroring on a machine with no usable one.
-pub(crate) fn indexed_backend(url: &str) -> TokenStorage {
+/// -erroring on a machine with no usable one. Pure over an already-loaded
+/// index (rather than calling [`McpTokenStore::list`] itself) so: (a) this
+/// decision is directly unit-testable with no I/O, and (b) callers that
+/// already have the list in hand (or don't need it — an explicit `--store`
+/// skips this entirely) don't force a redundant read.
+pub(crate) fn preferred_backend_for(url: &str, servers: &[StoredServer]) -> TokenStorage {
     let Ok(origin) = normalize_origin(url) else {
         return TokenStorage::Keychain;
     };
-    McpTokenStore::list()
-        .ok()
-        .and_then(|servers| servers.into_iter().find(|s| s.server == origin))
+    servers
+        .iter()
+        .find(|s| s.server == origin)
         .map(|s| s.storage)
         .unwrap_or(TokenStorage::Keychain)
 }
@@ -243,8 +248,11 @@ impl RefreshingRpc {
 /// Remap a bare `401` to [`ClientError::SessionExpired`]; every other error
 /// passes through unchanged. Factored out of [`RefreshingRpc::initialize`]
 /// (whose own error comes from a real network call) so this mapping is
-/// directly unit-testable with no network involved.
-fn remap_401_to_session_expired(server: &str, err: ClientError) -> anyhow::Error {
+/// directly unit-testable with no network involved. `pub(crate)` since
+/// `connect`'s `--dry-run` path also calls a bare `McpRpc::initialize`
+/// outside a `RefreshingRpc` (it must never refresh) and needs the same
+/// remap (see task-3-rereview.md N2).
+pub(crate) fn remap_401_to_session_expired(server: &str, err: ClientError) -> anyhow::Error {
     match err {
         ClientError::Graph { status: 401, .. } => ClientError::SessionExpired {
             email: server.to_string(),
@@ -441,6 +449,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, vec![(TokenStorage::Keychain, true)]);
+    }
+
+    // --- preferred_backend_for (N1) -----------------------------------
+
+    #[test]
+    fn preferred_backend_for_uses_the_indexed_backend_when_present() {
+        let servers = vec![StoredServer {
+            server: "https://mcp.example.com".to_string(),
+            storage: TokenStorage::File,
+        }];
+        assert_eq!(
+            preferred_backend_for("https://mcp.example.com", &servers),
+            TokenStorage::File
+        );
+    }
+
+    #[test]
+    fn preferred_backend_for_defaults_to_keychain_when_not_indexed() {
+        assert_eq!(
+            preferred_backend_for("https://mcp.example.com", &[]),
+            TokenStorage::Keychain
+        );
+    }
+
+    #[test]
+    fn preferred_backend_for_matches_on_normalized_origin_not_the_exact_url() {
+        // The index stores the bare origin; a caller passing the full
+        // resource url (with a path, e.g. `/mcp`) must still match it.
+        let servers = vec![StoredServer {
+            server: "https://mcp.example.com".to_string(),
+            storage: TokenStorage::File,
+        }];
+        assert_eq!(
+            preferred_backend_for("https://mcp.example.com/mcp", &servers),
+            TokenStorage::File
+        );
     }
 
     // --- remap_401_to_session_expired (I2) ---------------------------------

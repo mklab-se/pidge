@@ -27,7 +27,7 @@ use pidge_core::{Config, TokenStorage};
 
 use crate::commands::mcp_session::{
     McpCalls, RefreshingRpc, SessionLookup, backend_name, find_stored_tokens, is_session_expired,
-    lookup_session,
+    lookup_session, remap_401_to_session_expired,
 };
 use crate::commands::{account_add, mcp};
 
@@ -93,6 +93,7 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
     let mut raw = McpRpc::new(http, tokens.server.clone(), tokens.access_token.clone());
     raw.initialize()
         .await
+        .map_err(|e| remap_401_to_session_expired(&tokens.server, e))
         .context("failed to initialize the MCP session")?;
 
     let config = Config::load()?;
