@@ -82,10 +82,7 @@ mod tests {
     #[tokio::test]
     async fn production_json_lines_are_flat_with_the_documented_fields() {
         let capture = LogCapture::default();
-        let _guard = tracing::subscriber::set_default(json_subscriber(
-            EnvFilter::new("info"),
-            capture.clone(),
-        ));
+        let _guard = LogCapture::install(json_subscriber(EnvFilter::new("info"), capture.clone()));
 
         let h = ToolHarness::new(&["jane@example.com"]).await;
         let request = rmcp::model::CallToolRequestParams::new("accounts_list");
