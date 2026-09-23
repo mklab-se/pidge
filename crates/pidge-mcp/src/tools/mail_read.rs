@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use super::PidgeMcp;
 use crate::cache::ReadCache;
 use crate::context::{ToolContext, cached, graph_error, tool_error};
-use crate::render::{age, cap, local, message_item, one_line, untrusted, who};
+use crate::render::{age, cap, clean_body, local, message_item, one_line, untrusted, who};
 
 #[derive(Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OverviewArgs {
@@ -538,14 +538,14 @@ fn list_output(
     out
 }
 
-/// Plain text for a body: HTML through pidge's renderer with inline links.
+/// Plain text for a body: HTML through pidge's renderer with inline links,
+/// then preheader filler and blank runs removed ([`clean_body`]).
 pub(crate) fn body_text(body: &str, kind: BodyContentType) -> String {
-    match kind {
+    let text = match kind {
         BodyContentType::Html => render_html(body, 100, LinkStyle::Inline),
         BodyContentType::Text => body.to_string(),
-    }
-    .trim()
-    .to_string()
+    };
+    clean_body(&text).trim_start().to_string()
 }
 
 /// Graph's well-known name for a folder alias, or the input as a folder id.

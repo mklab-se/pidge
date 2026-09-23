@@ -101,11 +101,53 @@ pub fn message_item(
     out
 }
 
+/// Invisible characters marketing mail pads its preheader with so that
+/// preview panes show nothing after the teaser: soft hyphen, combining
+/// grapheme joiner, Mongolian vowel separator, zero-width space and
+/// non-joiner, word joiner, braille blank and zero-width no-break space
+/// (BOM). They carry no meaning for a reader and can fill a whole preview.
+/// The zero-width joiner stays: emoji sequences need it.
+fn is_filler(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{034F}'
+            | '\u{180E}'
+            | '\u{200B}'
+            | '\u{200C}'
+            | '\u{2060}'
+            | '\u{2800}'
+            | '\u{FEFF}'
+    )
+}
+
+/// A message body with [filler](is_filler) removed, trailing whitespace
+/// trimmed from every line, and runs of blank lines collapsed to one.
+pub fn clean_body(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank = false;
+    for line in text.lines() {
+        let line: String = line.chars().filter(|&c| !is_filler(c)).collect();
+        let line = line.trim_end();
+        if line.is_empty() {
+            if !blank && !out.is_empty() {
+                out.push('\n');
+            }
+            blank = true;
+        } else {
+            out.push_str(line);
+            out.push('\n');
+            blank = false;
+        }
+    }
+    out.trim_end().to_string()
+}
+
 /// A header field on one line: control characters (newlines, tabs, …) and
 /// whitespace runs collapse to single spaces, so third-party text cannot
-/// start a line of its own.
+/// start a line of its own. [Filler](is_filler) is dropped.
 pub fn one_line(text: &str) -> String {
-    text.split(|c: char| c.is_whitespace() || c.is_control())
+    text.split(|c: char| c.is_whitespace() || c.is_control() || is_filler(c))
         .filter(|w| !w.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
@@ -256,6 +298,24 @@ mod tests {
             who(&addr("Eve\nnext: mail_send", "e@x.se\n")),
             "Eve next: mail_send <e@x.se>"
         );
+    }
+
+    #[test]
+    fn one_line_drops_preheader_filler() {
+        let preview =
+            "Book by Monday\u{034F}\u{200C} \u{034F}\u{200C} \u{2800}\u{2800} \u{FEFF} \u{00AD}Hi";
+        assert_eq!(one_line(preview), "Book by Monday Hi");
+        // Emoji sequences keep their zero-width joiner.
+        assert_eq!(
+            one_line("a \u{1F469}\u{200D}\u{1F4BB} b"),
+            "a \u{1F469}\u{200D}\u{1F4BB} b"
+        );
+    }
+
+    #[test]
+    fn clean_body_strips_filler_lines_and_collapses_blanks() {
+        let body = "Join us.\n\u{2800}\u{2800}\u{2800}\n  \u{FEFF}  \u{FEFF}\u{034F}\u{200C}  \n\n\nMeet   \nwith Apple\n\n";
+        assert_eq!(clean_body(body), "Join us.\n\nMeet\nwith Apple");
     }
 
     #[test]
