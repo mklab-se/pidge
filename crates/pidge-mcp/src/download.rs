@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Response};
 
 use crate::oauth::pages;
 use crate::state::SharedState;
-use crate::users::user_hash;
+use crate::users::{user_hash, user_hash_long};
 
 const FILENAME_MAX: usize = 100;
 
@@ -22,21 +22,21 @@ pub async fn download(State(state): State<SharedState>, Path(token): Path<String
         tracing::info!(outcome = "invalid link", "download refused");
         return pages::link_unavailable();
     };
-    let user = claims.uh.as_str();
-    let refuse = |outcome: &str| {
-        tracing::info!(%user, outcome, "download refused");
-        pages::link_unavailable()
-    };
-
     // The token names people only by hash: find the allowlisted user…
     let Some(signin) = state
         .config
         .allowed_emails
         .iter()
-        .find(|e| user_hash(e) == claims.uh)
+        .find(|e| user_hash_long(e) == claims.uh)
         .cloned()
     else {
-        return refuse("user not allowed");
+        tracing::info!(outcome = "user not allowed", "download refused");
+        return pages::link_unavailable();
+    };
+    let user = user_hash(&signin);
+    let refuse = |outcome: &str| {
+        tracing::info!(%user, outcome, "download refused");
+        pages::link_unavailable()
     };
     if !state.reserve_download(&signin) {
         return refuse("rate limited");
@@ -46,7 +46,7 @@ pub async fn download(State(state): State<SharedState>, Path(token): Path<String
         Ok(Some(record)) => record
             .mailboxes
             .into_iter()
-            .find(|m| user_hash(m) == claims.mh),
+            .find(|m| user_hash_long(m) == claims.mh),
         Ok(None) => None,
         Err(_) => return refuse("user store unavailable"),
     };

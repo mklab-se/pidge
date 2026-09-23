@@ -11,7 +11,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use rand::{Rng, rng};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::users::user_hash;
+use crate::users::user_hash_long;
 
 pub const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
 pub const REFRESH_TOKEN_TTL: Duration = Duration::days(30);
@@ -63,7 +63,7 @@ pub struct RefreshClaims {
 /// A `mail_attachment` download link: anyone holding it may fetch this one
 /// attachment until `exp`, as long as the user still owns the mailbox. The
 /// payload is readable by whoever sees the URL, so it names the user and
-/// mailbox only by [`user_hash`]; `/dl` resolves them against the allowlist
+/// mailbox only by [`user_hash_long`]; `/dl` resolves them against the allowlist
 /// and the user's record. The content type rides along so serving it needs
 /// no extra Graph call.
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,9 +71,9 @@ pub struct DownloadClaims {
     pub typ: String,
     pub jti: String,
     pub exp: i64,
-    /// [`user_hash`] of the signed-in user the link was minted for.
+    /// [`user_hash_long`] of the signed-in user the link was minted for.
     pub uh: String,
-    /// [`user_hash`] of the mailbox holding the message.
+    /// [`user_hash_long`] of the mailbox holding the message.
     pub mh: String,
     pub message_id: String,
     pub attachment_id: String,
@@ -252,8 +252,8 @@ impl Signer {
             typ: "download".into(),
             jti: random_id(),
             exp: (Utc::now() + ttl).timestamp(),
-            uh: user_hash(sub),
-            mh: user_hash(account),
+            uh: user_hash_long(sub),
+            mh: user_hash_long(account),
             message_id: message_id.into(),
             attachment_id: attachment.id.clone(),
             filename: attachment.name.clone(),
@@ -348,8 +348,9 @@ mod tests {
             .unwrap();
         let c = s.verify_download(&token).unwrap();
         assert_eq!(c.typ, "download");
-        assert_eq!(c.uh, crate::users::user_hash("jane@example.com"));
-        assert_eq!(c.mh, crate::users::user_hash("work@example.com"));
+        assert_eq!(c.uh, crate::users::user_hash_long("jane@example.com"));
+        assert_eq!(c.mh, crate::users::user_hash_long("work@example.com"));
+        assert_eq!(c.uh.len(), 16, "64-bit hash");
         assert_eq!(c.message_id, "M1");
         assert_eq!(c.attachment_id, "A1");
         assert_eq!(c.filename, "report.pdf");

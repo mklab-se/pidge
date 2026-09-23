@@ -485,8 +485,8 @@ pub(crate) mod tests {
             .signer
             .verify_download(dl_path(&out).trim_start_matches("/dl/"))
             .unwrap();
-        assert_eq!(claims.uh, crate::users::user_hash(JANE));
-        assert_eq!(claims.mh, crate::users::user_hash(WORK));
+        assert_eq!(claims.uh, crate::users::user_hash_long(JANE));
+        assert_eq!(claims.mh, crate::users::user_hash_long(WORK));
         assert_eq!(claims.content_type, "application/pdf");
 
         // The link works through the real router, outside the bearer layer.

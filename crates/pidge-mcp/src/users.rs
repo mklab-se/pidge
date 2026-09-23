@@ -169,6 +169,12 @@ pub fn user_hash(signin: &str) -> String {
     sha256_hex(signin)[..8].to_string()
 }
 
+/// A 64-bit form of [`user_hash`] (16 hex characters), for download links,
+/// where two allowlisted addresses must never share a hash.
+pub fn user_hash_long(signin: &str) -> String {
+    sha256_hex(signin)[..16].to_string()
+}
+
 fn sha256_hex(signin: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(signin.to_ascii_lowercase().as_bytes());
