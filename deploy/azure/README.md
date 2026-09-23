@@ -52,16 +52,43 @@ managed certificate can only be created after the hostname is bound:
 3. **Rebind with the certificate.** The app redeploys again with
    `customDomainCertificateId` set, switching the binding to `SniEnabled`.
 
-Once the domain is `SniEnabled`, re-running the script repeats the detection
-(via `az containerapp show ... customDomains[?name=='<domain>'].bindingType`)
-and skips straight past steps 1–3. Pass `--skip-certificate` to assert that
-the certificate is already bound and skip that detection outright — the
-script then fails loudly instead of silently doing nothing if it turns out
-not to be `SniEnabled`.
+Once the domain is `SniEnabled`, re-running the script sees that on the
+live app and skips straight past steps 1–3, reusing the live certificate id.
+Pass `--skip-certificate` to assert that: the script then fails loudly,
+instead of starting the certificate flow, if the domain turns out not to be
+`SniEnabled`.
 
-Set `PIDGE_MCP_CUTOVER=1` to make the custom domain the public URL (the OAuth
-issuer, resource identifier and callback base) instead of just an accepted
-alternate host:
+**The script preserves live state.** Before changing anything it reads the
+live app (`az containerapp show`): the bound custom domain, its binding type
+and certificate id, and the `PIDGE_MCP_PUBLIC_URL` and
+`PIDGE_MCP_LEGACY_ISSUERS` env values. An input you leave unset keeps what
+is deployed; only an explicit value changes it.
+
+| Input | Unset or empty | Explicit values |
+|---|---|---|
+| `PIDGE_MCP_CUSTOM_DOMAIN` | Keeps the bound domain and its certificate ("keeping bound custom domain X"), or none if none is bound | `<domain>` binds it (it must match the bound domain, if any). `-` unbinds the bound domain |
+| `PIDGE_MCP_CUTOVER` | Stays cut over if the live public URL is `https://<custom domain>`, otherwise stays on the FQDN | `1` cuts over. `0` uses the FQDN, reverting a cutover if there was one |
+
+The script refuses, with an error and before touching anything, to:
+
+- unbind the domain that is the live public URL without also getting
+  `PIDGE_MCP_CUTOVER=0`;
+- bind a domain other than the one already bound (unbind it first);
+- cut over with no custom domain;
+- take any `PIDGE_MCP_CUTOVER` value other than `1`, `0` or unset.
+
+`PIDGE_MCP_LEGACY_ISSUERS` is carried over from the live app on every run,
+plus the issuer the run retires, if any. The current public URL is never
+listed as its own legacy issuer. So a grace given by an earlier cutover or
+revert survives later deploys. CI sets neither input, so it can never
+change the domain or the cutover state.
+
+### Cutover
+
+Run the script once with `PIDGE_MCP_CUTOVER=1` to make the custom domain
+the public URL (the OAuth issuer, resource identifier and callback base)
+instead of just an accepted alternate host. Later runs, CI included, stay
+cut over without the variable:
 
 - **Without cutover** (default): the Container Apps FQDN stays the public
   URL, and the custom domain is added to `PIDGE_MCP_ALT_HOSTS` — the server
@@ -113,15 +140,14 @@ The first two are already registered and only being re-listed (Entra
 replaces the whole set on every `update`, so anything left out would be
 removed); the custom domain's `/callback` is the one actually being added.
 
-**Rollback.** Unset `PIDGE_MCP_CUTOVER` (or set it to anything other than
-`1`) and rerun the script: the Container Apps FQDN becomes the public URL
-and issuer again, and the custom domain reverts to an accepted alt host —
-it keeps resolving and serving traffic throughout. One gotcha: the script
-computes `PIDGE_MCP_LEGACY_ISSUERS` fresh on every run rather than merging
-with what's deployed, and only populates it in the cutover branch. So a
-client holding a token minted under the custom-domain issuer during the
-cutover window is not grandfathered in on rollback — it gets a 401 and has
-to sign in again, the same as any other issuer change.
+**Rollback.** Run the script with `PIDGE_MCP_CUTOVER=0`. Leaving it unset
+keeps the cutover. The Container Apps FQDN becomes the public URL and issuer
+again, and the custom domain reverts to an accepted alt host, so it keeps
+resolving and serving traffic throughout. The custom-domain origin is added
+to `PIDGE_MCP_LEGACY_ISSUERS`, so tokens minted under it during the cutover
+keep validating, and clients configured with `https://<domain>/mcp` can
+still refresh. To unbind the domain as well, pass
+`PIDGE_MCP_CUSTOM_DOMAIN=-` in the same run.
 
 ## CI/CD
 
@@ -165,8 +191,12 @@ the callback URI is registered once, by hand, during the initial deploy.
 `--skip-certificate` asserts the custom domain (if any) already has a
 `SniEnabled` certificate binding instead of trying to provision one from CI —
 that flow polls for up to 15 minutes and is meant to be run interactively by
-a human once, per [Custom domain](#custom-domain); it's a no-op when
-`PIDGE_MCP_CUSTOM_DOMAIN` is unset.
+a human once, per [Custom domain](#custom-domain). With a live
+`SniEnabled` binding the script reuses its certificate id, and with no
+custom domain bound or requested the flag does nothing. Since CI leaves
+`PIDGE_MCP_CUSTOM_DOMAIN` and `PIDGE_MCP_CUTOVER` unset (unless you create
+repository variables for them), every CI deploy keeps the live domain,
+certificate and cutover state as they are.
 
 ### One-time setup
 
@@ -230,10 +260,13 @@ declared in `main.bicep`, with three exceptions, all created by scripts:
   script creates it between two Bicep deployments and passes its id back
   in as `customDomainCertificateId`.
 
-`PIDGE_MCP_CUTOVER` isn't set by the script — it's a plain repository
-variable to flip by hand (`gh variable set PIDGE_MCP_CUTOVER --body 1`) when
-you're ready to make the custom domain the public URL, per
-[Custom domain](#custom-domain).
+`PIDGE_MCP_CUTOVER` isn't set by the script, and doesn't need to be a
+repository variable at all: cut over (or back) with one local run of
+`deploy.sh`, and CI keeps that state from then on. If you do create
+`PIDGE_MCP_CUTOVER` or `PIDGE_MCP_CUSTOM_DOMAIN` as repository variables,
+the workflow passes them on and every CI deploy applies them, including a
+stale `0` that reverts a cutover. The `PIDGE_MCP_CUSTOM_DOMAIN` variable the
+setup script sets is harmless as long as it names the bound domain.
 
 ## Logs
 
