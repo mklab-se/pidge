@@ -11,6 +11,7 @@ mod config;
 mod contacts;
 mod context;
 mod download;
+mod logging;
 mod mailbox;
 mod markitdown;
 mod oauth;
@@ -28,9 +29,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use pidge_client::{AuthClient, GraphClient};
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
 
-use crate::config::{Config, LogFormat, SecretsBackend};
+use crate::config::{Config, SecretsBackend};
 use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::Signer;
 use crate::secrets::{FileSecrets, KeyVaultSecrets, SIGNING_KEY_SECRET, SharedSecrets};
@@ -66,26 +66,7 @@ async fn main() -> Result<()> {
 
     // Picked before `Config::from_env` (which may itself fail) so a startup
     // error still logs in the chosen format.
-    match config::log_format_from_env()? {
-        LogFormat::Json => {
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-                )
-                .json()
-                .flatten_event(true)
-                .with_current_span(false)
-                .with_span_list(false)
-                .init();
-        }
-        LogFormat::Text => {
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-                )
-                .init();
-        }
-    }
+    logging::init(config::log_format_from_env()?);
 
     forbid_core_dumps_and_ptrace();
 

@@ -34,6 +34,7 @@ crates/
     src/                # /mcp with the full mail+calendar tool set. `publish = false`.
       main.rs           # Startup, `--convert-check <path>` diagnostic, non-dumpable process
       config.rs         # `Config::from_env`: every env var the server reads
+      logging.rs        # Tracing subscriber (flat JSON or text); the JSON shape is tested
       app.rs            # Axum router: OAuth endpoints, bearer-guarded /mcp, /dl, health
       oauth/            # Discovery, DCR, authorize→Microsoft→callback, token, bearer middleware, consent pages
       secrets/          # `SecretStore`: Azure Key Vault (managed identity) or files (dev)
