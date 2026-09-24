@@ -32,9 +32,11 @@ the connecting/self-hosting overview and links there for the rest.
 ## Connect a client
 
 Any client needs the server's MCP URL: `https://<your-server>/mcp`. The
-reference deployment for this repository's maintainer runs at
-`https://pidge.mklab.se/mcp`; if you are self-hosting, use your own host
-instead.
+reference deployment at `https://pidge.mklab.se/mcp` is invite-only for now;
+everyone else can [self-host](#self-hosting-on-azure) (or
+[run the container anywhere](#run-the-container-anywhere)) and use their own
+host instead — or skip MCP and use the `pidge` CLI with an agent skill
+(see the [README](../README.md#get-started)).
 
 ### Claude.ai, Cowork, mobile
 

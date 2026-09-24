@@ -5,7 +5,8 @@
 <h1 align="center">pidge</h1>
 
 <p align="center">
-  A fast CLI for e-mail and calendar, designed to be operated by AI agents.
+  <strong>The e-mail and calendar client for your AI agent.</strong><br>
+  Let Claude Code, Codex, Copilot, Claude.ai or ChatGPT work your real inbox and calendar — safely.
 </p>
 
 <p align="center">
@@ -16,195 +17,100 @@
   <a href="https://github.com/mklab-se/pidge/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/pidge.svg" alt="License"></a>
 </p>
 
-## Status
+<p align="center">
+  <a href="CHANGELOG.md"><strong>What's new →</strong></a>
+  &nbsp;·&nbsp; <a href="INSTALL.md">Install</a>
+  &nbsp;·&nbsp; <a href="docs/usage.md">Usage</a>
+  &nbsp;·&nbsp; <a href="docs/mcp.md">MCP server</a>
+</p>
 
-**Early days.** pidge can sign in to one or more Microsoft 365 / personal Microsoft accounts, browse / search / send / reply to e-mail, manage drafts + attachments, and **manage calendars** — create / edit / search / reschedule / cancel / duplicate events, move between calendars, RSVP, and create recurring meetings.
+---
 
-## Quick Start
+Your AI agent already writes your code. pidge lets it handle the rest of your day too:
+triage the inbox, draft replies, find a free slot, book the meeting and answer the invite —
+across every mailbox you have, from one tool.
 
-```bash
-# 1. Install (macOS / Linux)
-brew install mklab-se/tap/pidge
-# ...or via cargo: cargo install pidge
-# ...other options (pre-built binaries, cargo binstall): see INSTALL.md
+```text
+You:    Go through my unread mail, archive the newsletters, and draft a reply to
+        Bob proposing a slot next week when we're both free.
 
-# 2. Sign in (opens your browser)
-pidge account add
-
-# 3. Try it
-pidge mail
-pidge calendar
+Agent:  $ pidge mail list --unread --json
+        $ pidge mail archive 3f1a
+        $ pidge mail archive 9c02
+        $ pidge calendar --week --json
+        $ pidge mail reply 4d8e --draft --body-file -
+        Archived 2 newsletters. Drafted a reply to Bob proposing Tue 14:00 or
+        Thu 10:00 — want me to send it?
 ```
 
-See [INSTALL.md](INSTALL.md) for all installation methods and shell completions.
+## Why pidge
 
-## Built for AI agents
+- **Built for agents first.** Every command speaks `--json`, messages and events have short
+  stable ids, lists page with cursors, and `mail delta` / `calendar delta` / `pidge watch` let
+  long-running agents follow changes instead of re-reading everything.
+- **You stay in control.** Sends ask before they go, and agents can save drafts for you to
+  approve. Lock things down further with per-action guardrails
+  (`pidge config set guardrails.send confirm` — also `delete`, `cancel`, `rsvp`, `bulk`,
+  `unsubscribe`; each `allow` / `confirm` / `deny`) or preview anything with `--dry-run`.
+  The MCP server goes further: sends only from an approved draft, a per-user send cap, and
+  third-party mail content marked as untrusted so your agent summarises it instead of obeying it.
+- **All your mailboxes in one view.** Sign in to several accounts; reads are merged across all
+  of them, and writes go out from the right one.
+- **Mail and calendar in one tool.** Search, read, reply, forward, file, unsubscribe; create,
+  reschedule, duplicate, cancel and RSVP to events, including recurring meetings.
+- **Fast and self-contained.** A single Rust binary. Tokens live in your OS keychain.
 
-pidge is designed to be operated by AI coding agents — Claude Code, Codex, Copilot, etc. — on your behalf. You can run it directly too, but the primary surface is your agent.
+## Get started
 
-Wire it into your agent with one command:
+### Option 1 — CLI + agent skill (Claude Code, Codex, Copilot, …)
 
 ```bash
+brew install mklab-se/tap/pidge        # or: cargo install pidge — see INSTALL.md
+pidge account add                      # sign in (opens your browser)
 pidge ai skill --emit > ~/.claude/skills/pidge/SKILL.md
-# or, if you run pidge from a source checkout instead of `cargo install`:
-pidge ai skill --emit --from-source > ~/.claude/skills/pidge/SKILL.md
 ```
 
-The emitted skill is deliberately small: it teaches the agent the concept plus a handful of patterns (JSON output, confirmation gates, account context) and tells it to use `pidge --help` for live command discovery — so the skill keeps working as pidge ships new functionality.
+That's it — ask your agent about your mail. The emitted skill is deliberately small: it teaches
+the agent the patterns (JSON output, confirmation gates, account context) and points it at
+`pidge --help` for everything else, so it keeps working as pidge grows.
 
-## Account setup
+### Option 2 — Remote MCP server (Claude.ai, ChatGPT, Cowork, …)
+
+For harnesses that speak [MCP](https://modelcontextprotocol.io) rather than run shell commands,
+`pidge-mcp` exposes the same mail and calendar tools over HTTP. Each user signs in with their
+own account and only ever sees their own mailboxes.
+
+- **Self-host it** — a ready-made image is published at `ghcr.io/mklab-se/pidge-mcp`, with
+  Bicep templates for Azure Container Apps.
+- **The reference server** at `https://pidge.mklab.se/mcp` is currently invite-only.
+
+See [docs/mcp.md](docs/mcp.md) for connecting clients, self-hosting, and moving an existing
+local setup over with `pidge mcp connect`.
+
+## Using it yourself
+
+pidge is a pleasant CLI for humans too:
 
 ```bash
-# Add an account (opens your browser — auth code + PKCE)
-pidge account add
-
-# List signed-in accounts and which one is default for e-mail / calendar
-pidge account list
-
-# Remove an account (interactive picker if more than one is signed in)
-pidge account remove
+pidge mail                                   # latest mail, all accounts
+pidge mail 3515                              # open a message by id fragment
+pidge mail search 'from:alice subject:budget'
+pidge calendar --week                        # the week ahead
+pidge calendar new --title "Q3 planning" --start "tomorrow 15:00" --end "+90m" \
+  --invite alice@example.com --online
 ```
 
-The first account you add becomes the default for both e-mail and calendar; change either with:
+More in [docs/usage.md](docs/usage.md), or run `pidge --help`.
 
-```bash
-pidge account default e-mail   <email>
-pidge account default calendar <email>
-pidge account default              # prints both currents
-```
+## Supported providers
 
-Sign in to multiple accounts and pidge merges reads across all of them by default.
+Microsoft 365 work/school accounts and personal Microsoft accounts (Outlook.com, Hotmail, Live)
+today. pidge's core is provider-neutral, and more providers may follow.
 
-## Reading the inbox
+## Contributing
 
-```bash
-# Shortcut: list 25 most recent across every signed-in account
-pidge mail
-
-# Shortcut: open a specific message by a fragment of its 8-char ID
-pidge mail 3515
-
-# Explicit forms
-pidge mail list --account kristofer@mklab.se --unread -n 50
-pidge mail show 3515 --mark-read
-
-# Pipe to scripts
-pidge mail --json | jq '.[].subject'
-```
-
-## Calendar
-
-```bash
-# Shortcut: list events for today + next 7 days across every account
-pidge calendar
-
-# Canned windows
-pidge calendar --today
-pidge calendar --tomorrow
-pidge calendar --week
-pidge calendar --month
-
-# Open one event by fragment of its 8-char hash
-pidge calendar 4cabda75
-
-# Schedule a meeting with attendees and a Teams URL
-pidge calendar new \
-  --title "Q3 planning" \
-  --start "tomorrow 15:00" --end "+90m" \
-  --invite alice@example.com,bob@example.com \
-  --location "Office" --online
-
-# Recurring weekly team sync
-pidge calendar new \
-  --title "Team sync" \
-  --start "next mon 09:00" --end "+30m" \
-  --repeat weekly --on mon --until 2026-12-31
-
-# Appointment with a real calendar reminder the day before
-pidge calendar new \
-  --title "Car service" \
-  --start "2026-10-07T11:25" --end "+35m" \
-  --location "Volvo Car Kista" --reminder 1d
-
-# Change or switch off the reminder on an existing event
-pidge calendar edit 4cabda75 --reminder 2h
-pidge calendar edit 4cabda75 --reminder off
-
-# Reschedule
-pidge calendar move-time 4cabda75 --start "fri 14:00"
-
-# Cancel (organizer-only; sends notices to attendees)
-pidge calendar cancel 4cabda75 --comment "Postponed to next week"
-
-# RSVP to someone else's invite
-pidge calendar rsvp 4cabda75 --accept
-
-# Pipe to scripts
-pidge calendar --json --week | jq '.[] | .subject'
-```
-
-## AI Integration
-
-pidge delegates AI configuration to [ailloy](https://github.com/mklab-se/ailloy), a unified AI provider library shared by the MKLab CLI suite (`rigg`, `mdeck`, `cosq`, `pidge`). Configure your provider once:
-
-```bash
-pidge ai config    # configure your AI provider
-pidge ai status    # check status
-```
-
-and it's available to every ailloy-based tool.
-
-## Remote MCP server
-
-Prefer not to run `pidge` locally at all? `pidge-mcp` is a hosted [Model
-Context Protocol](https://modelcontextprotocol.io) server exposing the same
-mail and calendar tools over HTTP to Claude.ai, Cowork, Claude Code, ChatGPT
-and other MCP-capable harnesses, with each user signing in with their own
-Microsoft account. See [docs/mcp.md](docs/mcp.md) for connecting, migrating
-an existing local `pidge` setup with `pidge mcp connect`, and self-hosting
-(including a ready-made container image at `ghcr.io/mklab-se/pidge-mcp`).
-
-## Development
-
-```bash
-cargo build              # Build
-cargo test --workspace   # Run tests
-cargo clippy             # Lint
-cargo fmt                # Format
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor guide.
-
-## Releasing
-
-Releases are driven by the [`/release`](.claude/skills/release/SKILL.md) skill (run it in Claude
-Code with `major`, `minor`, or `patch`). It updates the toolchain and dependencies, runs the CI
-gates, bumps the version, updates the changelog, then commits, pushes, and tags `vX.Y.Z`. Pushing
-the tag triggers `.github/workflows/release.yml`, which:
-
-1. Re-runs the full CI suite
-2. Builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries for Linux, macOS
-   (Intel + ARM), and Windows, with a CycloneDX SBOM per target
-3. Creates a GitHub Release with the archives and SBOMs (see
-   [INSTALL.md](INSTALL.md#software-bill-of-materials-sbom) for how to read them)
-4. Publishes `pidge-core`, then `pidge-client`, then `pidge` to crates.io
-5. Updates the Homebrew formula in [`mklab-se/homebrew-tap`](https://github.com/mklab-se/homebrew-tap)
-
-### Required secrets
-
-Configure these once on the GitHub repository (the same secrets are used by the other MKLab tools):
-
-| Secret | Where | Purpose | How to create |
-| --- | --- | --- | --- |
-| `CARGO_REGISTRY_TOKEN` | Environment **`crates-io`** | Publish to crates.io | [crates.io/settings/tokens](https://crates.io/settings/tokens) → new token with publish scope |
-| `HOMEBREW_TAP_TOKEN` | Repository secret | Push the formula to the tap | A GitHub PAT with `repo` scope for `mklab-se/homebrew-tap` |
-
-If `HOMEBREW_TAP_TOKEN` is missing, the release still succeeds — the Homebrew step just logs a warning.
-
-## Changelog
-
-Curious what's new? See [CHANGELOG.md](CHANGELOG.md) for the full history of
-changes, newest first.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPMENT.md](DEVELOPMENT.md). Changes are listed
+in [CHANGELOG.md](CHANGELOG.md), newest first.
 
 ## License
 

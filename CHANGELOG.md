@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **pidge is now presented as the e-mail and calendar client for your AI agent.** The README is
+  rewritten around that: why it matters, a short agent session, and two ways in (CLI plus agent
+  skill, or the MCP server), with a "What's new" link up top. The full command tour moved to
+  `docs/usage.md` and the release process to `DEVELOPMENT.md`. `pidge --help`, the crate
+  descriptions and keywords say the same thing, and `docs/mcp.md` notes that the reference server
+  is invite-only.
+
 ## [1.4.2] - 2026-09-23
 
 ### Changed

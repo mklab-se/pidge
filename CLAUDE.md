@@ -1,6 +1,6 @@
 # pidge
 
-A fast CLI for e-mail and calendar. **Designed to be operated by AI coding agents** (Claude Code, Codex, Copilot, …) on the user's behalf — humans can run it directly, but the primary surface is the agent. `pidge ai skill --emit` produces a SKILL.md that wires pidge into an agent; pass `--from-source` to emit a skill that runs pidge via `cargo run` from a source checkout instead of an installed binary.
+The e-mail and calendar client for your AI agent: a fast CLI (plus a hosted MCP server). **Designed to be operated by AI coding agents** (Claude Code, Codex, Copilot, …) on the user's behalf — humans can run it directly, but the primary surface is the agent. `pidge ai skill --emit` produces a SKILL.md that wires pidge into an agent; pass `--from-source` to emit a skill that runs pidge via `cargo run` from a source checkout instead of an installed binary.
 
 ## Commands
 

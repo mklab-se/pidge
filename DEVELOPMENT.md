@@ -1,9 +1,10 @@
 # pidge — Development setup
 
-Most workflows are documented in [CONTRIBUTING.md](CONTRIBUTING.md). This file covers two developer-only concerns:
+Most workflows are documented in [CONTRIBUTING.md](CONTRIBUTING.md). This file covers three developer-only concerns:
 
 1. One-time Entra app registration (the `client_id` the binary needs)
 2. Local development without the registered app (env-var override)
+3. Releasing
 
 ## 1. Register the pidge app in Entra
 
@@ -60,3 +61,30 @@ cargo run -- account add
 ```
 
 The env var overrides the compile-time constant. Unset it to use the baked-in value.
+
+## 3. Releasing
+
+Releases are driven by the [`/release`](.claude/skills/release/SKILL.md) skill (run it in Claude
+Code with `major`, `minor`, or `patch`). It updates the toolchain and dependencies, runs the CI
+gates, bumps the version, updates the changelog, then commits, pushes, and tags `vX.Y.Z`. Pushing
+the tag triggers `.github/workflows/release.yml`, which:
+
+1. Re-runs the full CI suite
+2. Builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries for Linux, macOS
+   (Intel + ARM), and Windows, with a CycloneDX SBOM per target
+3. Creates a GitHub Release with the archives and SBOMs (see
+   [INSTALL.md](INSTALL.md#software-bill-of-materials-sbom) for how to read them)
+4. Publishes `pidge-core`, then `pidge-client`, then `pidge` to crates.io
+5. Updates the Homebrew formula in [`mklab-se/homebrew-tap`](https://github.com/mklab-se/homebrew-tap)
+6. Publishes the `pidge-mcp` container image and deploys it to Azure
+
+### Required secrets
+
+Configure these once on the GitHub repository (the same secrets are used by the other MKLab tools):
+
+| Secret | Where | Purpose | How to create |
+| --- | --- | --- | --- |
+| `CARGO_REGISTRY_TOKEN` | Environment **`crates-io`** | Publish to crates.io | [crates.io/settings/tokens](https://crates.io/settings/tokens) → new token with publish scope |
+| `HOMEBREW_TAP_TOKEN` | Repository secret | Push the formula to the tap | A GitHub PAT with `repo` scope for `mklab-se/homebrew-tap` |
+
+If `HOMEBREW_TAP_TOKEN` is missing, the release still succeeds — the Homebrew step just logs a warning.

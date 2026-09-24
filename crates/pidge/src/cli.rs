@@ -3,13 +3,14 @@
 use anyhow::Result;
 use clap::Parser;
 
-/// A fast CLI for e-mail and calendar
+/// The e-mail and calendar client for your AI agent
 #[derive(Parser)]
 #[command(name = "pidge")]
 #[command(author, version, about)]
-#[command(long_about = "A fast CLI for e-mail and calendar.\n\n\
-    Manage one or more e-mail accounts and browse, search, send, and reply \
-    to e-mail from your terminal.")]
+#[command(long_about = "The e-mail and calendar client for your AI agent.\n\n\
+    Read, search, triage and send e-mail and manage calendars across one or more \
+    accounts — built to be driven by AI agents (see `pidge ai skill`), pleasant to \
+    use by hand. Add --json for machine-readable output.")]
 #[command(propagate_version = true)]
 pub struct Cli {
     /// Increase output verbosity (-v for debug, -vv for trace)

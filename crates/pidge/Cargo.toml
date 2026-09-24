@@ -6,9 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "A fast CLI for e-mail and calendar"
+description = "The e-mail and calendar client for your AI agent"
 readme = "../../README.md"
-keywords = ["email", "calendar", "inbox", "cli", "productivity"]
+keywords = ["email", "calendar", "ai", "agent", "cli"]
 categories = ["command-line-utilities", "email"]
 
 [[bin]]
