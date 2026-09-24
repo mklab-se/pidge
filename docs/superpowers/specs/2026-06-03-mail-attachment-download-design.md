@@ -1,4 +1,4 @@
-# `pidge mail attachments` — download received attachments
+# `pidge mail attachments`: download received attachments
 
 ## Problem
 
@@ -7,7 +7,7 @@ and `mail show` lists a message's attachments (name + size) and uses
 `get_attachment_bytes` to render inline images. But there is no user-facing way
 to **save** a received attachment to disk. This spec adds one.
 
-No changes to `pidge-core` or `pidge-client` are required — the plumbing exists.
+No changes to `pidge-core` or `pidge-client` are required; the plumbing exists.
 
 ## Command surface
 
@@ -21,15 +21,15 @@ pidge mail attachments save <fragment> [name]   # download to disk
 
 ### `save` arguments
 
-- `<fragment>` — fragment of the message's 8-char short hash, resolved via the
+- `<fragment>`: fragment of the message's 8-char short hash, resolved via the
   shared `mail_fragment::resolve` helper (same as `mail show`, `mail flag`, …).
-- `[name]` — optional. Case-insensitive **substring** match against attachment
+- `[name]`: optional. Case-insensitive **substring** match against attachment
   filenames.
   - Omitted → select **all** non-inline file attachments.
   - One match → that attachment.
   - Multiple matches → error listing the candidates (user narrows the name).
   - No match → error listing what the message does contain.
-- `-o, --out <path>` — destination.
+- `-o, --out <path>`: destination.
   - Existing directory, or a path ending in the platform separator → write
     file(s) into it under their **original** names.
   - Otherwise → treated as a target **file path** (rename). Valid only when
@@ -38,15 +38,15 @@ pidge mail attachments save <fragment> [name]   # download to disk
     created as needed.
   - Omitted → default destination `~/Downloads` (via `dirs::download_dir()`,
     falling back to the home dir, then `.`).
-- `--include-inline` — also include `is_inline` attachments (embedded logos,
+- `--include-inline`: also include `is_inline` attachments (embedded logos,
   signature images, inline photos). Affects both the all-attachments case and
   name matching.
-- `-f, --force` — overwrite an existing target file. Without it, an existing
+- `-f, --force`: overwrite an existing target file. Without it, an existing
   target is an error (`<path> exists (use --force)`).
 
 ### `list` arguments
 
-- `<fragment>` — as above.
+- `<fragment>`: as above.
 - Honors the global `--json` flag (like `mail show`). Human output is a
   `comfy_table` with NAME / SIZE / TYPE columns and an inline marker.
   By default lists file attachments; `--include-inline` adds inline ones.
@@ -110,5 +110,5 @@ The download itself is a thin `fs::write` over the already-tested
 - Resumable/chunked download for very large items (Graph returns
   `contentBytes` inline; the same simple-upload asymmetry as the existing
   attach path).
-- Downloading `itemAttachment` (nested message) attachments — `list_attachments`
+- Downloading `itemAttachment` (nested message) attachments: `list_attachments`
   already filters to `fileAttachment` only.

@@ -1,4 +1,4 @@
-# pidge remote MCP — full feature design
+# pidge remote MCP: full feature design
 
 **Date:** 2026-09-22
 **Status:** approved in discussion, awaiting spec review
@@ -35,7 +35,7 @@ Three, built and shipped in this order. Each gets its own implementation plan.
 
 ---
 
-## Part 1 — Tools and accounts
+## Part 1: Tools and accounts
 
 ### 1.1 Design rules
 
@@ -74,7 +74,7 @@ Three, built and shipped in this order. Each gets its own implementation plan.
 
 ### 1.3 Mail tools
 
-**`mail_overview`** — the entry point for "today's e-mail", "let's go through
+**`mail_overview`**: the entry point for "today's e-mail", "let's go through
 my inbox", "what needs a reply".
 Input: `since` (`today` default, `yesterday`, `Nd`, ISO), `unread_only`,
 `folder` (`inbox` default, `drafts`, `sent`, `archive`, or a folder id),
@@ -89,12 +89,12 @@ contains a question). The `list` flag needs message headers, which Graph
 does not return in list queries, so it is only present in `mail_read`.
 Triage is the harness's job, using these flags.
 
-**`mail_search`** — "find the mail from Gabriel about the ticket".
+**`mail_search`**: "find the mail from Gabriel about the ticket".
 Input: `query` (free text, Graph `$search`), `from`, `subject`, `after`,
 `before`, `has_attachments`, `folder`, `account`, `limit`.
 Output: same item shape as `mail_overview`, newest first.
 
-**`mail_read`** — read one message or a whole conversation.
+**`mail_read`**: read one message or a whole conversation.
 Input: `id`, `thread` (bool), `account` (optional; inferred from the id's
 owner account when omitted by trying the user's accounts in order).
 Output: headers (from, to, cc, date, account), attachments (id, name, type,
@@ -102,7 +102,7 @@ size; see `mail_attachment`), body as plain text with HTML rendered by pidge's r
 history stripped when `thread` is set. Thread mode returns messages newest
 first, each trimmed to its own contribution.
 
-**`mail_draft`** — create or revise a draft.
+**`mail_draft`**: create or revise a draft.
 Input: `kind` (`new`, `reply`, `reply_all`, `forward`), `in_reply_to`
 (message id, required for reply/forward), `draft_id` (revise instead of
 create), `to`/`cc`/`bcc` (addresses or names), `subject` (new only; replies
@@ -113,14 +113,14 @@ listing candidates; the harness asks the user and retries with an address.
 Output: `draft_id`, `account`, and a preview (from, to, cc, subject, body)
 that the harness is expected to show before sending.
 
-**`mail_send`** — send a draft.
+**`mail_send`**: send a draft.
 Input: `draft_id`, `account` (optional).
 Guardrails: per-user cap of 30 sends per hour; refuses drafts whose `from`
 is not one of the user's mailboxes; when a reply would go out from a
 different account than the one that received the original, the result says
 so. Output: confirmation with recipients and subject.
 
-**`mail_act`** — bulk actions for triage and cleanup.
+**`mail_act`**: bulk actions for triage and cleanup.
 Input: `ids` (1–100), `action` (`read`, `unread`, `flag`, `unflag`,
 `archive`, `move`, `categorize`, `delete`, `unsubscribe`), `folder` (for
 move), `categories` (for categorize), `account` (optional).
@@ -128,9 +128,9 @@ Semantics: `archive` moves to Archive; `delete` moves to Deleted Items;
 `unsubscribe` uses the List-Unsubscribe header (mailto or one-click POST),
 never a tracked link. Batched with Graph `$batch`. Output: per-id result.
 
-**`mail_folders`** — list folders with ids and unread counts per account.
+**`mail_folders`**: list folders with ids and unread counts per account.
 
-**`mail_attachment`** — get at "please see the attached file".
+**`mail_attachment`**: get at "please see the attached file".
 Input: `id` (message), `attachment_id`, `mode` (`read` default, `link`),
 `account` (optional).
 `read` returns the attachment's content for the harness: documents (PDF,
@@ -144,7 +144,7 @@ shows the user to click.
 
 ### 1.4 Calendar tools
 
-**`calendar_agenda`** — every "what's on my calendar" question.
+**`calendar_agenda`**: every "what's on my calendar" question.
 Input: `range` (`today` default, `tomorrow`, `this_week`, `next_week`,
 `next`, or `from`/`to`), `pending_only`, `account`.
 Output: events merged across accounts and calendars, sorted by start, in the
@@ -154,20 +154,20 @@ user's timezone: `id`, `account`, `start`–`end` (or all-day), `title`,
 event that starts after now. `pending_only` returns invites with
 `my_response: none`.
 
-**`calendar_respond`** — accept, decline, or propose a new time.
+**`calendar_respond`**: accept, decline, or propose a new time.
 Input: `id`, `response` (`accept`, `tentative`, `decline`), `message`,
 `send_response` (default true), `propose` (`start`, `end`; only with
 `tentative` or `decline`, sent as Graph `proposedNewTime`), `account`.
 Output: what was sent to the organizer.
 
-**`calendar_event`** — create, update, cancel.
+**`calendar_event`**: create, update, cancel.
 Input: `action`, `id` (update/cancel), `title`, `start`, `end` or `all_day`,
 `attendees` (addresses or names), `location`, `body`, `online_meeting`
 (bool), `account` (default sender account for create), `message` (cancel
 note).
 Output: the event as `calendar_agenda` would render it.
 
-**`calendar_availability`** — free slots for "when am I free" and as the
+**`calendar_availability`**: free slots for "when am I free" and as the
 input to propose-new-time.
 Input: `duration_minutes`, `range` (as agenda; default `this_week`),
 `working_hours` (default 08:00–18:00 Monday–Friday in the user's timezone),
@@ -176,7 +176,7 @@ Output: up to 20 free windows, computed from the user's own calendars only.
 
 ### 1.5 Accounts and send-from rules
 
-**User record** — one Key Vault secret per user, `user-<hash of sign-in
+**User record**: one Key Vault secret per user, `user-<hash of sign-in
 address>`, JSON:
 
 ```json
@@ -189,7 +189,7 @@ address>`, JSON:
 }
 ```
 
-**Mailbox record** — `mailbox-<sanitized address>` stays one secret per
+**Mailbox record**: `mailbox-<sanitized address>` stays one secret per
 mailbox and gains an `owner` field next to the token set. A mailbox can have
 exactly one owner. The sign-in callback and the connect callback both refuse
 to bind a mailbox that another user owns.
@@ -203,20 +203,20 @@ to bind a mailbox that another user owns.
 
 **Tools**
 
-- `accounts_list` — mailboxes, sign-in address, default sender, timezone,
+- `accounts_list`: mailboxes, sign-in address, default sender, timezone,
   and each mailbox's health (ok / needs reconnect).
-- `accounts_connect` — input `email` (optional hint shown in the account
+- `accounts_connect`: input `email` (optional hint shown in the account
   picker). Creates a pending connect bound to the current user and returns a
   sign-in URL; where the client supports MCP URL elicitation the server uses
   it, otherwise the harness shows the link. The callback runs the same
   Microsoft exchange as sign-in, checks ownership, and appends the mailbox to
   the user record. Allowlist applies to sign-in identities, not to connected
   mailboxes: Anna may connect any mailbox she can log in to.
-- `accounts_update` — `default_sender`, `timezone`, `disconnect` (removes
+- `accounts_update`: `default_sender`, `timezone`, `disconnect` (removes
   the mailbox record and its secret; refuses to disconnect the sign-in
   mailbox), `trusted_senders` add/remove.
 
-**Migration from local pidge** — `pidge mcp connect <url>` (CLI, sub-project
+**Migration from local pidge**: `pidge mcp connect <url>` (CLI, sub-project
 3) signs the CLI in as an MCP client with the same OAuth flow, then for each
 local account not yet connected calls `accounts_connect` and opens the URL in
 the browser. Default account and trusted senders are copied as settings. No
@@ -239,7 +239,7 @@ refresh tokens leave the machine.
   `$batch` for the `mail_act` verbs that lack it, calendar view across all
   calendars of an account, `proposedNewTime` on RSVP if not already
   supported, List-Unsubscribe one-click POST.
-- **MCP prompts**: `triage_inbox`, `reply_to`, `cleanup_inbox` — short
+- **MCP prompts** (`triage_inbox`, `reply_to`, `cleanup_inbox`): short
   recipes naming which tools to call in which order and what to confirm with
   the user.
 
@@ -311,7 +311,7 @@ refresh tokens leave the machine.
 
 ---
 
-## Part 2 — Platform
+## Part 2: Platform
 
 ### 2.1 Custom domain `pidge.mklab.se`
 
@@ -366,7 +366,7 @@ refresh tokens leave the machine.
 
 ---
 
-## Part 3 — Docs and distribution
+## Part 3: Docs and distribution
 
 - `docs/mcp.md` (linked from README): what the server is, connecting from
   Claude (web/desktop/mobile), ChatGPT (plugins page, Create MCP App), Claude

@@ -1,4 +1,4 @@
-//! `pidge mail unsubscribe` — opt out of a sender using the message's
+//! `pidge mail unsubscribe`: opt out of a sender using the message's
 //! `List-Unsubscribe` / `List-Unsubscribe-Post` headers.
 //!
 //! Preference order: RFC 8058 one-click POST → RFC 2369 mailto → bail with
@@ -36,7 +36,7 @@ pub async fn run(fragment: String, yes: bool) -> Result<()> {
 
     match method {
         UnsubscribeMethod::None => Err(anyhow!(
-            "Message {short} has no `List-Unsubscribe` header — there is no \
+            "Message {short} has no `List-Unsubscribe` header; there is no \
              standard way to unsubscribe from this sender. Look for an \
              unsubscribe link in the body or contact the sender directly."
         )),

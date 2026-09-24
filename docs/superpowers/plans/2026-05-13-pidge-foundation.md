@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Scaffold the `pidge` repository — Cargo workspace, CLI skeleton with `ai` / `completion` / `version` commands wired to `ailloy`, full release pipeline (GitHub Actions → crates.io + mklab-se/homebrew-tap), and the `/release` skill — shipping as `0.1.0` with no feature commands.
+**Goal:** Scaffold the `pidge` repository: Cargo workspace, CLI skeleton with `ai` / `completion` / `version` commands wired to `ailloy`, full release pipeline (GitHub Actions → crates.io + mklab-se/homebrew-tap), and the `/release` skill, shipping as `0.1.0` with no feature commands.
 
 **Architecture:** Single-crate Cargo workspace (`crates/pidge`). The CLI delegates AI configuration to `ailloy::config_tui`, runs an async update checker against crates.io on every invocation, and produces static shell completions via `clap_complete`. The release workflow is triggered by `v*` tags and parallelises GitHub binary release, Homebrew formula update (auto-created on first run), and crates.io publish.
 
@@ -25,8 +25,8 @@
 | `crates/pidge/src/banner.rs` | "PIDGE" ASCII art + version subtitle |
 | `crates/pidge/src/update.rs` | crates.io polling, 24h cache, brew/binstall/cargo detection |
 | `crates/pidge/src/commands/mod.rs` | Module exports |
-| `crates/pidge/src/commands/ai.rs` | `pidge ai *` — thin wrapper over `ailloy::config_tui` |
-| `crates/pidge/src/commands/completion.rs` | `pidge completion <shell>` — static script generation |
+| `crates/pidge/src/commands/ai.rs` | `pidge ai *`: thin wrapper over `ailloy::config_tui` |
+| `crates/pidge/src/commands/completion.rs` | `pidge completion <shell>`: static script generation |
 | `crates/pidge/src/commands/skill.rs` | `pidge ai skill [--emit\|--reference]` |
 | `crates/pidge/doc/ai-reference.md` | Reference text included by `include_str!` |
 | `.gitignore` | Rust + editor/OS ignores |
@@ -41,7 +41,7 @@
 
 ---
 
-## Task 1: Workspace bootstrap — root `Cargo.toml`
+## Task 1: Workspace bootstrap: root `Cargo.toml`
 
 **Files:**
 - Create: `Cargo.toml`
@@ -107,7 +107,7 @@ ailloy = { version = "0.7", default-features = false, features = ["config-tui"] 
 
 - [ ] **Step 3: Defer build verification**
 
-The workspace member `crates/pidge` doesn't exist yet. We'll verify with `cargo build` after Task 2 creates the binary crate. Do **not** run `cargo build` here — it will fail.
+The workspace member `crates/pidge` doesn't exist yet. We'll verify with `cargo build` after Task 2 creates the binary crate. Do **not** run `cargo build` here. It will fail.
 
 - [ ] **Step 4: No commit yet**
 
@@ -115,7 +115,7 @@ We'll commit after Task 2 produces a runnable binary so the first commit is a se
 
 ---
 
-## Task 2: Crate skeleton — `crates/pidge/Cargo.toml` and hello-world `main.rs`
+## Task 2: Crate skeleton: `crates/pidge/Cargo.toml` and hello-world `main.rs`
 
 **Files:**
 - Create: `crates/pidge/Cargo.toml`
@@ -177,7 +177,7 @@ pkg-fmt = "zip"
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/main.rs`:
 
 ```rust
-//! pidge — A fast CLI for e-mail and calendar
+//! pidge: A fast CLI for e-mail and calendar
 
 fn main() {
     println!("pidge v{}", env!("CARGO_PKG_VERSION"));
@@ -203,7 +203,7 @@ git commit -m "Bootstrap Cargo workspace and pidge binary crate"
 
 ---
 
-## Task 3: Banner module — `crates/pidge/src/banner.rs`
+## Task 3: Banner module: `crates/pidge/src/banner.rs`
 
 **Files:**
 - Create: `crates/pidge/src/banner.rs`
@@ -266,7 +266,7 @@ mod tests {
 Edit `crates/pidge/src/main.rs` so the file reads exactly:
 
 ```rust
-//! pidge — A fast CLI for e-mail and calendar
+//! pidge: A fast CLI for e-mail and calendar
 
 mod banner;
 
@@ -294,7 +294,7 @@ git commit -m "Add pidge ASCII banner with version subtitle"
 
 ---
 
-## Task 4: Update checker — `crates/pidge/src/update.rs`
+## Task 4: Update checker: `crates/pidge/src/update.rs`
 
 **Files:**
 - Create: `crates/pidge/src/update.rs`
@@ -458,7 +458,7 @@ pub async fn check_for_updates() {
 
 - [ ] **Step 2: Verify the module compiles in isolation**
 
-The module isn't referenced from `main.rs` yet — but `cargo build` only checks reachable items. Add a temporary compile-only check by running `cargo check -p pidge` with `mod update;` added to `main.rs` (we'll wire `check_for_updates()` properly in Task 11). Instead of that detour, defer the build verification to Task 11.
+The module isn't referenced from `main.rs` yet, but `cargo build` only checks reachable items. Add a temporary compile-only check by running `cargo check -p pidge` with `mod update;` added to `main.rs` (we'll wire `check_for_updates()` properly in Task 11). Instead of that detour, defer the build verification to Task 11.
 
 - [ ] **Step 3: No commit yet**
 
@@ -466,7 +466,7 @@ The module isn't referenced from `main.rs` yet — but `cargo build` only checks
 
 ---
 
-## Task 5: CLI definitions — `crates/pidge/src/cli.rs`
+## Task 5: CLI definitions: `crates/pidge/src/cli.rs`
 
 **Files:**
 - Create: `crates/pidge/src/cli.rs`
@@ -486,7 +486,7 @@ use clap::Parser;
 #[command(name = "pidge")]
 #[command(author, version, about)]
 #[command(long_about = "A fast CLI for e-mail and calendar.\n\n\
-    Foundation release — AI configuration, shell completions, and version info only. \
+    Foundation release: AI configuration, shell completions, and version info only. \
     E-mail and calendar feature commands ship in future releases.")]
 #[command(propagate_version = true)]
 pub struct Cli {
@@ -540,7 +540,7 @@ pub enum AiCommands {
     Config,
     /// Show AI status (same as running `pidge ai` without a subcommand)
     Status,
-    /// AI agent skill information — helps set up Claude Code skills for pidge
+    /// AI agent skill information: helps set up Claude Code skills for pidge
     Skill {
         /// Output the skill markdown content (ready to save as a skill file)
         #[arg(long)]
@@ -584,13 +584,13 @@ impl Cli {
 }
 ```
 
-- [ ] **Step 2: Build will fail — that's expected**
+- [ ] **Step 2: Build will fail, that's expected**
 
 `cli.rs` references `crate::commands::ai` and `crate::commands::completion`, which don't exist yet. We won't run `cargo build` until Task 10 wires every module. No action this step.
 
 ---
 
-## Task 6: Commands module skeleton — `crates/pidge/src/commands/mod.rs`
+## Task 6: Commands module skeleton: `crates/pidge/src/commands/mod.rs`
 
 **Files:**
 - Create: `crates/pidge/src/commands/mod.rs`
@@ -611,11 +611,11 @@ pub mod skill;
 
 - [ ] **Step 2: No build verification yet**
 
-`ai`, `completion`, `skill` are missing — build will fail until Tasks 7–9 create them.
+`ai`, `completion`, `skill` are missing; build will fail until Tasks 7–9 create them.
 
 ---
 
-## Task 7: AI subcommand — `crates/pidge/src/commands/ai.rs`
+## Task 7: AI subcommand: `crates/pidge/src/commands/ai.rs`
 
 **Files:**
 - Create: `crates/pidge/src/commands/ai.rs`
@@ -627,11 +627,11 @@ Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/ai.rs`:
 ```rust
 //! AI feature management
 //!
-//! `pidge ai`         — show status
-//! `pidge ai test`    — test AI connection
-//! `pidge ai enable`  — enable AI for pidge
-//! `pidge ai disable` — disable AI for pidge
-//! `pidge ai config`  — interactive AI node configuration
+//! `pidge ai`: show status
+//! `pidge ai test`: test AI connection
+//! `pidge ai enable`: enable AI for pidge
+//! `pidge ai disable`: disable AI for pidge
+//! `pidge ai config`: interactive AI node configuration
 
 use anyhow::Result;
 
@@ -670,7 +670,7 @@ The `#[allow(dead_code)]` on `is_ai_active` is required because no feature comma
 
 ---
 
-## Task 8: Completion subcommand — `crates/pidge/src/commands/completion.rs`
+## Task 8: Completion subcommand: `crates/pidge/src/commands/completion.rs`
 
 **Files:**
 - Create: `crates/pidge/src/commands/completion.rs`
@@ -740,26 +740,26 @@ Run: `mkdir -p /Users/kristofer/repos/mklab-se/pidge/crates/pidge/doc`
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/doc/ai-reference.md`:
 
 ```markdown
-# pidge — AI agent reference
+# pidge: AI agent reference
 
 This is a foundation release. pidge currently ships only AI configuration, shell completion, and version commands. There are no e-mail or calendar feature commands yet.
 
 ## Today's command surface
 
-- `pidge ai status` — show AI configuration status (from `~/.config/ailloy/config.yaml`)
-- `pidge ai test [<message>]` — round-trip test to the configured AI provider
-- `pidge ai enable` / `pidge ai disable` — toggle AI usage for pidge
-- `pidge ai config` — interactive ailloy configuration TUI
-- `pidge ai skill --emit` — print the Claude Code skill body
-- `pidge ai skill --reference` — print this reference doc
-- `pidge completion <bash|zsh|fish|powershell>` — emit static completion script
-- `pidge version` — print banner + version
+- `pidge ai status`: show AI configuration status (from `~/.config/ailloy/config.yaml`)
+- `pidge ai test [<message>]`: round-trip test to the configured AI provider
+- `pidge ai enable` / `pidge ai disable`: toggle AI usage for pidge
+- `pidge ai config`: interactive ailloy configuration TUI
+- `pidge ai skill --emit`: print the Claude Code skill body
+- `pidge ai skill --reference`: print this reference doc
+- `pidge completion <bash|zsh|fish|powershell>`: emit static completion script
+- `pidge version`: print banner + version
 
 ## Global flags
 
-- `-v` / `-vv` — increase log verbosity (`debug` / `trace`)
-- `-q` / `--quiet` — suppress non-essential output and update notifications
-- `--no-color` — disable ANSI colors
+- `-v` / `-vv`: increase log verbosity (`debug` / `trace`)
+- `-q` / `--quiet`: suppress non-essential output and update notifications
+- `--no-color`: disable ANSI colors
 
 ## Configuration locations
 
@@ -768,7 +768,7 @@ This is a foundation release. pidge currently ships only AI configuration, shell
 
 ## Environment variables
 
-- `PIDGE_NO_UPDATE_CHECK` — when set, skip the background crates.io update check
+- `PIDGE_NO_UPDATE_CHECK`: when set, skip the background crates.io update check
 
 ## Roadmap
 
@@ -807,7 +807,7 @@ fn print_guide() {
         r#"pidge AI Skill Setup
 ====================
 
-pidge is a CLI for e-mail and calendar. This is a foundation release —
+pidge is a CLI for e-mail and calendar. This is a foundation release;
 feature commands ship later. The emitted skill explains today's surface
 and points the agent at the live reference doc.
 
@@ -830,10 +830,10 @@ fn print_skill_file() {
     print!(
         r#"---
 name: pidge
-description: A fast CLI for e-mail and calendar. Foundation release — AI configuration, shell completions, and version commands only.
+description: A fast CLI for e-mail and calendar. Foundation release: AI configuration, shell completions, and version commands only.
 ---
 
-# pidge — E-mail and Calendar CLI
+# pidge: E-mail and Calendar CLI
 
 pidge is in foundation phase. No e-mail or calendar feature commands ship yet.
 
@@ -847,11 +847,11 @@ pidge ai skill --reference
 
 ## Quick command reference
 
-- `pidge ai status` — show AI configuration status
-- `pidge ai test` — test the configured AI connection
-- `pidge ai config` — interactive AI provider/model setup
-- `pidge completion <shell>` — generate static shell completion script
-- `pidge version` — print banner and version
+- `pidge ai status`: show AI configuration status
+- `pidge ai test`: test the configured AI connection
+- `pidge ai config`: interactive AI provider/model setup
+- `pidge completion <shell>`: generate static shell completion script
+- `pidge version`: print banner and version
 "#
     );
 }
@@ -863,7 +863,7 @@ fn print_reference() {
 
 ---
 
-## Task 10: Final `main.rs` — wire CLI, banner, update, tracing
+## Task 10: Final `main.rs`: wire CLI, banner, update, tracing
 
 **Files:**
 - Modify: `crates/pidge/src/main.rs`
@@ -873,7 +873,7 @@ fn print_reference() {
 Overwrite `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/main.rs` so it reads exactly:
 
 ```rust
-//! pidge — A fast CLI for e-mail and calendar
+//! pidge: A fast CLI for e-mail and calendar
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -934,7 +934,7 @@ async fn main() -> Result<()> {
 - [ ] **Step 2: Build the full workspace**
 
 Run: `cargo build`
-Expected: clean build, no warnings, no errors. If clippy/dead-code warnings appear on `is_ai_active`, the `#[allow(dead_code)]` from Task 7 should be silencing them — if not, double-check that attribute is present.
+Expected: clean build, no warnings, no errors. If clippy/dead-code warnings appear on `is_ai_active`, the `#[allow(dead_code)]` from Task 7 should be silencing them. If not, double-check that attribute is present.
 
 - [ ] **Step 3: Run the full test suite**
 
@@ -948,7 +948,7 @@ Run each command and confirm the expected output:
 ```bash
 cargo run -q -- --help
 ```
-Expected: top-level help with `ai`, `completion`, `version` subcommands listed and the long-about text "A fast CLI for e-mail and calendar.\n\nFoundation release — …".
+Expected: top-level help with `ai`, `completion`, `version` subcommands listed and the long-about text "A fast CLI for e-mail and calendar.\n\nFoundation release: …".
 
 ```bash
 cargo run -q -- version
@@ -968,7 +968,7 @@ Expected: first lines of a bash completion script starting with `_pidge() {`. Th
 ```bash
 cargo run -q -- ai
 ```
-Expected: ailloy prints AI status (likely "AI is not enabled for pidge" or similar) — no panic, no error.
+Expected: ailloy prints AI status (likely "AI is not enabled for pidge" or similar), no panic, no error.
 
 ```bash
 cargo run -q -- ai skill
@@ -983,7 +983,7 @@ Expected: markdown starting with `---\nname: pidge\n…`.
 ```bash
 cargo run -q -- ai skill --reference
 ```
-Expected: the reference doc starting with `# pidge — AI agent reference`.
+Expected: the reference doc starting with `# pidge: AI agent reference`.
 
 If any smoke test fails or produces unexpected output, fix before continuing.
 
@@ -1116,7 +1116,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor guide.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
 ```
 
 - [ ] **Step 2: Create `CHANGELOG.md`**
@@ -1208,17 +1208,17 @@ cargo binstall pidge
 
 Dynamic completions adapt to whatever flags and subcommands the current binary supports. Add to your shell config:
 
-**Bash** — add to `~/.bashrc`:
+**Bash**: add to `~/.bashrc`:
 ```bash
 source <(COMPLETE=bash pidge)
 ```
 
-**Zsh** — add to `~/.zshrc`:
+**Zsh**: add to `~/.zshrc`:
 ```bash
 source <(COMPLETE=zsh pidge)
 ```
 
-**Fish** — add to `~/.config/fish/config.fish`:
+**Fish**: add to `~/.config/fish/config.fish`:
 ```bash
 source (COMPLETE=fish pidge | psub)
 ```
@@ -1227,22 +1227,22 @@ source (COMPLETE=fish pidge | psub)
 
 If you prefer static completions, use `pidge completion <shell>`:
 
-**Bash** — add to `~/.bashrc`:
+**Bash**: add to `~/.bashrc`:
 ```bash
 source <(pidge completion bash)
 ```
 
-**Zsh** — add to `~/.zshrc`:
+**Zsh**: add to `~/.zshrc`:
 ```bash
 source <(pidge completion zsh)
 ```
 
-**Fish** — save to completions directory:
+**Fish**: save to completions directory:
 ```bash
 pidge completion fish > ~/.config/fish/completions/pidge.fish
 ```
 
-**PowerShell** — add to profile:
+**PowerShell**: add to profile:
 ```powershell
 pidge completion powershell >> $PROFILE
 ```
@@ -1331,7 +1331,7 @@ Create `/Users/kristofer/repos/mklab-se/pidge/CLAUDE.md`:
 ```markdown
 # pidge
 
-A fast CLI for e-mail and calendar. Foundation release — AI configuration and version commands only.
+A fast CLI for e-mail and calendar. Foundation release: AI configuration and version commands only.
 
 ## Commands
 
@@ -1357,8 +1357,8 @@ crates/
       update.rs         # Version update checker (queries crates.io, caches 24h)
       commands/
         mod.rs          # Command module exports
-        ai.rs           # `pidge ai` — delegates to ailloy::config_tui
-        completion.rs   # `pidge completion <shell>` — static completion + dynamic tip
+        ai.rs           # `pidge ai`: delegates to ailloy::config_tui
+        completion.rs   # `pidge completion <shell>`: static completion + dynamic tip
         skill.rs        # `pidge ai skill [--emit|--reference]`
     doc/
       ai-reference.md   # Embedded via include_str! in skill.rs
@@ -1376,7 +1376,7 @@ The workspace is single-member by design at this stage. Splitting into `pidge`, 
 - Async runtime: `tokio`
 - Logging: `tracing` + `tracing-subscriber` with `-v`/`-vv` verbosity levels
 - Colored output via `colored` crate (respects `--no-color`)
-- Error handling: `anyhow` (CLI), `thiserror` (libraries — none yet)
+- Error handling: `anyhow` (CLI), `thiserror` (libraries, none yet)
 - AI integration: delegates entirely to `ailloy::config_tui` with tool name `"pidge"` and capability slice `&["chat"]`. Config lives at `~/.config/ailloy/config.yaml`, shared with `rigg`, `mdeck`, `cosq`.
 - Update checker: background task, cached at `~/.cache/pidge/`, skip with `PIDGE_NO_UPDATE_CHECK=1`
 
@@ -1402,8 +1402,8 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
 
 Specs and implementation plans live under `docs/superpowers/`:
 
-- `docs/superpowers/specs/` — design documents
-- `docs/superpowers/plans/` — implementation plans
+- `docs/superpowers/specs/`: design documents
+- `docs/superpowers/plans/`: implementation plans
 ```
 
 - [ ] **Step 6: Commit the docs**
@@ -1415,7 +1415,7 @@ git commit -m "Add README, CHANGELOG, INSTALL, CONTRIBUTING, and CLAUDE.md"
 
 ---
 
-## Task 13: CI workflow — `.github/workflows/ci.yml`
+## Task 13: CI workflow: `.github/workflows/ci.yml`
 
 **Files:**
 - Create: `.github/workflows/ci.yml`
@@ -1494,7 +1494,7 @@ GitHub Actions YAML can't be smoke-tested locally without a runner. We'll rely o
 
 ---
 
-## Task 14: Release workflow — `.github/workflows/release.yml`
+## Task 14: Release workflow: `.github/workflows/release.yml`
 
 **Files:**
 - Create: `.github/workflows/release.yml`
@@ -1720,7 +1720,7 @@ git commit -m "Add CI and release GitHub Actions workflows"
 
 ---
 
-## Task 15: Release skill — `.claude/skills/release/SKILL.md`
+## Task 15: Release skill: `.claude/skills/release/SKILL.md`
 
 **Files:**
 - Create: `.claude/skills/release/SKILL.md`
@@ -1763,10 +1763,10 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 
 ### 3. Pre-flight checks
 
-- Run `cargo fmt --all -- --check` — abort if formatting issues
-- Run `cargo clippy --workspace -- -D warnings` — abort if warnings
-- Run `cargo test --workspace` — abort if any test fails
-- Run `git status` — abort if there are uncommitted changes that are NOT documentation or version files
+- Run `cargo fmt --all -- --check`; abort if formatting issues
+- Run `cargo clippy --workspace -- -D warnings`; abort if warnings
+- Run `cargo test --workspace`; abort if any test fails
+- Run `git status`; abort if there are uncommitted changes that are NOT documentation or version files
 
 ### 4. Bump version numbers
 
@@ -1775,9 +1775,9 @@ $ARGUMENTS must be one of: `major`, `minor`, `patch`. If empty or invalid, stop 
 ### 5. Update documentation
 
 - **CHANGELOG.md**: Rename the `[Unreleased]` section to `[{NEW_VERSION}] - {TODAY}` (YYYY-MM-DD format). If there is no `[Unreleased]` section, create a new dated entry summarizing changes since the last release.
-- **README.md**: Review for accuracy — the install snippet uses `brew`/`cargo install` without a pinned version, so no edits are typically required. Update the "Status" section if the release moves pidge beyond foundation phase.
-- **INSTALL.md**: Review for accuracy — no version references to update typically.
-- **CLAUDE.md**: Review for accuracy — update the Architecture section if the workspace shape changed.
+- **README.md**: Review for accuracy: the install snippet uses `brew`/`cargo install` without a pinned version, so no edits are typically required. Update the "Status" section if the release moves pidge beyond foundation phase.
+- **INSTALL.md**: Review for accuracy: no version references to update typically.
+- **CLAUDE.md**: Review for accuracy: update the Architecture section if the workspace shape changed.
 
 ### 6. Verify the build
 
@@ -1806,7 +1806,7 @@ git commit -m "Add /release skill for version bump and tag workflow"
 
 ---
 
-## Task 16: Final verification — full CI parity locally
+## Task 16: Final verification: full CI parity locally
 
 **Files:** None modified.
 
@@ -1843,7 +1843,7 @@ Expected: working tree clean (everything from Tasks 1–15 has been committed).
 - [ ] **Step 4: Inspect the commit log**
 
 Run: `git log --oneline`
-Expected: a sequence of focused commits — bootstrap, banner, CLI skeleton, .gitignore, docs, workflows, release skill — on top of the existing `Initial commit`.
+Expected: a sequence of focused commits (bootstrap, banner, CLI skeleton, .gitignore, docs, workflows, release skill) on top of the existing `Initial commit`.
 
 ---
 
@@ -1861,7 +1861,7 @@ Before declaring the foundation complete, write a short status summary in your r
    - When ready: run `/release patch` (or `minor`) to cut `0.1.0` and watch the release workflow create the GitHub release, publish to crates.io, and create `homebrew-tap/Formula/pidge.rb`.
 3. **What's not in this scaffold**: no `init`/`auth`/feature commands, no provider integration, no MCP server, no workspace split into core/client crates. Roadmap items live in CHANGELOG `[Unreleased]` only after they're built.
 
-- [ ] **Step 2: Done — no further code changes**
+- [ ] **Step 2: Done: no further code changes**
 
 ---
 
@@ -1872,28 +1872,28 @@ Before declaring the foundation complete, write a short status summary in your r
 | Spec section | Covered by |
 |---|---|
 | Repository layout | Tasks 1, 2, 6, 11, 12, 13, 14, 15 (every listed path is created) |
-| Cargo workspace — root `Cargo.toml` | Task 1 |
-| Cargo workspace — `crates/pidge/Cargo.toml` | Task 2 |
+| Cargo workspace: root `Cargo.toml` | Task 1 |
+| Cargo workspace: `crates/pidge/Cargo.toml` | Task 2 |
 | CLI surface (foundation) | Task 5 (`cli.rs` defines every listed subcommand and global flag) |
-| Module responsibilities — `main.rs` | Task 10 |
-| Module responsibilities — `cli.rs` | Task 5 |
-| Module responsibilities — `commands/ai.rs` | Task 7 |
-| Module responsibilities — `commands/completion.rs` | Task 8 |
-| Module responsibilities — `commands/skill.rs` + `doc/ai-reference.md` | Task 9 |
-| Module responsibilities — `banner.rs` | Task 3 |
-| Module responsibilities — `update.rs` | Task 4 |
+| Module responsibilities: `main.rs` | Task 10 |
+| Module responsibilities: `cli.rs` | Task 5 |
+| Module responsibilities: `commands/ai.rs` | Task 7 |
+| Module responsibilities: `commands/completion.rs` | Task 8 |
+| Module responsibilities: `commands/skill.rs` + `doc/ai-reference.md` | Task 9 |
+| Module responsibilities: `banner.rs` | Task 3 |
+| Module responsibilities: `update.rs` | Task 4 |
 | `.claude/skills/release/SKILL.md` | Task 15 |
 | `.github/workflows/ci.yml` | Task 13 |
 | `.github/workflows/release.yml` | Task 14 |
 | Homebrew formula auto-create on first tag | Task 14 (`if [ -n "$FILE_SHA" ] ... else` branch) |
 | `README.md`, `CHANGELOG.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `INSTALL.md` | Task 12 |
 | `.gitignore` extension | Task 11 |
-| Versioning & release sequencing — initial commit on 0.1.0, no tag yet | Tasks 1–16 produce the scaffold; tagging is explicitly deferred to the user (Task 17 hand-off) |
-| Out-of-scope items | Not implemented — confirmed in Task 17 hand-off |
+| Versioning & release sequencing: initial commit on 0.1.0, no tag yet | Tasks 1–16 produce the scaffold; tagging is explicitly deferred to the user (Task 17 hand-off) |
+| Out-of-scope items | Not implemented, confirmed in Task 17 hand-off |
 
 **Placeholder scan:** No "TBD", "TODO", or "implement later" remain. Every code block is complete and executable.
 
-**Type/name consistency:** Verified — `Cli`, `Commands`, `AiCommands`, `Shell`, `Cli::run`, `commands::ai::run`, `commands::completion::generate_completions`, `commands::skill::run`, `update::check_for_updates`, `banner::print_banner_with_version` are referenced with the same names everywhere they appear.
+**Type/name consistency:** Verified: `Cli`, `Commands`, `AiCommands`, `Shell`, `Cli::run`, `commands::ai::run`, `commands::completion::generate_completions`, `commands::skill::run`, `update::check_for_updates`, `banner::print_banner_with_version` are referenced with the same names everywhere they appear.
 
 **Notable risks / things that could surprise the implementer:**
 

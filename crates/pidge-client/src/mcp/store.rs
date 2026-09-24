@@ -12,8 +12,8 @@
 //!   `<host>` is `host[:port]` with `:` replaced by `_` (mode 0600 on Unix).
 //!
 //! The OS keychain can't be enumerated, so [`save`](McpTokenStore::save) and
-//! [`delete`](McpTokenStore::delete) also maintain a small index —
-//! `${XDG_CONFIG_HOME:-~/.config}/pidge/mcp/servers.json`, mode 0600 — of
+//! [`delete`](McpTokenStore::delete) also maintain a small index
+//! (`${XDG_CONFIG_HOME:-~/.config}/pidge/mcp/servers.json`, mode 0600) of
 //! every server this user has a stored session with, so `pidge mcp status`
 //! (with no url) and similar commands can discover what's connected without
 //! the caller having to already know a url. [`list`](McpTokenStore::list)
@@ -59,7 +59,7 @@ impl McpTokenStore {
     /// Save `tokens`, overwriting any existing entry for its server, and
     /// best-effort upsert the server index so it can be discovered by
     /// [`Self::list`]. The tokens are the source of truth for whether this
-    /// call succeeded — a failure to update the index (e.g. a permissions
+    /// call succeeded; a failure to update the index (e.g. a permissions
     /// problem, a concurrent write) is logged and swallowed rather than
     /// failing a token write that already landed.
     pub fn save(tokens: &McpTokens, storage: TokenStorage) -> Result<(), ClientError> {
@@ -75,7 +75,7 @@ impl McpTokenStore {
 
     /// Remove the stored session for `server_url` and its index entry.
     /// No-op if none exists. As with [`Self::save`], the token deletion is
-    /// authoritative — a failure to update the index afterwards is logged,
+    /// authoritative; a failure to update the index afterwards is logged,
     /// not propagated.
     pub fn delete(server_url: &str, storage: TokenStorage) -> Result<(), ClientError> {
         match storage {
@@ -89,14 +89,14 @@ impl McpTokenStore {
     }
 
     /// Every server this user has a stored session with, per the on-disk
-    /// index. Empty (not an error) if the index file doesn't exist yet —
-    /// e.g. before the first `pidge mcp connect` — or if it exists but
+    /// index. Empty (not an error) if the index file doesn't exist yet
+    /// (e.g. before the first `pidge mcp connect`) or if it exists but
     /// can't be parsed. The index is only a discovery aid (the keychain and
     /// token files remain the source of truth for what's actually signed
     /// in), so a corrupt file must never block `status`, `connect`, or a
     /// token refresh; it's logged and treated as empty. The next
     /// [`Self::save`] then rewrites it from scratch, which does mean a
-    /// corrupt index silently drops any *other* servers it used to list —
+    /// corrupt index silently drops any *other* servers it used to list,
     /// an acceptable trade for never wedging sign-in on a damaged file that
     /// hand-editing (or a crash mid-write) could produce.
     pub fn list() -> Result<Vec<StoredServer>, ClientError> {
@@ -187,7 +187,7 @@ impl McpTokenStore {
 
     // --- file -----------------------------------------------------------
 
-    /// The `mcp` config directory's path. Pure — no I/O, no side effect —
+    /// The `mcp` config directory's path. Pure (no I/O, no side effect),
     /// so a read (`list`, `load_file`) never creates anything just by
     /// consulting it. Write paths that need the directory to actually
     /// exist use [`Self::ensure_dir`] instead.
@@ -198,11 +198,11 @@ impl McpTokenStore {
     /// [`Self::dir`], creating it (and tightening it to 0700 on Unix) if it
     /// doesn't exist yet. Called only from the write paths that are about
     /// to put a file in it (`save_file`, and the index writes in
-    /// `upsert_index`/`remove_from_index`) — never from a mere read.
+    /// `upsert_index`/`remove_from_index`), never from a mere read.
     fn ensure_dir() -> Result<PathBuf, ClientError> {
         let dir = Self::dir()?;
         std::fs::create_dir_all(&dir)?;
-        // `create_dir_all` leaves the default umask (typically 0755) —
+        // `create_dir_all` leaves the default umask (typically 0755);
         // tighten it to user-only. The token and index files inside are
         // already 0600, so this closes only the smaller exposure of the
         // directory listing itself revealing which hosts are connected.
@@ -416,7 +416,7 @@ mod tests {
             let tokens = fake_tokens("https://mcp.example.com/mcp");
             McpTokenStore::save(&tokens, TokenStorage::File).unwrap();
             // A refreshed token gets re-saved under the same backend on
-            // every use (see `RefreshingRpc`) — this must not accumulate a
+            // every use (see `RefreshingRpc`); this must not accumulate a
             // second index entry for the same server.
             McpTokenStore::save(&tokens, TokenStorage::File).unwrap();
 
@@ -545,7 +545,7 @@ mod tests {
 
             // The token write itself must not fail, and the index is now
             // readable again (even though the corrupt file meant any other
-            // servers it might have listed were lost — see `list`'s docs).
+            // servers it might have listed were lost; see `list`'s docs).
             assert_eq!(
                 McpTokenStore::load(&tokens.server, TokenStorage::File)
                     .unwrap()

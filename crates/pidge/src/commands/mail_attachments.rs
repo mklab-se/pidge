@@ -1,4 +1,4 @@
-//! `pidge mail attachments {list,save}` — list and download a received
+//! `pidge mail attachments {list,save}`: list and download a received
 //! message's file attachments.
 //!
 //! The Graph client already exposes `list_attachments` (metadata) and
@@ -197,7 +197,7 @@ enum Destination {
 ///
 /// `None` → the default directory. A path that is an existing directory, or
 /// that ends in the platform separator, is treated as a directory. Otherwise it
-/// is a target file path — which is only valid when a single attachment is
+/// is a target file path, which is only valid when a single attachment is
 /// selected; selecting several would collapse them onto one filename, so that
 /// is rejected.
 fn resolve_destination(

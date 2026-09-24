@@ -108,7 +108,7 @@ pub enum BodyContentType {
     Html,
 }
 
-/// An attachment listed on a message. Bytes are NOT included — fetch separately
+/// An attachment listed on a message. Bytes are NOT included; fetch separately
 /// via `GraphClient::get_attachment_bytes(account, message_id, attachment.id)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attachment {

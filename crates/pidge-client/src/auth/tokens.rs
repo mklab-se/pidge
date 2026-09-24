@@ -1,4 +1,4 @@
-//! Token storage shape — what gets serialized into the keychain.
+//! Token storage shape: what gets serialized into the keychain.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ impl TokenSet {
 }
 
 /// Hand-written so `access_token`/`refresh_token` are never printed by an
-/// incidental `{:?}` (a log line, a test failure message, …) — see
+/// incidental `{:?}` (a log line, a test failure message, …); see
 /// `crate::mcp::McpTokens`'s matching `Debug` impl.
 impl std::fmt::Debug for TokenSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

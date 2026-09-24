@@ -233,7 +233,7 @@ mod tests {
 
     #[test]
     fn input_tz_falls_back_to_local_on_invalid_override() {
-        // Garbage strings must not panic — fall through to the local
+        // Garbage strings must not panic; fall through to the local
         // resolution path.
         let _ = input_tz(Some("Not/A/Real/TZ")).name();
     }

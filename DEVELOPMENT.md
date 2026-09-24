@@ -1,4 +1,4 @@
-# pidge — Development setup
+# pidge: Development setup
 
 Most workflows are documented in [CONTRIBUTING.md](CONTRIBUTING.md). This file covers three developer-only concerns:
 
@@ -36,10 +36,10 @@ If you can't or don't want to use the Azure CLI:
 
 1. Open <https://portal.azure.com> → **Microsoft Entra ID** → **App registrations** → **New registration**.
 2. Name: `pidge`.
-3. Supported account types: **Accounts in any organizational directory (Any Microsoft Entra ID tenant — Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)**.
+3. Supported account types: **Accounts in any organizational directory (Any Microsoft Entra ID tenant, Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)**.
 4. Redirect URI: leave empty (we use device code flow, no redirect needed).
 5. Click **Register**.
-6. From the app overview, copy the **Application (client) ID** — this is your `APP_CLIENT_ID`.
+6. From the app overview, copy the **Application (client) ID**: this is your `APP_CLIENT_ID`.
 7. Go to **Authentication** → enable **Allow public client flows** (Yes) → Save.
 8. Go to **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions** → check:
    - `offline_access`

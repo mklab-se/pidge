@@ -19,8 +19,8 @@ use pidge_core::TokenStorage;
 
 /// Minimal tool-calling surface the migration/dry-run/status logic needs.
 /// Implemented for the real [`McpRpc`] (bails on `ToolResult::is_error` via
-/// [`check_tool_result`]) and for [`RefreshingRpc`], and for fakes in tests
-/// — so that logic can be exercised with no network call.
+/// [`check_tool_result`]) and for [`RefreshingRpc`], and for fakes in tests,
+/// so that logic can be exercised with no network call.
 pub trait McpCalls {
     async fn call_tool(&mut self, name: &str, arguments: serde_json::Value) -> Result<ToolResult>;
 }
@@ -66,7 +66,7 @@ pub(crate) fn backend_name(store: TokenStorage) -> &'static str {
 /// An error only propagates when it comes from the *first* (preferred)
 /// candidate; a load error from a later, fallback candidate is treated as a
 /// miss instead (with a stderr warning) rather than failing the whole
-/// lookup — `--store=file` exists precisely for machines where the
+/// lookup; `--store=file` exists precisely for machines where the
 /// keychain/Secret Service isn't usable, and a fallback probe of it must
 /// not turn into a hard dependency on it. Generic and synchronous so it's
 /// directly unit-testable with no real keychain or network.
@@ -95,7 +95,7 @@ pub(crate) fn find_first_hit<T, E: std::fmt::Display>(
 /// error from the *preferred* (first) candidate is fatal; an error from any
 /// other candidate is a warning (and that backend is skipped), mirroring
 /// [`find_first_hit`]'s tolerance. Unlike `find_first_hit`, this doesn't
-/// stop at the first hit — used by `logout`, which needs to know about
+/// stop at the first hit. Used by `logout`, which needs to know about
 /// *every* backend holding tokens for a server, not just the first.
 pub(crate) fn try_each_backend<T, E: std::fmt::Display>(
     candidates: &[TokenStorage],
@@ -117,7 +117,7 @@ pub(crate) fn try_each_backend<T, E: std::fmt::Display>(
     Ok(out)
 }
 
-/// Find a stored session for `url` with no network call and no refresh —
+/// Find a stored session for `url` with no network call and no refresh:
 /// just the raw local/keychain lookup, tried in [`candidate_backends`]
 /// order. Used directly by `--dry-run` (which must never refresh) and as
 /// the first step of [`lookup_session`].
@@ -137,7 +137,7 @@ pub(crate) fn find_stored_tokens(
 /// -erroring on a machine with no usable one. Pure over an already-loaded
 /// index (rather than calling [`McpTokenStore::list`] itself) so: (a) this
 /// decision is directly unit-testable with no I/O, and (b) callers that
-/// already have the list in hand (or don't need it — an explicit `--store`
+/// already have the list in hand (or don't need it: an explicit `--store`
 /// skips this entirely) don't force a redundant read.
 pub(crate) fn preferred_backend_for(url: &str, servers: &[StoredServer]) -> TokenStorage {
     let Ok(origin) = normalize_origin(url) else {
@@ -180,7 +180,7 @@ pub(crate) async fn lookup_session(
 
 /// Refresh `tokens` in place if [`McpTokens::needs_refresh`] says it's due,
 /// persisting the new tokens through `store` only when the access token
-/// actually changed — an unconditional save on every call would mean a
+/// actually changed; an unconditional save on every call would mean a
 /// keychain write (and on some platforms an access prompt) even when
 /// nothing changed. Shared by [`lookup_session`] and [`RefreshingRpc`].
 pub(crate) async fn refresh_if_needed(
@@ -209,7 +209,7 @@ async fn refresh_if_needed_with(
 }
 
 /// Wraps [`McpRpc`] so every [`McpCalls::call_tool`] first makes sure the
-/// access token has more than [`McpTokens::needs_refresh`]'s margin left —
+/// access token has more than [`McpTokens::needs_refresh`]'s margin left,
 /// refreshing (and persisting the refresh through `store`) as needed. An
 /// interactive migration can spend up to ten minutes per mailbox waiting on
 /// the user, comfortably long enough to run past a token minted at the
@@ -242,8 +242,8 @@ impl RefreshingRpc {
     }
 
     /// Initialize the underlying MCP session, remapping a bare `401` (the
-    /// locally-held token looked valid — it wasn't near its recorded
-    /// expiry — but the server had already revoked it, e.g. a revoked
+    /// locally-held token looked valid (it wasn't near its recorded
+    /// expiry) but the server had already revoked it, e.g. a revoked
     /// session or a rotated signing key) to [`ClientError::SessionExpired`],
     /// the same way [`McpCalls::call_tool`] remaps a mid-session `401`.
     /// `initialize` runs once, up front, before any `call_tool`, so it
@@ -278,7 +278,7 @@ impl McpCalls for RefreshingRpc {
         let server = self.tokens.server.clone();
         refresh_if_needed(&self.http, &mut self.tokens, self.store).await?;
         // Cheap in-memory assignment regardless of whether a refresh just
-        // happened — unlike the token-store write inside
+        // happened. Unlike the token-store write inside
         // `refresh_if_needed`, there's no reason to guard this one.
         self.inner
             .set_access_token(self.tokens.access_token.clone());
@@ -300,7 +300,7 @@ fn is_unauthorized(err: &anyhow::Error) -> bool {
 }
 
 /// True if `err`'s chain contains either flavor of "this hosted session is
-/// dead, sign in again" — the client's own [`ClientError::SessionExpired`]
+/// dead, sign in again": the client's own [`ClientError::SessionExpired`]
 /// (a failed refresh grant) or the CLI-level
 /// [`ClientError::McpSessionExpired`] a caller may already have remapped it
 /// to. Used by `connect`'s poller to stop retrying immediately instead of

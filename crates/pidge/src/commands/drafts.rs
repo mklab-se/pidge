@@ -330,7 +330,7 @@ async fn send(fragment: String, yes: bool) -> Result<()> {
         .send_draft(&msg.account, &msg.graph_id)
         .await
         .context("Microsoft Graph rejected /send")?;
-    // After send, the draft is gone — purge from cache.
+    // After send, the draft is gone; purge from cache.
     let _ = purge_from_cache(&short);
     println!("{} Sent.", "✔".green());
     Ok(())
@@ -433,8 +433,8 @@ async fn attachments_remove(fragment: String, name: String) -> Result<()> {
             Ok(())
         }
         many => Err(anyhow!(
-            "Multiple attachments named '{}' on this draft ({}). Remove by Graph ID instead — \
-             not yet supported in v0.3; remove via Outlook for now.",
+            "Multiple attachments named '{}' on this draft ({}). Remove by Graph ID instead (\
+             not yet supported in v0.3); remove via Outlook for now.",
             name,
             many.len()
         )),

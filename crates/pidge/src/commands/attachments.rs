@@ -2,7 +2,7 @@
 //!
 //! Graph's simple POST /me/messages/{id}/attachments endpoint maxes out
 //! around 3 MB total per call. Larger files need `createUploadSession` +
-//! chunked uploads, which aren't wired yet — we abort early with a clear
+//! chunked uploads, which aren't wired yet; we abort early with a clear
 //! error rather than letting Graph reject the request mid-flight.
 
 use std::path::Path;
@@ -49,7 +49,7 @@ async fn upload_one(
     }
     if meta.len() > MAX_SIMPLE_UPLOAD_BYTES {
         return Err(anyhow!(
-            "{} is {} — above the {} simple-upload limit. \
+            "{} is {}, above the {} simple-upload limit. \
              Resumable (chunked) uploads aren't implemented yet.",
             path.display(),
             format_size(meta.len(), DECIMAL),

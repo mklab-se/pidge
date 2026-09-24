@@ -1,4 +1,4 @@
-//! `pidge calendar show <hash>` — display full details of one event.
+//! `pidge calendar show <hash>`: display full details of one event.
 
 use anyhow::Result;
 use colored::Colorize;

@@ -10,7 +10,7 @@ use crate::output::no_color;
 /// email addresses (mailto:) are NOT wrapped.
 ///
 /// When `--no-color` is in effect (see `crate::output::set_no_color`), the function
-/// returns the input unchanged — OSC 8 hyperlinks are treated as decorative output
+/// returns the input unchanged; OSC 8 hyperlinks are treated as decorative output
 /// alongside ANSI colors and are suppressed together.
 pub fn linkify_text(text: &str) -> String {
     if no_color() {

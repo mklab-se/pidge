@@ -31,7 +31,7 @@ CLIENT_ID=$(az ad app create \
 # Note on redirect URIs: device-code flow does not redirect, so we
 # deliberately leave the public-client redirect URI list empty. An earlier
 # version of this script added `nativeclient` to work around a personal-MSA
-# `redirect_uri required` error, but that turned out to be the wrong fix —
+# `redirect_uri required` error, but that turned out to be the wrong fix:
 # adding nativeclient caused Microsoft's anti-phishing UI to trigger on the
 # legacy implicit-flow redirect. `--is-fallback-public-client true` (above)
 # is the property that actually enables device-code for both work/school

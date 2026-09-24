@@ -1,8 +1,8 @@
-# `pidge mail unsubscribe` — design
+# `pidge mail unsubscribe`: design
 
 ## Goal
 
-Let the user opt out of a sender's bulk mail with one command — without
+Let the user opt out of a sender's bulk mail with one command, without
 opening a browser, without hunting for fine-print unsubscribe links,
 without copy-pasting URLs out of a terminal. The driver is that pidge
 is operated by an AI agent on the user's behalf, and "please
@@ -41,9 +41,9 @@ while letting clients offer real one-click buttons.
 pidge mail unsubscribe <hash> [-y|--yes]
 ```
 
-- `<hash>` — the 8-char short hash already used by `mail show`, `mail
+- `<hash>`: the 8-char short hash already used by `mail show`, `mail
   delete`, etc. Resolved against the existing local cache.
-- `-y` — skip the confirmation prompt. Default behaviour is to prompt,
+- `-y`: skip the confirmation prompt. Default behaviour is to prompt,
   consistent with `mail delete`.
 
 `--json` is intentionally left out of v1 to keep the surface tight; the

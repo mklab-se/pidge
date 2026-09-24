@@ -5,7 +5,7 @@
 //! 8414 authorization-server metadata, RFC 7591 dynamic client registration,
 //! and an authorization-code + PKCE flow with `resource` indicators (RFC
 //! 8707) on both `/authorize` and `/token`. The server issues JWT client ids
-//! and JWT-backed refresh tokens to public (secret-less) clients — there's
+//! and JWT-backed refresh tokens to public (secret-less) clients; there's
 //! no client secret anywhere in this module.
 
 use std::time::Duration;
@@ -24,7 +24,7 @@ use crate::error::ClientError;
 use super::McpTokens;
 
 /// The MCP sign-in callback window. Longer than the 5-minute Microsoft flow
-/// timeout since this is a separate, often manually-triggered, step — the
+/// timeout since this is a separate, often manually-triggered, step: the
 /// user may have just finished (or need to first do) the Microsoft sign-in
 /// in the same browser session.
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(600);
@@ -40,7 +40,7 @@ pub struct Discovery {
     /// The canonical `resource` identifier the protected-resource metadata
     /// advertised (normally the MCP endpoint URL itself). This is what must
     /// be sent back as the `resource` parameter on `/authorize` and
-    /// `/token` — the server compares it verbatim (modulo a trailing
+    /// `/token`; the server compares it verbatim (modulo a trailing
     /// slash), so using the user-typed URL instead can fail with
     /// `invalid_target` if it isn't already in exactly this form.
     pub resource: String,
@@ -49,7 +49,7 @@ pub struct Discovery {
     /// Where to redeem an authorization code or refresh token for tokens.
     pub token_endpoint: String,
     /// `None` if the server doesn't support RFC 7591 dynamic client
-    /// registration — [`register`] fails with a clear error in that case.
+    /// registration; [`register`] fails with a clear error in that case.
     pub registration_endpoint: Option<String>,
 }
 
@@ -133,7 +133,7 @@ async fn fetch_json<T: serde::de::DeserializeOwned>(
 /// endpoint (RFC 7591). Returns the issued `client_id`.
 ///
 /// Errors with `ClientError::Graph { status: 400, .. }` if `discovery` has no
-/// `registration_endpoint` — the server doesn't support DCR.
+/// `registration_endpoint`, i.e. the server doesn't support DCR.
 pub async fn register(
     http: &reqwest::Client,
     discovery: &Discovery,
@@ -179,7 +179,7 @@ pub async fn register(
 /// Run the full sign-in flow against `mcp_url`: discover, register, PKCE
 /// authorize via a one-shot localhost callback server, redeem the code.
 ///
-/// `on_open` is called once the authorize URL is built — the caller is
+/// `on_open` is called once the authorize URL is built; the caller is
 /// expected to print it and best-effort open a browser.
 pub async fn sign_in<F: FnOnce(&str)>(
     http: &reqwest::Client,
@@ -220,7 +220,7 @@ pub async fn sign_in<F: FnOnce(&str)>(
     if returned_state != state {
         return Err(ClientError::Graph {
             status: 400,
-            message: "OAuth state mismatch — possible CSRF or stale request".to_string(),
+            message: "OAuth state mismatch: possible CSRF or stale request".to_string(),
         });
     }
 
@@ -320,7 +320,7 @@ async fn exchange_code(
 /// Errors with `ClientError::SessionExpired { email: current.server }` if
 /// the server rejects the request as `invalid_grant` (the refresh token
 /// itself is revoked or expired) or `invalid_client` (the server no longer
-/// recognises `current.client_id`, e.g. after a signing-key rotation) —
+/// recognises `current.client_id`, e.g. after a signing-key rotation):
 /// both require the same fix from the user: sign in again.
 pub async fn refresh(
     http: &reqwest::Client,
@@ -373,7 +373,7 @@ pub async fn refresh(
 /// Return a valid access token for `tokens`, refreshing in place if it's
 /// within 60 seconds of expiring (or already expired).
 ///
-/// Pass `tokens.server` as `mcp_url` — it's already the canonical resource
+/// Pass `tokens.server` as `mcp_url`; it's already the canonical resource
 /// URL from the sign-in that produced `tokens`, so re-discovery lands on the
 /// same authorization server.
 ///
@@ -405,9 +405,9 @@ mod tests {
 
     #[test]
     fn callback_timeout_is_at_least_ten_minutes() {
-        // A short-lived, often manually-triggered sign-in — the user may
+        // A short-lived, often manually-triggered sign-in (the user may
         // need to switch to a browser, possibly finish a Microsoft sign-in
-        // first — needs more headroom than the 5-minute Microsoft flow.
+        // first) needs more headroom than the 5-minute Microsoft flow.
         assert!(CALLBACK_TIMEOUT >= Duration::from_secs(600));
     }
 
@@ -487,7 +487,7 @@ mod tests {
     #[tokio::test]
     async fn discover_falls_back_to_bare_metadata_path() {
         let server = MockServer::start().await;
-        // Only the bare path is mounted — the /mcp-suffixed GET 404s.
+        // Only the bare path is mounted; the /mcp-suffixed GET 404s.
         mount_protected_resource(&server, false).await;
         mount_as_metadata(&server, None).await;
 
@@ -732,7 +732,7 @@ mod tests {
         let http = reqwest::Client::new();
         let result = sign_in(&http, &format!("{}/mcp", server.uri()), "pidge", |url| {
             // Simulate the browser hitting our own callback, but with the
-            // WRONG state — as if the link were replayed or forged.
+            // WRONG state, as if the link were replayed or forged.
             let redirect_uri =
                 query_param(url, "redirect_uri").expect("redirect_uri present in authorize URL");
             let callback_url = format!("{redirect_uri}/?code=ignored-code&state=totally-wrong");

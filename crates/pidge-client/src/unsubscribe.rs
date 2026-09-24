@@ -1,5 +1,5 @@
 //! Parsing of RFC 2369 `List-Unsubscribe` and RFC 8058
-//! `List-Unsubscribe-Post` headers — no I/O.
+//! `List-Unsubscribe-Post` headers, no I/O.
 //!
 //! See:
 //! - <https://www.rfc-editor.org/rfc/rfc2369> (List-Unsubscribe)
@@ -17,7 +17,7 @@ pub enum UnsubscribeMethod {
     /// interaction needed.
     OneClickPost(String),
 
-    /// RFC 2369 `mailto:` — send an e-mail to this address. Per RFC 6068
+    /// RFC 2369 `mailto:`: send an e-mail to this address. Per RFC 6068
     /// the URL may carry `?subject=` / `?body=` that override our defaults.
     Mailto {
         address: String,
@@ -27,7 +27,7 @@ pub enum UnsubscribeMethod {
 
     /// HTTPS URL exists but no one-click marker. Won't auto-drive; the
     /// caller should surface the URL for a manual click.
-    /// HTTPS only — plaintext `http://` entries are ignored on purpose.
+    /// HTTPS only; plaintext `http://` entries are ignored on purpose.
     HttpsOnly(String),
 
     /// No `List-Unsubscribe` header at all.

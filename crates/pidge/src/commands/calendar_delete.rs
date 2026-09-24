@@ -1,4 +1,4 @@
-//! `pidge calendar delete <hash>` — silent removal (no attendee notice).
+//! `pidge calendar delete <hash>`: silent removal (no attendee notice).
 
 use anyhow::Result;
 use std::io::Write;

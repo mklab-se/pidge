@@ -1,4 +1,4 @@
-//! `pidge account default ...` — show or set default accounts.
+//! `pidge account default ...`: show or set default accounts.
 
 use anyhow::Result;
 use colored::Colorize;

@@ -1,4 +1,4 @@
-//! pidge — A fast CLI for e-mail and calendar
+//! pidge: A fast CLI for e-mail and calendar
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
 
     // The update check is best-effort. Bound the wait so a slow or hung
     // crates.io request (e.g. flaky DNS) can never delay process exit beyond
-    // a moment — previously a hung check could wedge the CLI indefinitely.
+    // a moment; previously a hung check could wedge the CLI indefinitely.
     if let Some(handle) = update_handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
     }
@@ -199,7 +199,7 @@ mod preprocess_tests {
             pp(&["pidge", "mail", "show", "3515"]),
             ["pidge", "mail", "show", "3515"]
         );
-        // `attachments` is a subcommand group, not a fragment — it must not be
+        // `attachments` is a subcommand group, not a fragment; it must not be
         // rewritten to `mail show attachments`.
         assert_eq!(
             pp(&["pidge", "mail", "attachments", "list", "3515"]),
@@ -213,7 +213,7 @@ mod preprocess_tests {
             pp(&["pidge", "mail", "3515"]),
             ["pidge", "mail", "show", "3515"]
         );
-        // Even a fragment that looks like garbage routes to show — the show
+        // Even a fragment that looks like garbage routes to show; the show
         // command will then surface a clear "no message found" error.
         assert_eq!(
             pp(&["pidge", "mail", "lsit"]),

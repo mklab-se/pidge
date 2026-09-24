@@ -1,4 +1,4 @@
-//! `pidge calendar move <hash> --to <calendar>` — move between calendars.
+//! `pidge calendar move <hash> --to <calendar>`: move between calendars.
 
 use anyhow::{Result, anyhow};
 

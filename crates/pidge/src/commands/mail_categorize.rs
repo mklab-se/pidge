@@ -1,4 +1,4 @@
-//! `pidge categorize` — manage native Outlook categories on a message.
+//! `pidge categorize`: manage native Outlook categories on a message.
 
 use anyhow::Result;
 use colored::Colorize;

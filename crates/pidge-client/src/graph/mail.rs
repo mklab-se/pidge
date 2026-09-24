@@ -1,4 +1,4 @@
-//! GET /me/mailFolders/inbox/messages — list inbox messages.
+//! GET /me/mailFolders/inbox/messages: list inbox messages.
 
 use pidge_core::{FlagStatus, Message, MessageFrom};
 use serde::Deserialize;
@@ -35,7 +35,7 @@ struct GraphMessage {
     odata_type: Option<String>,
 }
 
-/// Whether a Graph `@odata.type` names a meeting request — an invite the
+/// Whether a Graph `@odata.type` names a meeting request, an invite the
 /// user can respond to. Responses and cancellations are not invites.
 fn is_event_message(odata_type: Option<&str>) -> bool {
     odata_type == Some("#microsoft.graph.eventMessageRequest")
@@ -175,7 +175,7 @@ struct GraphAttachment {
 ///
 /// `skip` is the offset into the result set (page * page_size for 0-based paging).
 /// Returns an `InboxPage` whose `has_more` is true when Graph included an
-/// `@odata.nextLink` — i.e., there are more messages beyond this page.
+/// `@odata.nextLink`, i.e., there are more messages beyond this page.
 pub async fn list_inbox(
     http: &reqwest::Client,
     base_url: &str,
@@ -261,7 +261,7 @@ async fn list_folder(
 ) -> Result<InboxPage, ClientError> {
     let url = format!("{base_url}/me/mailFolders/{folder}/messages");
     // Body is fetched in its native content type (HTML or text) so the
-    // renderer can use html2text to extract anchor text + click targets —
+    // renderer can use html2text to extract anchor text + click targets,
     // making LINK TEXT (not URLs) the clickable surface in previews.
     let mut req = http.get(&url).bearer_auth(access_token).query(&[
         (
@@ -302,7 +302,7 @@ async fn list_folder(
 
 /// Search messages across all folders using Graph's `$search` KQL query.
 ///
-/// `$search` doesn't combine with `$filter` or `$orderby` — results come back
+/// `$search` doesn't combine with `$filter` or `$orderby`; results come back
 /// in Graph's relevance ranking, not date order. Common query forms users can
 /// pass:
 ///
@@ -312,7 +312,7 @@ async fn list_folder(
 /// - `from:alice AND subject:budget`
 ///
 /// Parse one raw delta item into a [`Message`] (None if the shape is not a
-/// message — e.g. a tombstone or a partial patch without required fields).
+/// message, e.g. a tombstone or a partial patch without required fields).
 pub(crate) fn message_from_delta_value(
     value: serde_json::Value,
     account: &str,
@@ -344,7 +344,7 @@ pub async fn list_conversation(
                 "id,subject,from,receivedDateTime,isRead,bodyPreview,body,hasAttachments,flag,conversationId,toRecipients,ccRecipients",
             ),
             // No $orderby: Graph rejects conversationId filters combined
-            // with a sort ("InefficientFilter") — we sort client-side.
+            // with a sort ("InefficientFilter"), so we sort client-side.
             ("$filter", filter.as_str()),
             ("$top", "100"),
         ]);
@@ -526,7 +526,7 @@ fn to_message(g: GraphMessage, account: &str) -> Message {
     }
 }
 
-/// GET /me/messages/{id} — fetch a single message with full body.
+/// GET /me/messages/{id}: fetch a single message with full body.
 pub async fn get_message(
     http: &reqwest::Client,
     base_url: &str,
@@ -620,7 +620,7 @@ async fn fetch_event_id(
     body.event.map(|e| e.id)
 }
 
-/// GET /me/messages/{id}?$select=internetMessageHeaders — fetch just the
+/// GET /me/messages/{id}?$select=internetMessageHeaders: fetch just the
 /// raw RFC 5322 headers for a message. Used by `pidge mail unsubscribe`
 /// to locate `List-Unsubscribe` / `List-Unsubscribe-Post`.
 pub async fn fetch_message_headers(
@@ -683,7 +683,7 @@ pub(crate) enum OneClickPolicy {
 /// [`ClientError::UnsubscribeRejected`]: the endpoint's status and body are
 /// never passed on.
 ///
-/// It uses its own short-lived client — no bearer token, no shared retry
+/// It uses its own short-lived client: no bearer token, no shared retry
 /// policy (a broken sender's unsubscribe endpoint shouldn't get the same
 /// exponential backoff as a throttled Graph call).
 pub async fn unsubscribe_one_click(url: &str) -> Result<(), ClientError> {
@@ -774,7 +774,7 @@ fn one_click_address_allowed(ip: std::net::IpAddr, loopback_ok: bool) -> bool {
     }
 }
 
-/// GET /me/messages/{id}/attachments — list attachments without fetching bytes.
+/// GET /me/messages/{id}/attachments: list attachments without fetching bytes.
 /// Filters to file attachments only.
 pub async fn list_attachments(
     http: &reqwest::Client,
@@ -822,7 +822,7 @@ pub async fn list_attachments(
         .collect())
 }
 
-/// GET /me/messages/{id}/attachments/{attachment_id} — fetch a single attachment
+/// GET /me/messages/{id}/attachments/{attachment_id}: fetch a single attachment
 /// with its base64 contentBytes. Returns the decoded bytes.
 pub async fn get_attachment_bytes(
     http: &reqwest::Client,
@@ -855,7 +855,7 @@ pub async fn get_attachment_bytes(
     })
 }
 
-/// PATCH /me/messages/{id} — mark the message as read.
+/// PATCH /me/messages/{id}: mark the message as read.
 pub async fn mark_read(
     http: &reqwest::Client,
     base_url: &str,
@@ -872,7 +872,7 @@ pub async fn mark_read(
     .await
 }
 
-/// PATCH /me/messages/{id} — mark the message as unread.
+/// PATCH /me/messages/{id}: mark the message as unread.
 pub async fn mark_unread(
     http: &reqwest::Client,
     base_url: &str,
@@ -889,7 +889,7 @@ pub async fn mark_unread(
     .await
 }
 
-/// PATCH /me/messages/{id} — set or clear the follow-up flag.
+/// PATCH /me/messages/{id}: set or clear the follow-up flag.
 pub async fn set_flag(
     http: &reqwest::Client,
     base_url: &str,
@@ -914,7 +914,7 @@ struct GraphCategories {
     categories: Vec<String>,
 }
 
-/// GET /me/messages/{id}?$select=categories — read a message's categories.
+/// GET /me/messages/{id}?$select=categories: read a message's categories.
 pub async fn get_categories(
     http: &reqwest::Client,
     base_url: &str,
@@ -935,7 +935,7 @@ pub async fn get_categories(
     Ok(body.categories)
 }
 
-/// PATCH /me/messages/{id} with `{ "categories": [...] }` — replace categories.
+/// PATCH /me/messages/{id} with `{ "categories": [...] }`: replace categories.
 pub async fn set_categories(
     http: &reqwest::Client,
     base_url: &str,
@@ -974,9 +974,9 @@ async fn patch_message(
     Ok(())
 }
 
-/// POST /me/sendMail — compose-and-send a new message in one call.
+/// POST /me/sendMail: compose-and-send a new message in one call.
 ///
-/// The Graph endpoint takes ownership of the body — we wrap the `Outgoing`
+/// The Graph endpoint takes ownership of the body; we wrap the `Outgoing`
 /// in `{ "message": ..., "saveToSentItems": true }` so a copy lands in the
 /// sender's Sent Items folder. Returns 202 Accepted on success.
 pub async fn send_mail(
@@ -997,7 +997,7 @@ pub async fn send_mail(
 /// the line- and paragraph-breaks the user typed.
 ///
 /// Graph's `/reply` and `/forward` endpoints accept a `comment` string and
-/// insert it into the reply body — but when the source message body is HTML
+/// insert it into the reply body, but when the source message body is HTML
 /// (which Outlook always serves), newlines in `comment` collapse to spaces.
 /// To keep the user's formatting, we send the body as HTML via a
 /// `createReply` + PATCH dance (see `prepend_html_to_draft`), and this helper
@@ -1099,7 +1099,7 @@ fn find_body_tag_end(html: &str) -> Option<usize> {
     Some(start + close_rel + 1)
 }
 
-/// Reply to a message — sends immediately. Uses createReply + body PATCH +
+/// Reply to a message; sends immediately. Uses createReply + body PATCH +
 /// send so the comment is delivered as HTML and the user's paragraph and
 /// line breaks survive Outlook's HTML rendering.
 pub async fn reply_message(
@@ -1126,7 +1126,7 @@ pub async fn reply_all_message(
     send_draft(http, base_url, access_token, &draft_id).await
 }
 
-/// Forward — sends immediately, with HTML-formatted comment.
+/// Forward; sends immediately, with HTML-formatted comment.
 pub async fn forward_message(
     http: &reqwest::Client,
     base_url: &str,
@@ -1158,7 +1158,7 @@ async fn post_no_body(
     Ok(())
 }
 
-/// POST /me/messages — create a draft message in the Drafts folder.
+/// POST /me/messages: create a draft message in the Drafts folder.
 /// Returns the new draft's Graph message ID.
 pub async fn create_draft(
     http: &reqwest::Client,
@@ -1173,7 +1173,7 @@ pub async fn create_draft(
     parse_id_from_response(resp).await
 }
 
-/// POST /me/messages/{id}/createReply — create a reply draft. Returns the
+/// POST /me/messages/{id}/createReply: create a reply draft. Returns the
 /// new draft's Graph message ID.
 ///
 /// The comment is converted from plain text to HTML and spliced into the
@@ -1207,7 +1207,7 @@ pub async fn create_reply_draft(
     Ok(draft_id)
 }
 
-/// POST /me/messages/{id}/createReplyAll — create a reply-all draft.
+/// POST /me/messages/{id}/createReplyAll: create a reply-all draft.
 pub async fn create_reply_all_draft(
     http: &reqwest::Client,
     base_url: &str,
@@ -1236,7 +1236,7 @@ pub async fn create_reply_all_draft(
     Ok(draft_id)
 }
 
-/// POST /me/messages/{id}/createForward — create a forward draft with the
+/// POST /me/messages/{id}/createForward: create a forward draft with the
 /// given recipients already populated.
 pub async fn create_forward_draft(
     http: &reqwest::Client,
@@ -1269,7 +1269,7 @@ pub async fn create_forward_draft(
     Ok(draft_id)
 }
 
-/// POST /me/messages/{id}/send — send an existing draft.
+/// POST /me/messages/{id}/send: send an existing draft.
 pub async fn send_draft(
     http: &reqwest::Client,
     base_url: &str,
@@ -1299,7 +1299,7 @@ pub async fn send_draft(
     Ok(())
 }
 
-/// PATCH /me/messages/{id} — overwrite a draft's editable fields. Only the
+/// PATCH /me/messages/{id}: overwrite a draft's editable fields. Only the
 /// fields in `Outgoing` are patched, since that's what our wizard owns.
 pub async fn update_draft(
     http: &reqwest::Client,
@@ -1323,7 +1323,7 @@ pub async fn update_draft(
     Ok(())
 }
 
-/// PATCH /me/messages/{id} — replace only the recipient lists that are
+/// PATCH /me/messages/{id}: replace only the recipient lists that are
 /// `Some`, leaving subject and body (e.g. a reply's quoted history) intact.
 pub async fn update_draft_recipients(
     http: &reqwest::Client,
@@ -1362,7 +1362,7 @@ pub async fn update_draft_recipients(
     Ok(())
 }
 
-/// DELETE /me/messages/{id} — moves the message to Deleted Items. Same call
+/// DELETE /me/messages/{id}: moves the message to Deleted Items. Same call
 /// works for drafts and for inbox messages; the destination folder differs
 /// only by what the user is currently in.
 pub async fn delete_message(
@@ -1384,11 +1384,11 @@ pub async fn delete_message(
     Ok(())
 }
 
-/// POST /me/messages/{id}/attachments — attach a file to a draft.
+/// POST /me/messages/{id}/attachments: attach a file to a draft.
 ///
 /// Uses Graph's simple (non-resumable) upload, which is limited to ~3 MB per
 /// attachment. Larger files require `createUploadSession`, which isn't wired
-/// yet — the CLI rejects oversized attachments before calling this.
+/// yet; the CLI rejects oversized attachments before calling this.
 pub async fn add_attachment(
     http: &reqwest::Client,
     base_url: &str,
@@ -1453,7 +1453,7 @@ async fn parse_id_from_response(resp: reqwest::Response) -> Result<String, Clien
         })
 }
 
-/// What the user is sending — pre-Graph-serialization shape.
+/// What the user is sending: pre-Graph-serialization shape.
 #[derive(Debug, Clone)]
 pub struct Outgoing {
     pub subject: String,
@@ -1483,7 +1483,7 @@ impl Outgoing {
     }
 }
 
-/// POST /me/messages/{id}/move — move the message to another folder.
+/// POST /me/messages/{id}/move: move the message to another folder.
 ///
 /// `destination` is either a Graph folder ID or a well-known folder name
 /// (`"archive"`, `"deleteditems"`, `"junkemail"`, …). Graph returns the new
@@ -1539,7 +1539,7 @@ struct GraphFolderList {
     next_link: Option<String>,
 }
 
-/// Fields every folder listing selects — shared so top-level and child
+/// Fields every folder listing selects, shared so top-level and child
 /// listings return identically-shaped `MailFolder`s.
 const FOLDER_SELECT: &str = "id,displayName,totalItemCount,unreadItemCount,childFolderCount";
 
@@ -1564,7 +1564,7 @@ async fn fetch_folder_pages(
         let list: GraphFolderList = resp.json().await?;
         folders.extend(list.value);
         // `@odata.nextLink` is an absolute URL that already carries the
-        // `$select`/`$top` query — follow it verbatim.
+        // `$select`/`$top` query; follow it verbatim.
         match list.next_link {
             Some(next) => url = next,
             None => break,
@@ -1573,7 +1573,7 @@ async fn fetch_folder_pages(
     Ok(folders)
 }
 
-/// GET /me/mailFolders — list the top-level mail folders (id, displayName,
+/// GET /me/mailFolders: list the top-level mail folders (id, displayName,
 /// counts). Pages through `@odata.nextLink` so mailboxes with many folders
 /// are fully enumerated rather than silently truncated at one page.
 pub async fn list_mail_folders(
@@ -1585,7 +1585,7 @@ pub async fn list_mail_folders(
     fetch_folder_pages(http, access_token, url).await
 }
 
-/// GET /me/mailFolders/{parent_id}/childFolders — list a folder's immediate
+/// GET /me/mailFolders/{parent_id}/childFolders: list a folder's immediate
 /// children. Same shape and paging as `list_mail_folders`.
 pub async fn list_child_folders(
     http: &reqwest::Client,
@@ -1623,7 +1623,7 @@ async fn post_folder(
     Ok(folder)
 }
 
-/// POST /me/mailFolders — create a new top-level folder, returning it.
+/// POST /me/mailFolders: create a new top-level folder, returning it.
 ///
 /// Graph rejects a duplicate `displayName` with 409; callers that want
 /// "create if missing" semantics should list first and only call this when
@@ -1638,7 +1638,7 @@ pub async fn create_mail_folder(
     post_folder(http, &url, access_token, display_name).await
 }
 
-/// POST /me/mailFolders/{parent_id}/childFolders — create a child folder
+/// POST /me/mailFolders/{parent_id}/childFolders: create a child folder
 /// under `parent_id`, returning it.
 pub async fn create_child_folder(
     http: &reqwest::Client,
@@ -1651,7 +1651,7 @@ pub async fn create_child_folder(
     post_folder(http, &url, access_token, display_name).await
 }
 
-/// DELETE /me/mailFolders/{id} — delete a folder. Outlook moves the folder
+/// DELETE /me/mailFolders/{id}: delete a folder. Outlook moves the folder
 /// (and any contents) to Deleted Items, so this is recoverable. Works for
 /// top-level and child folders alike.
 pub async fn delete_mail_folder(
@@ -2012,7 +2012,7 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        // 3. PATCH draft body — verify our HTML lands in `body.content`
+        // 3. PATCH draft body, verify our HTML lands in `body.content`
         Mock::given(method("PATCH"))
             .and(path("/me/messages/DRAFT"))
             .and(body_partial_json(serde_json::json!({

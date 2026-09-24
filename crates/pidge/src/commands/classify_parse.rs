@@ -1,5 +1,5 @@
 //! Pure parsing of a model's text response into a deduped label set, plus
-//! optional validation against an allowed set. No I/O — unit-testable.
+//! optional validation against an allowed set. No I/O, unit-testable.
 
 /// Parse a model's raw `content` into an ordered, deduped, lowercased label
 /// set. Tolerates a JSON array, or a comma/newline separated list. Empty

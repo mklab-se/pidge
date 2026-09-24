@@ -1,4 +1,4 @@
-# Remote MCP spike — design
+# Remote MCP spike: design
 
 **Date:** 2026-09-22
 **Status:** superseded by the full-feature design (`2026-09-22-remote-mcp-full-feature-design.md`)
@@ -25,7 +25,7 @@ in Claude Cowork or ChatGPT, sign in, and retrieve the latest e-mail.
 | Secret store | Azure Key Vault (RBAC), accessed by a user-assigned managed identity; `SecretStore` trait with a file backend for development. | Cheapest safe home for refresh tokens; no connection strings anywhere. |
 | Isolation | The bearer middleware verifies the JWT (issuer, audience = `/mcp`, expiry, allowlist) and attaches `AuthenticatedUser` to the request. rmcp propagates the HTTP parts into tool context; every tool reads the user from there and never from its input. | Cross-user access is structurally impossible, not policy-dependent. |
 | Hosting | Container Apps (consumption, scale 0–1), ACR pulls via managed identity, Log Analytics, Bicep in two phases. | Single replica keeps the in-memory OAuth window coherent; scale-to-zero is fine for a Rust binary. |
-| Tools | `whoami`, `inbox_latest`, `read_message` — workflow-shaped, plain text, wrapped as untrusted content, body capped. | Enough for the success criterion; the real tool set is a separate design. |
+| Tools | `whoami`, `inbox_latest`, `read_message`: workflow-shaped, plain text, wrapped as untrusted content, body capped. | Enough for the success criterion; the real tool set is a separate design. |
 
 ## pidge-client change
 

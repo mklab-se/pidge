@@ -1,4 +1,4 @@
-# AI E-mail Classification & Native Categories — Design
+# AI E-mail Classification & Native Categories: Design
 
 **Date:** 2026-06-15
 **Status:** Approved (brainstorm), pending implementation plan
@@ -8,7 +8,7 @@
 Let a pidge user (or, primarily, an AI agent driving pidge) ask "what is this
 e-mail?" and get back one or more labels computed by the user's configured AI
 provider (via ailloy), against a user-defined prompt. The label(s) are a
-**string set returned on stdout** so the caller can act on them — most often an
+**string set returned on stdout** so the caller can act on them, most often an
 agent that then moves the message to a folder. Optionally, the computed labels
 can be written to the message's **native Outlook categories**, turning the
 feature into a simple AI rule-engine for labelling mail.
@@ -17,13 +17,13 @@ feature into a simple AI rule-engine for labelling mail.
 
 An agent runs `pidge ai classify <hash> --prompt "…"`, reads the label from
 stdout, and decides what to do (e.g. `pidge mail move <hash> --to Kvitton/MKLab`).
-Persisting the classification is **optional** — the agent holds it in context.
+Persisting the classification is **optional**; the agent holds it in context.
 
 ## 2. Non-goals (this iteration)
 
-- **Sorting/moving by category** (e.g. `mail move --by-category`) — deferred to
+- **Sorting/moving by category** (e.g. `mail move --by-category`): deferred to
   its own follow-up spec.
-- **Named classifier profiles** (multiple saved prompts) — a single default
+- **Named classifier profiles** (multiple saved prompts): a single default
   classifier config is enough for v1; profiles can be added later as new config
   keys without new commands.
 - Training, embeddings, or any non-chat AI use.
@@ -42,7 +42,7 @@ Persisting the classification is **optional** — the agent holds it in context.
 
 ## 4. Command surface
 
-### 4.1 `pidge ai classify` — compute label(s)
+### 4.1 `pidge ai classify`: compute label(s)
 
 ```
 pidge ai classify [<fragment>] [--text <s>] [FILTERS] [--prompt <s>|--prompt-file <p>]
@@ -52,10 +52,10 @@ pidge ai classify [<fragment>] [--text <s>] [FILTERS] [--prompt <s>|--prompt-fil
 
 Three input modes (mutually exclusive selection of *what* to classify):
 
-1. **Single message:** `pidge ai classify 234ab` — classify one message by
+1. **Single message:** `pidge ai classify 234ab`: classify one message by
    short-hash fragment. Prints the labels (one per line), or `--json`.
-2. **Arbitrary text (prompt test):** `pidge ai classify --text "Your invoice #1…"`
-   — classify a literal string, no mailbox needed. This is the "does my prompt
+2. **Arbitrary text (prompt test):** `pidge ai classify --text "Your invoice #1…"`:
+   classify a literal string, no mailbox needed. This is the "does my prompt
    return something useful?" path requested for `pidge ai`.
 3. **Batch:** filter flags select a set of messages; each is classified
    (concurrently). `--json` recommended for agents.
@@ -68,16 +68,16 @@ Three input modes (mutually exclusive selection of *what* to classify):
 - `--account <email>` (repeatable; default all signed-in)
 
 **Behaviour flags:**
-- `--prompt <s>` / `--prompt-file <p>` (`-` = stdin) — overrides the configured
+- `--prompt <s>` / `--prompt-file <p>` (`-` = stdin): overrides the configured
   default prompt for this run. Required only if no default prompt is configured.
-- `--labels a,b,c` — allowed set; each returned label is validated against it.
+- `--labels a,b,c`: allowed set; each returned label is validated against it.
   In-set labels are kept; if *none* are in-set, the result is `["unknown"]`.
   Without `--labels`, the model's raw labels are returned as-is.
-- `--parallel <n>` — max concurrent AI calls in batch mode (overrides config).
-- `--no-cache` — bypass the classification cache for this run.
-- `--set-category` — after computing, write the label set to the message's
+- `--parallel <n>`: max concurrent AI calls in batch mode (overrides config).
+- `--no-cache`: bypass the classification cache for this run.
+- `--set-category`: after computing, write the label set to the message's
   native Outlook categories (replace). No-op in `--text` mode.
-- `--json` — structured output.
+- `--json`: structured output.
 
 **Output:**
 - Single / text mode (human): one label per line.
@@ -86,7 +86,7 @@ Three input modes (mutually exclusive selection of *what* to classify):
 - Batch (human): `<hash>  <from>  <labels joined by ", ">` per line.
 - Batch (`--json`): `[{"hash": "…", "from": "…", "classification": [...]}, …]`.
 
-### 4.2 `pidge categorize` — native Outlook categories (no AI)
+### 4.2 `pidge categorize`: native Outlook categories (no AI)
 
 ```
 pidge categorize <fragment>                 # show current categories (default)
@@ -98,7 +98,7 @@ pidge categorize clear <fragment>           # remove all categories
 Backed by Graph: `GET …/messages/{id}?$select=categories` and
 `PATCH …/messages/{id}` with `{ "categories": [...] }`.
 
-### 4.3 `pidge config` — read/write pidge's own settings (git-style)
+### 4.3 `pidge config`: read/write pidge's own settings (git-style)
 
 ```
 pidge config show                                   # effective config
@@ -136,9 +136,9 @@ built-in default. Built-in defaults: `parallel = 4`, `cache = true`,
 ## 6. Architecture
 
 New CLI command modules under `crates/pidge/src/commands/`:
-- `mail_categorize.rs` — `get` / `set` / `add` / `clear`.
-- `ai_classify.rs` — input-mode dispatch, batch concurrency, output rendering.
-- `config.rs` — `show` / `get` / `set` / `unset` over the config struct.
+- `mail_categorize.rs`: `get` / `set` / `add` / `clear`.
+- `ai_classify.rs`: input-mode dispatch, batch concurrency, output rendering.
+- `config.rs`: `show` / `get` / `set` / `unset` over the config struct.
 
 New `pidge-client` (Graph) methods:
 - `get_categories(account, id) -> Vec<String>`

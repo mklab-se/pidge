@@ -92,7 +92,7 @@ impl ToolContext {
 
 /// Runs a read through the per-user cache: returns a live hit, otherwise
 /// calls `f` and, only on success, stores the result under `key` before
-/// returning it. `key` is opaque to this function — callers build it with
+/// returning it. `key` is opaque to this function; callers build it with
 /// [`crate::cache::ReadCache::key`].
 pub async fn cached<F, Fut>(
     state: &SharedState,

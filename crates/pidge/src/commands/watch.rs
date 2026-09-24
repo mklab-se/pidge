@@ -1,4 +1,4 @@
-//! `pidge watch` — a JSONL event stream for long-running agents.
+//! `pidge watch`: a JSONL event stream for long-running agents.
 //!
 //! Polls mail/calendar delta streams on an interval and prints one JSON line
 //! per event to stdout. Errors are emitted as events and the loop continues;
@@ -28,7 +28,7 @@ struct WatchState {
 }
 
 fn emit(value: serde_json::Value) {
-    // One event per line — agents parse JSONL. Explicit flush: watch runs
+    // One event per line; agents parse JSONL. Explicit flush: watch runs
     // under pipes where stdout is block-buffered and events must not lag.
     use std::io::Write;
     let mut out = std::io::stdout().lock();

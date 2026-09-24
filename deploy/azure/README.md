@@ -24,7 +24,7 @@ allowlist is required and has no default: set `PIDGE_MCP_ALLOWED_EMAILS=a@x,b@y`
 
 Set `PIDGE_MCP_CUSTOM_DOMAIN=pidge.mklab.se` to bind a custom domain to the
 Container App. Its CNAME and `asuid.<subdomain>` TXT record must already
-exist at the DNS provider before running the script — the certificate
+exist at the DNS provider before running the script, since the certificate
 validation checks them:
 
 | Record | Name | Value |
@@ -91,7 +91,7 @@ instead of just an accepted alternate host. Later runs, CI included, stay
 cut over without the variable:
 
 - **Without cutover** (default): the Container Apps FQDN stays the public
-  URL, and the custom domain is added to `PIDGE_MCP_ALT_HOSTS` — the server
+  URL, and the custom domain is added to `PIDGE_MCP_ALT_HOSTS`: the server
   accepts requests addressed to either host, but issues tokens under the FQDN
   issuer.
 - **With cutover**: the custom domain becomes `PIDGE_MCP_PUBLIC_URL` and the
@@ -123,9 +123,9 @@ fixes it for good.
 
 Whichever mode is used, the custom domain needs its own callback registered
 on the Entra app (`https://<domain>/callback`) alongside the existing one,
-**before** setting `PIDGE_MCP_CUTOVER=1` — otherwise sign-ins against the
+**before** setting `PIDGE_MCP_CUTOVER=1`, otherwise sign-ins against the
 new issuer have nowhere valid to redirect to. Phase 4 never runs that
-registration automatically when a custom domain is in play — it only prints
+registration automatically when a custom domain is in play; it only prints
 the `az ad app update` command, listing every existing redirect URI plus
 both hosts' `/callback`, for the app owner to run by hand. It has this
 shape (every URI already on the app, plus the missing one(s) appended):
@@ -162,7 +162,7 @@ release tag (`v1.2.3`).
 
 The workflow can also be run manually from the Actions tab
 (`workflow_dispatch`), which runs CI and the deploy from the chosen ref and
-nothing else — a redeploy that doesn't need a new version, e.g. after
+nothing else: a redeploy that doesn't need a new version, e.g. after
 rotating `PIDGE_MCP_ALLOWED_EMAILS` (see below); the image is then tagged
 with the commit SHA. Deploys are serialized: a `deploy-mcp` concurrency
 group with `cancel-in-progress: false` means a second trigger queues behind
@@ -190,14 +190,14 @@ It is idempotent, so re-run it after changing any of those. It runs
 the result: `/healthz` must return `ok`, the issuer in
 `/.well-known/oauth-authorization-server` must equal the deployed URL, the
 `resource` in `/.well-known/oauth-protected-resource` must equal
-`<url>/mcp`, and an unauthenticated `POST /mcp` must return 401 — each check
+`<url>/mcp`, and an unauthenticated `POST /mcp` must return 401, and each check
 retries a few times to ride out a cold start. `--skip-entra` always skips
 Phase 4 (Entra callback registration) entirely: the deploy identity has no
 Microsoft Graph directory-read rights, which even reading the app's
 existing redirect URIs requires, so CI must not touch that step at all, and
 the callback URI is registered once, by hand, during the initial deploy.
 `--skip-certificate` asserts the custom domain (if any) already has a
-`SniEnabled` certificate binding instead of trying to provision one from CI —
+`SniEnabled` certificate binding instead of trying to provision one from CI;
 that flow polls for up to 15 minutes and is meant to be run interactively by
 a human once, per [Custom domain](#custom-domain). With a live
 `SniEnabled` binding the script reuses its certificate id, and with no
@@ -215,7 +215,7 @@ line goes to stdout, which the Container Apps environment collects into the
 (`Log_s` holds the raw line, `ContainerAppName_s` is `ca-pidge-mcp`).
 
 A JSON line is a flat object: `timestamp`, `level`, `target`, `message`
-(the event name), plus that event's own fields at the top level — there is
+(the event name), plus that event's own fields at the top level; there is
 no nested `fields` object. Two structured events, one line per occurrence:
 
 - **`http_request`**, one per HTTP request: `method`, `route`, `status`,
@@ -228,7 +228,7 @@ no nested `fields` object. Two structured events, one line per occurrence:
   `<unmatched>`.
 - **`tool_call`**, one per MCP tool invocation: `tool` (the tool name),
   `user` (an 8-hex-character hash of the caller's sign-in address, stable
-  across restarts — never the address), `duration_ms`, `outcome` (`ok`,
+  across restarts, never the address), `duration_ms`, `outcome` (`ok`,
   `tool_error` for a tool that reported its own failure, or `error` for a
   transport/handler failure).
 
@@ -409,7 +409,7 @@ user. It bumps that user's `token_generation` counter in their user
 record; any other settings in the same call (default sender, trust list,
 disconnect) are applied and saved first. Every access token and refresh
 token already issued to that user carries the old generation and is
-rejected from that point on — the bearer check on `/mcp` and the OAuth
+rejected from that point on: the bearer check on `/mcp` and the OAuth
 refresh grant both compare the token's generation against the stored one
 and fail with `invalid_token` / `invalid_grant` on a mismatch, regardless
 of expiry. Outstanding `mail_attachment` download links carry the
@@ -429,26 +429,26 @@ value is not used as a fallback. Each of the three places that check it
 fails closed, but not identically:
 
 - **The bearer check on `/mcp`** (`oauth/bearer.rs`) returns 401
-  `invalid_token` either way — on a real generation mismatch or on a store
+  `invalid_token` either way, on a real generation mismatch or on a store
   read failure. A client just sees an expired-looking token and
   re-authenticates.
 - **A refresh grant with a stale generation** (`oauth/mod.rs`) returns 400
-  `invalid_grant`, `"session was signed out"` — an unambiguous "sign in
+  `invalid_grant`, `"session was signed out"`, an unambiguous "sign in
   again", since the store read succeeded and confirmed the mismatch.
 - **A store-read failure during either grant type** (`authorization_code`
   or `refresh_token`, `oauth/mod.rs`) returns 503
-  `temporarily_unavailable` before the mismatch can even be checked — a
+  `temporarily_unavailable` before the mismatch can even be checked, a
   signal to retry shortly, not to re-authenticate.
 
 ### Key Vault purge protection
 
 `enablePurgeProtection: true` in `main.bicep` turns on Key Vault purge
-protection, and it is irreversible for the life of the vault — there is no
+protection, and it is irreversible for the life of the vault: there is no
 parameter or `az` command that turns it back off. With it on, a
 soft-deleted secret or a soft-deleted vault cannot be purged during the
 30-day retention window; only Azure can remove it once that window elapses.
 Practically: deleting the `pidge` resource group does not immediately
-destroy the vault or the refresh tokens and signing key inside it — it
+destroy the vault or the refresh tokens and signing key inside it; it
 soft-deletes the vault, which then sits unrecoverable-but-not-yet-gone for
 30 days before Azure purges it on its own.
 

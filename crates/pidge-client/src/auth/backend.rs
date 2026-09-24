@@ -4,7 +4,7 @@
 //! from `config.yaml`; that behaviour lives in [`LocalBackend`] and stays the
 //! default. Hosted consumers (e.g. the remote MCP server) implement
 //! [`TokenBackend`] themselves so tokens can live in a per-user secret store
-//! instead — `AuthClient` and `GraphClient` don't care which.
+//! instead; `AuthClient` and `GraphClient` don't care which.
 
 use async_trait::async_trait;
 use pidge_core::TokenStorage;
@@ -63,7 +63,7 @@ impl TokenBackend for LocalBackend {
     /// `openid` scope have an empty tenant_id in config. Microsoft Graph
     /// access tokens are JWTs that carry the `tid` claim, so we can fix
     /// this once per such account on the next Graph call without any
-    /// user action. Silent on any failure — cosmetic, not a correctness
+    /// user action. Silent on any failure: cosmetic, not a correctness
     /// requirement.
     fn on_access_token(&self, email: &str, access_token: &str) {
         let Ok(mut config) = pidge_core::Config::load() else {

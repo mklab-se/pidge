@@ -6,9 +6,9 @@
 
 **Architecture:** Workspace splits 1 → 3 crates. `pidge-core` owns plain types + config I/O (`Account`, `Config`, `Message`). `pidge-client` owns the OAuth device-code flow (hand-rolled per RFC 8628), token refresh, OS keychain storage via the `keyring` crate, and the Microsoft Graph HTTP client. `pidge` is the CLI: clap definitions, command dispatch, output rendering.
 
-**Tech Stack:** Hand-rolled RFC 8628 device authorization grant via `reqwest`. JWT id_token decoded with `base64` (no signature verification — TLS trust to login.microsoftonline.com). Tokens persisted via `keyring = "3"`. Microsoft Graph v1.0 (`https://graph.microsoft.com/v1.0`). Tests use `wiremock` for HTTP fixtures and `keyring`'s `MockBackend` so CI never touches the real keychain.
+**Tech Stack:** Hand-rolled RFC 8628 device authorization grant via `reqwest`. JWT id_token decoded with `base64` (no signature verification; TLS trust to login.microsoftonline.com). Tokens persisted via `keyring = "3"`. Microsoft Graph v1.0 (`https://graph.microsoft.com/v1.0`). Tests use `wiremock` for HTTP fixtures and `keyring`'s `MockBackend` so CI never touches the real keychain.
 
-**Reference spec:** `docs/superpowers/specs/2026-05-13-m365-auth-and-inbox-list-design.md` — every decision in this plan derives from there.
+**Reference spec:** `docs/superpowers/specs/2026-05-13-m365-auth-and-inbox-list-design.md`. Every decision in this plan derives from there.
 
 **Working directory:** `/Users/kristofer/repos/mklab-se/pidge`
 
@@ -51,7 +51,7 @@ crates/pidge-client/
 crates/pidge/Cargo.toml          # add pidge-core, pidge-client deps
 src/cli.rs                       # add Auth + Inbox subcommands + OutputFormat
 src/commands/mod.rs              # add module declarations
-src/commands/auth.rs             # new — top-level dispatcher
+src/commands/auth.rs             # new: top-level dispatcher
 src/commands/auth_login.rs       # new
 src/commands/auth_list.rs        # new
 src/commands/auth_status.rs      # new
@@ -82,7 +82,7 @@ CLAUDE.md                                # update architecture for 3-crate layou
 - Create: `crates/pidge-core/Cargo.toml`
 - Create: `crates/pidge-core/src/lib.rs`
 
-This task creates the empty crate and registers it in the workspace. No `pidge-core` code yet — that's the next tasks. The pre-existing `crates/pidge` is unaffected.
+This task creates the empty crate and registers it in the workspace. No `pidge-core` code yet; that's the next tasks. The pre-existing `crates/pidge` is unaffected.
 
 - [ ] **Step 1: Add new workspace dependencies and member to root `Cargo.toml`**
 
@@ -175,7 +175,7 @@ tempfile = "3.10"
 ```rust
 //! Core types for pidge: accounts, configuration, and the normalized message model.
 //!
-//! This crate is intentionally provider-agnostic — it knows nothing about HTTP,
+//! This crate is intentionally provider-agnostic: it knows nothing about HTTP,
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
 ```
 
@@ -296,14 +296,14 @@ git commit -m "Add pidge-client skeleton with Microsoft Graph and OAuth dependen
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-core/src/account.rs`:
 
 ```rust
-//! Account types — represents a single Microsoft account signed into pidge.
+//! Account types: represents a single Microsoft account signed into pidge.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 /// A signed-in Microsoft account.
 ///
-/// This is metadata only — no tokens. Tokens live in the OS keychain,
+/// This is metadata only: no tokens. Tokens live in the OS keychain,
 /// keyed by `email`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Account {
@@ -323,7 +323,7 @@ impl Account {
         self.tenant_id == Self::PERSONAL_MSA_TENANT
     }
 
-    /// A short human label for the tenant — "personal MSA" for MSA, GUID prefix otherwise.
+    /// A short human label for the tenant: "personal MSA" for MSA, GUID prefix otherwise.
     pub fn tenant_label(&self) -> String {
         if self.is_personal() {
             "personal MSA".to_string()
@@ -409,7 +409,7 @@ Edit `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-core/src/lib.rs` to:
 ```rust
 //! Core types for pidge: accounts, configuration, and the normalized message model.
 //!
-//! This crate is intentionally provider-agnostic — it knows nothing about HTTP,
+//! This crate is intentionally provider-agnostic: it knows nothing about HTTP,
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
 
 mod account;
@@ -506,7 +506,7 @@ Edit `crates/pidge-core/src/lib.rs` to:
 ```rust
 //! Core types for pidge: accounts, configuration, and the normalized message model.
 //!
-//! This crate is intentionally provider-agnostic — it knows nothing about HTTP,
+//! This crate is intentionally provider-agnostic: it knows nothing about HTTP,
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
 
 mod account;
@@ -550,7 +550,7 @@ Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-core/src/config.rs`:
 //! Persistent configuration file for pidge.
 //!
 //! Path: `${XDG_CONFIG_HOME:-~/.config}/pidge/config.yaml`.
-//! Contains only non-sensitive metadata — tokens live in the OS keychain.
+//! Contains only non-sensitive metadata: tokens live in the OS keychain.
 
 use std::path::{Path, PathBuf};
 
@@ -749,7 +749,7 @@ Edit `crates/pidge-core/src/lib.rs` to:
 ```rust
 //! Core types for pidge: accounts, configuration, and the normalized message model.
 //!
-//! This crate is intentionally provider-agnostic — it knows nothing about HTTP,
+//! This crate is intentionally provider-agnostic: it knows nothing about HTTP,
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
 
 mod account;
@@ -781,7 +781,7 @@ git commit -m "Add pidge-core Config with accounts, defaults, and YAML persisten
 
 **Files:**
 - Create: `crates/pidge-client/src/error.rs`
-- Create: `crates/pidge-client/src/auth/mod.rs` (initial — minimal, expanded in Task 12)
+- Create: `crates/pidge-client/src/auth/mod.rs` (initial, minimal, expanded in Task 12)
 - Create: `crates/pidge-client/src/auth/config.rs`
 - Modify: `crates/pidge-client/src/lib.rs`
 
@@ -808,7 +808,7 @@ pub enum ClientError {
     #[error("device code flow: user denied consent")]
     DeviceCodeAccessDenied,
 
-    #[error("device code flow: {kind}{}", description.as_ref().map(|d| format!(" — {d}")).unwrap_or_default())]
+    #[error("device code flow: {kind}{}", description.as_ref().map(|d| format!(": {d}")).unwrap_or_default())]
     DeviceCodeOther {
         kind: String,
         description: Option<String>,
@@ -851,7 +851,7 @@ Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-client/src/auth/confi
 pub const APP_CLIENT_ID: &str = "";
 
 /// Microsoft Graph delegated scopes pidge requests at sign-in.
-/// Locked in at app registration time — changing them later requires updating
+/// Locked in at app registration time; changing them later requires updating
 /// the Entra app permissions AND triggering incremental consent on existing accounts.
 pub const SCOPES: &[&str] = &[
     "offline_access",
@@ -944,7 +944,7 @@ The `TokenSet` is what gets serialized into the keychain entry.
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-client/src/auth/tokens.rs`:
 
 ```rust
-//! Token storage shape — what gets serialized into the keychain.
+//! Token storage shape: what gets serialized into the keychain.
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -1048,14 +1048,14 @@ git commit -m "Add pidge-client TokenSet with refresh threshold"
 - Create: `crates/pidge-client/src/auth/jwt.rs`
 - Modify: `crates/pidge-client/src/auth/mod.rs`
 
-Minimal JWT decoder — extracts the `tid` claim from the middle segment without signature verification (we trust the TLS path).
+Minimal JWT decoder: extracts the `tid` claim from the middle segment without signature verification (we trust the TLS path).
 
 - [ ] **Step 1: Write the module with tests**
 
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-client/src/auth/jwt.rs`:
 
 ```rust
-//! Minimal JWT decoder — extracts the `tid` (tenant_id) claim from id_tokens.
+//! Minimal JWT decoder: extracts the `tid` (tenant_id) claim from id_tokens.
 //!
 //! We don't verify the signature: we trust the token because we just received it
 //! over TLS from `login.microsoftonline.com`. The decoder is base64url-without-padding,
@@ -1744,7 +1744,7 @@ mod tests {
 
 - [ ] **Step 2: Make `ErrorResponse` and `TokenResponse` visible to `refresh.rs`**
 
-Visibility tweak in `crates/pidge-client/src/auth/device_code.rs`: `ErrorResponse` and `TokenResponse` are `pub(crate)` in the spec above — verify the `pub(crate)` is present so `refresh.rs` can use them.
+Visibility tweak in `crates/pidge-client/src/auth/device_code.rs`: `ErrorResponse` and `TokenResponse` are `pub(crate)` in the spec above; verify the `pub(crate)` is present so `refresh.rs` can use them.
 
 - [ ] **Step 3: Wire into `auth/mod.rs`**
 
@@ -1779,7 +1779,7 @@ git commit -m "Add pidge-client refresh-token grant with session-expired detecti
 
 ---
 
-## Task 12: `pidge-client::auth` — `AuthClient` façade
+## Task 12: `pidge-client::auth`: `AuthClient` façade
 
 **Files:**
 - Modify: `crates/pidge-client/src/auth/mod.rs`
@@ -1832,7 +1832,7 @@ impl AuthClient {
         })
     }
 
-    /// Construct an AuthClient against a specific authority — for tests with wiremock.
+    /// Construct an AuthClient against a specific authority, for tests with wiremock.
     pub fn for_test(client_id: impl Into<String>, authority_base: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -1866,7 +1866,7 @@ impl AuthClient {
     }
 
     /// Get a valid (un-expired) access token for an email, refreshing if necessary.
-    /// Returns `ClientError::SessionExpired` if the refresh fails — caller should
+    /// Returns `ClientError::SessionExpired` if the refresh fails; caller should
     /// prompt the user to `pidge auth login` again for that account.
     pub async fn get_valid_token(&self, email: &str) -> Result<String, ClientError> {
         let tokens = KeychainStore::load(email)?.ok_or_else(|| ClientError::SessionExpired {
@@ -1917,7 +1917,7 @@ Expected: clean.
 - [ ] **Step 4: Run full crate tests**
 
 Run: `cargo test -p pidge-client`
-Expected: previous tests still pass; total: `13 passed` (4 tokens + 4 jwt + 1 store + 5 device_code + 3 refresh = 17 total — adjust expected count if you reconcile).
+Expected: previous tests still pass; total: `13 passed` (4 tokens + 4 jwt + 1 store + 5 device_code + 3 refresh = 17 total; adjust expected count if you reconcile).
 
 Adjust the expected count to match the actual number reported by `cargo test`; the totals above are approximate.
 
@@ -1930,7 +1930,7 @@ git commit -m "Add pidge-client AuthClient façade for sign-in and token retriev
 
 ---
 
-## Task 13: `pidge-client::graph` — Graph API client
+## Task 13: `pidge-client::graph`: Graph API client
 
 **Files:**
 - Create: `crates/pidge-client/src/graph/mod.rs`
@@ -1947,7 +1947,7 @@ Run: `mkdir -p /Users/kristofer/repos/mklab-se/pidge/crates/pidge-client/src/gra
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-client/src/graph/me.rs`:
 
 ```rust
-//! GET /me — fetch the signed-in user's identity.
+//! GET /me: fetch the signed-in user's identity.
 
 use serde::Deserialize;
 
@@ -2020,7 +2020,7 @@ mod tests {
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge-client/src/graph/mail.rs`:
 
 ```rust
-//! GET /me/mailFolders/inbox/messages — list inbox messages.
+//! GET /me/mailFolders/inbox/messages: list inbox messages.
 
 use pidge_core::{Message, MessageFrom};
 use serde::Deserialize;
@@ -2282,7 +2282,7 @@ git commit -m "Add pidge-client GraphClient with GET /me and inbox list"
 
 ---
 
-## Task 14: `pidge` CLI — add Auth and Inbox subcommand definitions
+## Task 14: `pidge` CLI: add Auth and Inbox subcommand definitions
 
 **Files:**
 - Modify: `crates/pidge/Cargo.toml` (add new deps)
@@ -2387,7 +2387,7 @@ pub enum OutputFormat {
 
 - [ ] **Step 3: Add placeholder dispatch arms in `Cli::run`**
 
-In the `impl Cli { pub async fn run(self) -> Result<()> { match self.command { ... } } }` block in `cli.rs`, add two arms — just stubs that return `Ok(())` for now. The real handlers land in Tasks 20 and 21.
+In the `impl Cli { pub async fn run(self) -> Result<()> { match self.command { ... } } }` block in `cli.rs`, add two arms: just stubs that return `Ok(())` for now. The real handlers land in Tasks 20 and 21.
 
 ```rust
             Some(Commands::Auth { command }) => crate::commands::auth::run(command).await,
@@ -2415,7 +2415,7 @@ pub mod skill;
 
 - [ ] **Step 5: Create placeholder module files**
 
-The previous step references modules that don't exist yet — placeholders prevent the build from failing while we work through subsequent tasks. Create each with a minimal `pub async fn run(...) -> Result<()> { unimplemented!() }`:
+The previous step references modules that don't exist yet; placeholders prevent the build from failing while we work through subsequent tasks. Create each with a minimal `pub async fn run(...) -> Result<()> { unimplemented!() }`:
 
 `crates/pidge/src/commands/auth.rs`:
 
@@ -2508,7 +2508,7 @@ pub async fn run(_command: InboxCommands) -> Result<()> {
 - [ ] **Step 6: Build**
 
 Run: `cargo build --workspace`
-Expected: clean. Note: clippy will warn about `unimplemented!` macros in unused arms. That's expected — they're transient placeholders.
+Expected: clean. Note: clippy will warn about `unimplemented!` macros in unused arms. That's expected: they're transient placeholders.
 
 - [ ] **Step 7: Smoke-test the CLI definitions parse**
 
@@ -2542,7 +2542,7 @@ Real implementation of the device code login flow.
 Replace `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/auth_login.rs` with:
 
 ```rust
-//! `pidge auth login` — sign in to a Microsoft account via OAuth device code flow.
+//! `pidge auth login`: sign in to a Microsoft account via OAuth device code flow.
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -2679,7 +2679,7 @@ List signed-in accounts in a table.
 Replace `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/auth_list.rs` with:
 
 ```rust
-//! `pidge auth list` — display signed-in accounts.
+//! `pidge auth list`: display signed-in accounts.
 
 use anyhow::Result;
 use chrono::Utc;
@@ -2769,7 +2769,7 @@ git commit -m "Implement pidge auth list with defaults markers"
 Replace `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/auth_status.rs` with:
 
 ```rust
-//! `pidge auth status` — summary of accounts and defaults.
+//! `pidge auth status`: summary of accounts and defaults.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -2831,7 +2831,7 @@ git commit -m "Implement pidge auth status"
 Replace `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/auth_logout.rs` with:
 
 ```rust
-//! `pidge auth logout` — remove tokens and account entry from pidge.
+//! `pidge auth logout`: remove tokens and account entry from pidge.
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
@@ -2931,7 +2931,7 @@ git commit -m "Implement pidge auth logout with --account, --all, and confirmati
 Replace `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/auth_default.rs` with:
 
 ```rust
-//! `pidge auth default` — show or set default accounts.
+//! `pidge auth default`: show or set default accounts.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -3040,7 +3040,7 @@ Multi-account merge with the output renderer.
 Replace `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/inbox.rs` with:
 
 ```rust
-//! `pidge inbox list` — list messages merged across signed-in accounts.
+//! `pidge inbox list`: list messages merged across signed-in accounts.
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Datelike, Local, Utc};
@@ -3081,7 +3081,7 @@ async fn list(
     let target_emails: Vec<String> = if account_filter.is_empty() {
         config.accounts.iter().map(|a| a.email.clone()).collect()
     } else {
-        // Validate filter — every requested email must be signed in
+        // Validate filter: every requested email must be signed in
         for f in &account_filter {
             if config.find(f).is_none() {
                 return Err(anyhow!("not signed in to {f}"));
@@ -3288,11 +3288,11 @@ Create `/Users/kristofer/repos/mklab-se/pidge/scripts/pidge-app-permissions.json
 ```
 
 GUID legend (from Microsoft Graph documented delegated scope IDs):
-- `7427e0e9-2fba-42fe-b0c0-848c9e6a8182` — `offline_access`
-- `e1fe6dd8-ba31-4d61-89e7-88639da4683d` — `User.Read`
-- `024d486e-b451-40bb-833d-3e66d98c5c73` — `Mail.ReadWrite`
-- `e383f46e-2787-4529-855e-0e479a3ffac0` — `Mail.Send`
-- `1ec239c2-d7c9-4623-a91a-a9775856bb36` — `Calendars.ReadWrite`
+- `7427e0e9-2fba-42fe-b0c0-848c9e6a8182`: `offline_access`
+- `e1fe6dd8-ba31-4d61-89e7-88639da4683d`: `User.Read`
+- `024d486e-b451-40bb-833d-3e66d98c5c73`: `Mail.ReadWrite`
+- `e383f46e-2787-4529-855e-0e479a3ffac0`: `Mail.Send`
+- `1ec239c2-d7c9-4623-a91a-a9775856bb36`: `Calendars.ReadWrite`
 
 - [ ] **Step 2: Create the script**
 
@@ -3373,7 +3373,7 @@ git commit -m "Add register-pidge-app.sh for one-time Entra app registration"
 Create `/Users/kristofer/repos/mklab-se/pidge/DEVELOPMENT.md`:
 
 ```markdown
-# pidge — Development setup
+# pidge: Development setup
 
 Most workflows are documented in [CONTRIBUTING.md](CONTRIBUTING.md). This file covers two developer-only concerns:
 
@@ -3410,10 +3410,10 @@ If you can't or don't want to use the Azure CLI:
 
 1. Open <https://portal.azure.com> → **Microsoft Entra ID** → **App registrations** → **New registration**.
 2. Name: `pidge`.
-3. Supported account types: **Accounts in any organizational directory (Any Microsoft Entra ID tenant — Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)**.
+3. Supported account types: **Accounts in any organizational directory (Any Microsoft Entra ID tenant, Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)**.
 4. Redirect URI: leave empty (we use device code flow, no redirect needed).
 5. Click **Register**.
-6. From the app overview, copy the **Application (client) ID** — this is your `APP_CLIENT_ID`.
+6. From the app overview, copy the **Application (client) ID**: this is your `APP_CLIENT_ID`.
 7. Go to **Authentication** → enable **Allow public client flows** (Yes) → Save.
 8. Go to **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions** → check:
    - `offline_access`
@@ -3512,7 +3512,7 @@ Open `/Users/kristofer/repos/mklab-se/pidge/.claude/skills/release/SKILL.md`. Fi
 
 ```markdown
 - Update `version` in the root `Cargo.toml` `[workspace.package]` section.
-- Update internal-crate `version = "X.Y.Z"` pins in the root `Cargo.toml` `[workspace.dependencies]` section — both `pidge-core` and `pidge-client`. They use the bumped version (no `=` prefix).
+- Update internal-crate `version = "X.Y.Z"` pins in the root `Cargo.toml` `[workspace.dependencies]` section: both `pidge-core` and `pidge-client`. They use the bumped version (no `=` prefix).
 ```
 
 - [ ] **Step 2: Commit**
@@ -3540,13 +3540,13 @@ Open `/Users/kristofer/repos/mklab-se/pidge/CHANGELOG.md`. Under `## [Unreleased
 - OAuth 2.0 device code sign-in for Microsoft 365 and personal Microsoft accounts (`pidge auth login`)
 - Multi-account support: `pidge auth list`, `pidge auth status`, `pidge auth logout`, `pidge auth default --send/--calendar`
 - Tokens stored in OS keychain (macOS Keychain, Windows Credential Manager, Linux libsecret)
-- `pidge inbox list` — list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, `--output text|json`
+- `pidge inbox list`: list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, `--output text|json`
 - One-time setup script `scripts/register-pidge-app.sh` for registering the pidge app in Entra
 ```
 
 - [ ] **Step 2: Update `README.md`**
 
-Open `/Users/kristofer/repos/mklab-se/pidge/README.md`. Find the `## Status` section and replace it with a new pair of sections — Status (updated) and a new "Account setup" block. Specifically replace the `## Status` paragraph with:
+Open `/Users/kristofer/repos/mklab-se/pidge/README.md`. Find the `## Status` section and replace it with a new pair of sections: Status (updated) and a new "Account setup" block. Specifically replace the `## Status` paragraph with:
 
 ```markdown
 ## Status
@@ -3610,13 +3610,13 @@ crates/
 \`\`\`
 
 - Workspace root `Cargo.toml` defines shared dependencies and version
-- `pidge-core` has no HTTP or auth code — it's safe to depend on from any consumer
+- `pidge-core` has no HTTP or auth code: it's safe to depend on from any consumer
 - `pidge-client` knows nothing about clap or terminal output
 ```
 
-(Use real backticks in the actual file — they're escaped here so the file's prose displays correctly in this plan.)
+(Use real backticks in the actual file; they're escaped here so the file's prose displays correctly in this plan.)
 
-In the same file, find the `## Releasing` section and update the secrets reminder if it changed (no edit needed — both required secrets are already documented).
+In the same file, find the `## Releasing` section and update the secrets reminder if it changed (no edit needed: both required secrets are already documented).
 
 - [ ] **Step 4: Run full CI checks**
 
@@ -3650,7 +3650,7 @@ cargo test --workspace
 cargo check --workspace
 ```
 
-Expected: every command exits 0, no warnings. Total test count: 11 (pidge-core) + ~13 (pidge-client) + 2 (pidge banner) + 2 (pidge inbox) ≈ 28 tests passing. Adjust if the count differs slightly — verify nothing has regressed.
+Expected: every command exits 0, no warnings. Total test count: 11 (pidge-core) + ~13 (pidge-client) + 2 (pidge banner) + 2 (pidge inbox) ≈ 28 tests passing. Adjust if the count differs slightly; verify nothing has regressed.
 
 - [ ] **Step 2: Smoke-test the CLI surface**
 
@@ -3694,7 +3694,7 @@ In the controller's reply to the user, summarise:
 
 ## Plan self-review
 
-**Spec coverage check** — every section of `docs/superpowers/specs/2026-05-13-m365-auth-and-inbox-list-design.md` is covered:
+**Spec coverage check**: every section of `docs/superpowers/specs/2026-05-13-m365-auth-and-inbox-list-design.md` is covered:
 
 | Spec section | Task(s) |
 |---|---|
@@ -3723,16 +3723,16 @@ In the controller's reply to the user, summarise:
 | CHANGELOG, README, CLAUDE.md updates | Task 26 |
 | Final verification | Task 27 |
 
-**Placeholder scan:** Every code block is the actual content to land. There are temporary `unimplemented!()` placeholders in Task 14 only — by design, replaced in Tasks 15–21.
+**Placeholder scan:** Every code block is the actual content to land. There are temporary `unimplemented!()` placeholders in Task 14 only, by design, replaced in Tasks 15–21.
 
 **Type consistency:**
-- `Account` (pidge-core): `email`, `tenant_id`, `home_account_id`, `added_at` — same names referenced in `auth_login.rs`, `auth_list.rs`, etc.
-- `Config::{add_account, remove_account, set_default_send, set_default_calendar, find}` — names match across producer (Task 5) and all consumers (Tasks 15–19, 21).
-- `TokenSet::{access_token, refresh_token, expires_at, needs_refresh}` — consistent across `tokens.rs` (Task 7), `store.rs` (Task 9), `device_code.rs` (Task 10), `refresh.rs` (Task 11), `auth/mod.rs` (Task 12).
-- `Message::{account, id, from, subject, received_at, is_read, preview}` — consistent across `message.rs` (Task 4), `graph/mail.rs` (Task 13), `inbox.rs` (Task 21).
-- `ClientError::{NotProvisioned, Keychain, DeviceCodeTimeout, DeviceCodeAccessDenied, DeviceCodeOther, SessionExpired, Http, Json, Graph, Core, MissingAccessToken}` — defined in Task 6, raised throughout Tasks 9, 10, 11, 12, 13.
-- `AuthClient::{from_env, for_test, start_device_code, poll_for_tokens, get_valid_token}` — defined in Task 12, called in Tasks 15, 21.
-- `GraphClient::{new, for_test, auth, me, list_inbox}` — defined in Task 13, called in Tasks 15, 21.
+- `Account` (pidge-core): `email`, `tenant_id`, `home_account_id`, `added_at`: same names referenced in `auth_login.rs`, `auth_list.rs`, etc.
+- `Config::{add_account, remove_account, set_default_send, set_default_calendar, find}`: names match across producer (Task 5) and all consumers (Tasks 15–19, 21).
+- `TokenSet::{access_token, refresh_token, expires_at, needs_refresh}`: consistent across `tokens.rs` (Task 7), `store.rs` (Task 9), `device_code.rs` (Task 10), `refresh.rs` (Task 11), `auth/mod.rs` (Task 12).
+- `Message::{account, id, from, subject, received_at, is_read, preview}`: consistent across `message.rs` (Task 4), `graph/mail.rs` (Task 13), `inbox.rs` (Task 21).
+- `ClientError::{NotProvisioned, Keychain, DeviceCodeTimeout, DeviceCodeAccessDenied, DeviceCodeOther, SessionExpired, Http, Json, Graph, Core, MissingAccessToken}`: defined in Task 6, raised throughout Tasks 9, 10, 11, 12, 13.
+- `AuthClient::{from_env, for_test, start_device_code, poll_for_tokens, get_valid_token}`: defined in Task 12, called in Tasks 15, 21.
+- `GraphClient::{new, for_test, auth, me, list_inbox}`: defined in Task 13, called in Tasks 15, 21.
 
 **Notable risks called out in the spec that are inherited by the plan:**
 - Keychain headless Linux fallback: not addressed in this plan; the error message in Task 6 is the surface.

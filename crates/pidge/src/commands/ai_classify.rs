@@ -1,4 +1,4 @@
-//! `pidge ai classify` — compute label(s) for an e-mail (or literal text)
+//! `pidge ai classify`: compute label(s) for an e-mail (or literal text)
 //! using the configured AI provider.
 
 use anyhow::{Result, anyhow};
@@ -92,7 +92,7 @@ pub async fn run(args: ClassifyArgs, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Batch mode — implemented in the next task.
+    // Batch mode: implemented in the next task.
     run_batch(args, &prompt, &allowed, json).await
 }
 

@@ -1,4 +1,4 @@
-# Contact name resolution — design
+# Contact name resolution: design
 
 **Status:** Approved 2026-05-21
 **Goal:** Let the user type `@Dino` instead of `dino.semovic@needefy.se` when inviting attendees or addressing mail. Resolve names against a local index built from the user's own recent correspondence.
@@ -6,17 +6,17 @@
 ## Scope
 
 In:
-- `pidge-core::ContactsCache` — JSON store mirroring `MessageCache`/`EventCache`. Keyed by lowercase email; one entry per address.
-- `pidge contacts refresh [--days N] [--account <email>]` — scan recent inbox messages (sender only — `list_inbox` `$select`s `from`, not the recipient lists) and calendar events (organizer + attendees) over the window, build/merge the cache. Future revision can add Sent Items scanning for "people I've emailed" — see Non-goals.
-- `pidge contacts find <query> [--json]` — substring match on display name or local-part, exact-email match wins.
+- `pidge-core::ContactsCache`: JSON store mirroring `MessageCache`/`EventCache`. Keyed by lowercase email; one entry per address.
+- `pidge contacts refresh [--days N] [--account <email>]`: scan recent inbox messages (sender only; `list_inbox` `$select`s `from`, not the recipient lists) and calendar events (organizer + attendees) over the window, build/merge the cache. Future revision can add Sent Items scanning for "people I've emailed"; see Non-goals.
+- `pidge contacts find <query> [--json]`: substring match on display name or local-part, exact-email match wins.
 - Inline `@<query>` syntax in `--invite`, `--invite-optional`, `--to`, `--cc`, `--bcc` on `calendar new`, `calendar edit`, and `mail new`. A token without `@` prefix is treated as a literal email (current behaviour preserved → fully non-breaking).
 
 Out:
-- No live Graph query for `find` — purely local index. Refresh is the way to get current data.
-- No fuzzy / Levenshtein matching in v1 — substring only.
+- No live Graph query for `find`: purely local index. Refresh is the way to get current data.
+- No fuzzy / Levenshtein matching in v1, substring only.
 - No contacts beyond the user's own mail/calendar (no organisation-wide directory lookup via Graph `/users` or People API).
 - No editing of the cache from the CLI other than refresh.
-- No per-account isolation of contacts — same person across multiple accounts collapses to one entry. Account context comes from `--from`, not the contact.
+- No per-account isolation of contacts: same person across multiple accounts collapses to one entry. Account context comes from `--from`, not the contact.
 - No scanning of Sent Items in v1. People I've emailed but who haven't replied won't appear unless they're also on a calendar invite. Easy v2.
 
 ## Architecture
@@ -28,8 +28,8 @@ crates/pidge-core/src/
 └── contacts.rs            # ContactsCache type, load/save, merge/upsert, lookup
 
 crates/pidge-client/src/graph/
-├── mail.rs                # (existing) — list_inbox already returns to/cc/bcc
-└── events.rs              # (existing) — list_calendar_view already returns attendees
+├── mail.rs                # (existing): list_inbox already returns to/cc/bcc
+└── events.rs              # (existing): list_calendar_view already returns attendees
 
 crates/pidge/src/commands/
 ├── contacts.rs            # `pidge contacts` dispatcher
@@ -73,7 +73,7 @@ Storage: `dirs::cache_dir()/pidge/contacts.json`. Atomic write via tempfile + re
    - the local-part of `email` (chars before `@`).
 5. Zero matches → `ResolveError::Unknown(token)`.
 6. One match → return its `email`.
-7. Multiple matches → `ResolveError::Ambiguous { token, candidates: Vec<Contact> }` — surfaced as a single anyhow error with all candidates listed.
+7. Multiple matches → `ResolveError::Ambiguous { token, candidates: Vec<Contact> }`, surfaced as a single anyhow error with all candidates listed.
 
 `resolve_addresses(tokens: &[String]) -> Result<Vec<String>, anyhow::Error>` loads the cache once, calls `resolve_one` per token, aggregates errors so the user sees every ambiguous token in one pass rather than fix-then-retry-then-discover-the-next-one.
 
@@ -81,7 +81,7 @@ Storage: `dirs::cache_dir()/pidge/contacts.json`. Atomic write via tempfile + re
 
 For each account (or just `--account` if given):
 
-1. Mail: `list_inbox(account, limit=1000, skip=0)`. For each message: upsert `from`. `seen_in_mail += 1`, `last_seen = max(...)`. Recipient lists (to/cc/bcc) are not in the `$select` used by `list_inbox` — extending coverage to those requires either widening `Message`'s schema or scanning Sent Items, both deferred to a follow-up.
+1. Mail: `list_inbox(account, limit=1000, skip=0)`. For each message: upsert `from`. `seen_in_mail += 1`, `last_seen = max(...)`. Recipient lists (to/cc/bcc) are not in the `$select` used by `list_inbox`; extending coverage to those requires either widening `Message`'s schema or scanning Sent Items, both deferred to a follow-up.
 2. Calendar: `list_calendar_view(account, None, now - days, now + days, limit=500)`. For each event: upsert organizer + every attendee. `seen_in_calendar += 1`, `last_seen = max(...)`.
 3. Skip empty addresses, no-reply patterns (`noreply@`, `no-reply@`, `donotreply@`).
 4. Save the cache with `last_refreshed = now`.
@@ -101,8 +101,8 @@ The error path is a single `anyhow!` formatted to look like:
 
 ```
 Could not resolve 2 attendee tokens:
-  @john — ambiguous: john.smith@acme.com, john.doe@acme.com
-  @nope — unknown (run `pidge contacts refresh` to update the index)
+  @john: ambiguous: john.smith@acme.com, john.doe@acme.com
+  @nope: unknown (run `pidge contacts refresh` to update the index)
 ```
 
 Existing behaviour (literal emails without `@`) flows through unchanged.
@@ -128,13 +128,13 @@ Existing behaviour (literal emails without `@`) flows through unchanged.
 - Ambiguous → error lists every candidate (deterministic order: most-recently-seen first).
 - Unknown → error includes the original token verbatim.
 
-`commands::contacts_refresh` is integration-tested manually against the user's live accounts (no mock harness yet — see the "command-level integration tests with a GraphClient trait + mock" item in the improvements backlog).
+`commands::contacts_refresh` is integration-tested manually against the user's live accounts (no mock harness yet; see the "command-level integration tests with a GraphClient trait + mock" item in the improvements backlog).
 
 ## CHANGELOG
 
 Single entry under `### Added`:
 
-> - `pidge contacts refresh` / `contacts find` — local name → email index, populated from recent mail and calendar. New inline `@name` syntax in `--invite` / `--to` / `--cc` / `--bcc` resolves against the index; literal emails without `@` are unchanged.
+> - `pidge contacts refresh` / `contacts find`: local name → email index, populated from recent mail and calendar. New inline `@name` syntax in `--invite` / `--to` / `--cc` / `--bcc` resolves against the index; literal emails without `@` are unchanged.
 
 ## Release
 

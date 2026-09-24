@@ -1,4 +1,4 @@
-//! `pidge calendar duplicate <hash>` — use an event as a template.
+//! `pidge calendar duplicate <hash>`: use an event as a template.
 
 use anyhow::{Result, anyhow};
 use chrono::{Duration, Utc};

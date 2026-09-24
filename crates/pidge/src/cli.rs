@@ -80,7 +80,7 @@ pub enum Commands {
         command: Option<AiCommands>,
     },
 
-    /// Manage e-mail accounts — add, remove, list, set defaults
+    /// Manage e-mail accounts: add, remove, list, set defaults
     Account {
         #[command(subcommand)]
         command: AccountCommands,
@@ -163,7 +163,7 @@ pub enum AiCommands {
     Config,
     /// Show AI status (same as running `pidge ai` without a subcommand)
     Status,
-    /// AI agent skill information — emits a SKILL.md so AI agents (Claude
+    /// AI agent skill information: emits a SKILL.md so AI agents (Claude
     /// Code, Codex, Copilot, etc.) can drive pidge on the user's behalf
     Skill {
         /// Output the SKILL.md content (ready to save as a skill file)
@@ -279,7 +279,7 @@ pub enum McpCommands {
     /// Show the current hosted MCP connection status
     Status {
         /// URL of the hosted MCP server (e.g. https://<host>/mcp). Omit it if you're only
-        /// connected to one — with several, this lists them and asks you
+        /// connected to one; with several, this lists them and asks you
         /// to pick.
         url: Option<String>,
 
@@ -431,7 +431,7 @@ pub enum MailCommands {
     },
 
     Search {
-        /// Search query (KQL syntax — `from:alice`, `subject:"q4 review"`, etc.)
+        /// Search query (KQL syntax: `from:alice`, `subject:"q4 review"`, etc.)
         query: String,
 
         /// Filter to a specific account (repeatable for a subset)
@@ -582,7 +582,7 @@ pub enum MailCommands {
         #[arg(long)]
         account: Vec<String>,
 
-        /// Confirm the deletion. Required — there is no interactive prompt.
+        /// Confirm the deletion. Required: there is no interactive prompt.
         #[arg(short = 'y', long)]
         yes: bool,
     },
@@ -603,7 +603,7 @@ pub enum MailCommands {
 
         /// BULK: delete every message in the Inbox older than this date or
         /// duration (e.g. `2026-01-01`, `30d`, `6m`, `1y`). Always requires
-        /// `-y` to confirm — there is no interactive prompt for bulk delete.
+        /// `-y` to confirm; there is no interactive prompt for bulk delete.
         #[arg(long, conflicts_with = "fragments")]
         older_than: Option<String>,
 
@@ -722,7 +722,7 @@ pub enum CategorizeCommands {
 }
 
 /// Flags shared between `mail new` and (mostly) the explicit forms of
-/// reply/forward. All optional — the TUI form fills in what's missing.
+/// reply/forward. All optional; the TUI form fills in what's missing.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct ComposeArgs {
     /// Account to send from (defaults to `account default e-mail`)
@@ -756,7 +756,7 @@ pub struct ComposeArgs {
     /// Open the TUI compose form pre-filled with your flags so you can
     /// review (and edit) before sending. Without this, a fully-specified
     /// invocation (`--to`, `--subject`, `--body`/`--body-file`) sends
-    /// immediately — convenient for scripts and one-liners.
+    /// immediately, convenient for scripts and one-liners.
     #[arg(long)]
     pub confirm: bool,
 
@@ -766,7 +766,7 @@ pub struct ComposeArgs {
     #[arg(long)]
     pub draft: bool,
 
-    /// Attach a file (repeatable). Each file must be < 3 MB — larger
+    /// Attach a file (repeatable). Each file must be < 3 MB; larger
     /// attachments require resumable uploads, not yet implemented.
     #[arg(long)]
     pub attach: Vec<std::path::PathBuf>,
@@ -799,7 +799,7 @@ pub struct ReplyArgs {
     #[arg(long)]
     pub draft: bool,
 
-    /// Attach a file (repeatable). Each file must be < 3 MB — larger
+    /// Attach a file (repeatable). Each file must be < 3 MB; larger
     /// attachments require resumable uploads, not yet implemented.
     #[arg(long)]
     pub attach: Vec<std::path::PathBuf>,
@@ -835,7 +835,7 @@ pub struct ForwardArgs {
     #[arg(long)]
     pub draft: bool,
 
-    /// Attach a file (repeatable). Each file must be < 3 MB — larger
+    /// Attach a file (repeatable). Each file must be < 3 MB; larger
     /// attachments require resumable uploads, not yet implemented.
     #[arg(long)]
     pub attach: Vec<std::path::PathBuf>,
@@ -846,7 +846,7 @@ pub struct ForwardArgs {
 /// (X is a fragment) or pass through to clap (X is a subcommand).
 ///
 /// Keep this list in sync with [`MailCommands`]. When you add a new variant,
-/// add its kebab-case name here too — otherwise users will see "No message
+/// add its kebab-case name here too, otherwise users will see "No message
 /// found for fragment '<new-subcommand>'" instead of the new behavior.
 pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
     "list",
@@ -970,7 +970,7 @@ pub enum ContactsCommands {
     /// Search the local index. Case-insensitive substring match on name,
     /// email, and local-part. Exact email match wins.
     Find {
-        /// Query — substring of name, email, or local-part. Omit to list all.
+        /// Query: substring of name, email, or local-part. Omit to list all.
         #[arg(default_value = "")]
         query: String,
         /// Maximum number of matches to print

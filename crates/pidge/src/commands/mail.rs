@@ -1,4 +1,4 @@
-//! `pidge mail list` — list messages merged across signed-in accounts.
+//! `pidge mail list`: list messages merged across signed-in accounts.
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Datelike, Local, Utc};
@@ -179,8 +179,8 @@ async fn list(
     let per_account = compute_per_account_fetch(limit, target_emails.len());
     // 1-based page → 0-based skip. `compute_per_account_skip` keeps the merge
     // tidy: every account gets the same skip so received-time interleaving stays
-    // intact across pages (yes, multi-account paging is imperfect — see comment
-    // on the helper — but it's the right approximation given Graph's per-mailbox
+    // intact across pages (yes, multi-account paging is imperfect, see comment
+    // on the helper, but it's the right approximation given Graph's per-mailbox
     // ordering).
     let skip = compute_per_account_skip(per_account, page);
     let graph = GraphClient::new(AuthClient::from_env()?)?;
@@ -333,7 +333,7 @@ fn render_threads(rows: &[MessageRow], json: bool) -> Result<()> {
 }
 
 /// Continue a cursor: pull one page per non-exhausted account, merge by
-/// received time, and hand back a refreshed cursor. Exact continuation —
+/// received time, and hand back a refreshed cursor. Exact continuation:
 /// every account advances via its own Graph nextLink (no $skip drift).
 pub(crate) async fn list_at_cursor(
     cursor: pidge_client::Cursor,
@@ -428,7 +428,7 @@ pub(crate) fn render(
     if table {
         return render_table(rows, hide_account, labels);
     }
-    // 8 lines per card by default — comfortably inside the 5–10 sweet
+    // 8 lines per card by default, comfortably inside the 5–10 sweet
     // spot regardless of terminal width. Short emails fill fewer lines
     // naturally; long emails show 8 lines with a trailing `…` to signal
     // there's more. `--compact` collapses to a single preview line, and
@@ -498,7 +498,7 @@ fn compute_per_account_fetch(limit: usize, num_accounts: usize) -> usize {
 /// Compute the per-account `$skip` for a given page. Each account is paged
 /// independently and the merged result is trimmed to `per_account * accounts`,
 /// so page boundaries are approximate when accounts have very different
-/// volumes — page 2 across two accounts may include some items from one
+/// volumes: page 2 across two accounts may include some items from one
 /// account that also appeared on page 1 of the other, sorted by received
 /// time. This matches users' mental model of "I see the next batch" without
 /// requiring a cross-account cursor we can't actually maintain (Graph has no
@@ -526,7 +526,7 @@ fn style_subject(subject: &str, is_read: bool) -> String {
 
 /// Visual prefix for a message's flag state. Empty string when not flagged
 /// so unflagged rows stay aligned with the rest. Yellow `⚑` for an active
-/// follow-up flag; green `✓` for a completed one — matches Outlook's
+/// follow-up flag; green `✓` for a completed one. Matches Outlook's
 /// distinction between "flagged" and "complete".
 pub fn flag_marker(status: pidge_core::FlagStatus) -> String {
     match status {
@@ -639,7 +639,7 @@ fn render_preview_lines(message: &Message, width: usize, max_lines: usize) -> Ve
 
 /// HTML-aware preview renderer. Flattens HTML via `html2text` (raw_mode so
 /// marketing-email layout tables read as ordinary paragraphs), then emits
-/// each visible span — dim for prose, cyan+underline+OSC 8 for `<a>`
+/// each visible span: dim for prose, cyan+underline+OSC 8 for `<a>`
 /// anchor text. Image alt text and `<img>` URLs are skipped entirely
 /// (the user has no use for `[Logo]` markers or clickable tracking pixels).
 fn render_html_preview(html: &str, width: usize, max_lines: usize) -> Vec<String> {
@@ -694,7 +694,7 @@ fn render_html_preview(html: &str, width: usize, max_lines: usize) -> Vec<String
         staged.push(pieces);
     }
 
-    // Drop blank lines entirely — preview budget is 5-10 lines of CONTENT,
+    // Drop blank lines entirely; preview budget is 5-10 lines of CONTENT,
     // and HTML paragraph breaks would otherwise eat 30-50% of that budget
     // showing nothing useful. Trade visual breathing room for information
     // density; `mail show` still has the full paragraph structure.
@@ -735,7 +735,7 @@ fn style_html_line(pieces: Vec<TaggedLinePiece>, no_color: bool) -> String {
             continue;
         }
         if let Some(url) = piece.url {
-            // OSC 8 wrap with cyan + underline visible text — the same
+            // OSC 8 wrap with cyan + underline visible text, the same
             // treatment `mail show` uses so anchor text (not the URL) is
             // the click target.
             out.push_str("\x1b]8;;");
@@ -756,7 +756,7 @@ fn style_html_line(pieces: Vec<TaggedLinePiece>, no_color: bool) -> String {
 /// - Non-URL stretches are dimmed (preserves the "preview is secondary
 ///   context" feel of the card layout).
 /// - URLs are wrapped with an OSC 8 escape so the terminal makes them
-///   clickable, with the visible text styled cyan + underlined — the same
+///   clickable, with the visible text styled cyan + underlined, the same
 ///   convention `pidge mail show` uses for HTML anchors.
 fn style_preview_line(line: &str) -> String {
     use linkify::{LinkFinder, LinkKind};
@@ -774,7 +774,7 @@ fn style_preview_line(line: &str) -> String {
         if cursor < start {
             out.push_str(&line[cursor..start].dimmed().to_string());
         }
-        // OSC 8 wrap with cyan + underline visible text — same treatment as
+        // OSC 8 wrap with cyan + underline visible text, same treatment as
         // mail show. The full URL is the click target; styling makes the
         // link visually obvious even before hovering.
         out.push_str("\x1b]8;;");
@@ -798,7 +798,7 @@ fn style_preview_line(line: &str) -> String {
 /// Graph often has paragraph breaks that don't align nicely with the card
 /// width, so we reflow the text as a single paragraph.
 ///
-/// URLs are recognised via `linkify` and treated as atomic tokens — they are
+/// URLs are recognised via `linkify` and treated as atomic tokens; they are
 /// never split across lines, even when longer than `width`. Splitting a URL
 /// mid-string would prevent the link styler from recognising it and would
 /// produce broken `…`-truncated hrefs.
@@ -815,7 +815,7 @@ fn wrap_preview(text: &str, width: usize, max_lines: usize) -> Vec<String> {
         let tlen = token.text.chars().count();
         if current.is_empty() {
             // Long non-URL word: hard-split across lines (URLs stay whole even
-            // when oversized — the terminal will visually wrap them, which is
+            // when oversized; the terminal will visually wrap them, which is
             // fine because clicking still works on a soft-wrapped OSC8 link).
             if !token.is_url && tlen > width {
                 let chars: Vec<char> = token.text.chars().collect();
@@ -927,13 +927,13 @@ fn terminal_width() -> usize {
         .unwrap_or(80)
 }
 
-/// Tabular rendering — one row per message with `ID`, `ACCOUNT`, `FROM`,
+/// Tabular rendering: one row per message with `ID`, `ACCOUNT`, `FROM`,
 /// `SUBJECT`, `RECEIVED` columns. Useful for piping into other tools or
 /// when the user prefers a dense overview without preview text.
 ///
 /// The `📎` marker is appended to `SUBJECT` (rather than getting its own
 /// column) so the table stays compact and the indicator still scans next
-/// to the subject — same place an attachment icon lives in most mail UIs.
+/// to the subject, same place an attachment icon lives in most mail UIs.
 fn render_table(
     rows: &[MessageRow],
     hide_account: bool,
@@ -995,7 +995,7 @@ struct MessageOut<'a> {
     subject: &'a str,
     received_at: chrono::DateTime<chrono::Utc>,
     is_read: bool,
-    /// Short snippet — Graph's `bodyPreview`, capped at 255 chars. Cheap
+    /// Short snippet: Graph's `bodyPreview`, capped at 255 chars. Cheap
     /// "summary" string suitable for scanning.
     preview: &'a str,
     /// Full body content as plain text. For HTML emails it's the
@@ -1063,9 +1063,9 @@ fn render_json(rows: &[MessageRow]) -> Result<()> {
 }
 
 /// Plain-text representation of the message body. For HTML emails we run
-/// html2text locally (no fancy formatting — just text + structure); for
+/// html2text locally (no fancy formatting, just text + structure); for
 /// plain-text emails we return the body unchanged. Empty if the body is
-/// missing — callers should fall back to `Message::preview`.
+/// missing; callers should fall back to `Message::preview`.
 fn body_as_plain_text(m: &Message) -> String {
     use pidge_core::BodyContentType;
     if m.body.is_empty() {
@@ -1076,7 +1076,7 @@ fn body_as_plain_text(m: &Message) -> String {
         BodyContentType::Html => {
             // 100 cols is a reasonable target width for downstream consumers;
             // they can re-wrap if they want. We don't care about styling
-            // here — just structured plain text.
+            // here, just structured plain text.
             html2text::from_read(m.body.as_bytes(), 100).unwrap_or_else(|_| m.body.clone())
         }
     }
@@ -1168,8 +1168,8 @@ mod tests {
 
     #[test]
     fn wrap_preview_keeps_long_url_whole() {
-        // A URL longer than the line width must stay on a single line — even
-        // though it exceeds `width` — so the link styler later finds it intact.
+        // A URL longer than the line width must stay on a single line (even
+        // though it exceeds `width`) so the link styler later finds it intact.
         let long_url = "https://example.com/path/with/many/segments?q=a&also=this-is-extra-padding";
         let text = format!("see {long_url} for details");
         let out = wrap_preview(&text, 20, 5);

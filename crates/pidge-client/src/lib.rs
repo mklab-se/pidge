@@ -25,7 +25,7 @@ pub use cursor::{Cursor, CursorError};
 ///
 /// In tests, honors a thread-local override set via
 /// [`test_support::with_base_dir`] so tests never mutate process-wide
-/// `HOME`/`XDG_CONFIG_HOME` env vars — two independent stores' tests
+/// `HOME`/`XDG_CONFIG_HOME` env vars: two independent stores' tests
 /// overriding those globally, each behind its own lock, can still race
 /// across threads in the same test binary. A thread-local sidesteps that
 /// entirely: it's invisible to every thread but the one that set it, so

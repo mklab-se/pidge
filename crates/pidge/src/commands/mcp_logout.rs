@@ -1,4 +1,4 @@
-//! `pidge mcp logout <url>` — forget the stored session for a hosted pidge
+//! `pidge mcp logout <url>`: forget the stored session for a hosted pidge
 //! MCP server (local only): delete it from every backend that holds it, and
 //! drop its server-index entry. Nothing is revoked on the server; the
 //! `accounts_update` tool's `sign_out_everywhere` does that. Idempotent: logging out of a server with no stored session is not
@@ -52,7 +52,7 @@ pub async fn run(url: String, store: Option<TokenStorage>, json_output: bool) ->
 }
 
 /// `--dry-run`: report which backends (if any) hold a session for `url`,
-/// touching nothing — no delete, and no index write. Mirrors `logout_from`'s
+/// touching nothing: no delete, and no index write. Mirrors `logout_from`'s
 /// backend ordering/tolerance (via [`try_each_backend`]) but only ever
 /// calls `load`.
 fn run_dry(url: &str, candidates: &[TokenStorage], json_output: bool) -> Result<()> {
@@ -90,8 +90,8 @@ fn run_dry(url: &str, candidates: &[TokenStorage], json_output: bool) -> Result<
 }
 
 /// The full logout decision for one server. For every one of `candidates`,
-/// in one pass per backend (so an unreachable backend is only reported —
-/// and warned about, via [`try_each_backend`] — once, not once per phase):
+/// in one pass per backend (so an unreachable backend is only reported
+/// (and warned about, via [`try_each_backend`]) once, not once per phase):
 /// check whether a session is present, then delete it regardless of what
 /// was found there. Deleting unconditionally, even on a miss, is what
 /// clears a stale index entry whose backend no longer actually holds

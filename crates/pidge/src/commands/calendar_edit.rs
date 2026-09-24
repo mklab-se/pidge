@@ -1,4 +1,4 @@
-//! `pidge calendar edit <hash>` — update an event.
+//! `pidge calendar edit <hash>`: update an event.
 
 use anyhow::Result;
 use chrono::Utc;

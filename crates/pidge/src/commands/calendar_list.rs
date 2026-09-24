@@ -1,4 +1,4 @@
-//! `pidge calendar list` — list events across accounts in a time window.
+//! `pidge calendar list`: list events across accounts in a time window.
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
@@ -442,7 +442,7 @@ mod tests {
             Some("2026-06-30"),
         )
         .unwrap();
-        // 2026-06-01 to 2026-06-30 — at least 28 days
+        // 2026-06-01 to 2026-06-30, at least 28 days
         assert!((w.end - w.start).num_days() >= 28);
     }
 

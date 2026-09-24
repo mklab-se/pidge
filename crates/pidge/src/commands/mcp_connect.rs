@@ -1,4 +1,4 @@
-//! `pidge mcp connect <url>` — sign in to a hosted pidge MCP server and
+//! `pidge mcp connect <url>`: sign in to a hosted pidge MCP server and
 //! migrate every locally signed-in Microsoft account onto it.
 //!
 //! The migration loop (skip already-connected mailboxes, call
@@ -8,7 +8,7 @@
 //!
 //! Output contract: all progress/human text (sign-in prompts, the authorize
 //! URL, each connect link, the Enter prompt, "already connected" notes, and
-//! warnings) goes to stderr, unconditionally — `--json` does not suppress
+//! warnings) goes to stderr, unconditionally; `--json` does not suppress
 //! it, since the connect link is often the only way to finish the flow.
 //! Stdout carries only the one final payload: the `accounts_list` text, or
 //! (with `--json`) the `{"server","connected","skipped"}` summary.
@@ -93,7 +93,7 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
             );
         } else {
             println!(
-                "Dry run: not signed in to {url} yet — `pidge mcp connect {url}` would first open a browser to sign in."
+                "Dry run: not signed in to {url} yet; `pidge mcp connect {url}` would first open a browser to sign in."
             );
         }
         return Ok(());
@@ -117,7 +117,7 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
                 tokens.server.cyan(),
                 backend_name(backend)
             );
-            println!("  skipping the live accounts_list call — a dry run never refreshes tokens.");
+            println!("  skipping the live accounts_list call; a dry run never refreshes tokens.");
             println!(
                 "  run `pidge mcp connect {url}` (without --dry-run) to see the current plan."
             );
@@ -177,7 +177,7 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
 /// The `--dry-run` plan for an already-signed-in session: which local
 /// accounts would be connected, and which settings would be copied. Takes
 /// `calls` generically (over [`McpCalls`]) purely so it's unit-testable
-/// with a recording fake — a test can assert this makes exactly one
+/// with a recording fake: a test can assert this makes exactly one
 /// `accounts_list` call and nothing else, since a dry run must never call
 /// `accounts_connect`/`accounts_update`.
 struct DryRunPlan {
@@ -351,8 +351,8 @@ async fn ensure_signed_in(
 }
 
 /// Reuse a stored session if one is valid (or refreshable), reporting
-/// `None` (never triggering an interactive sign-in itself) otherwise —
-/// thin adapter over the shared [`lookup_session`], which `ensure_signed_in`
+/// `None` (never triggering an interactive sign-in itself) otherwise.
+/// Thin adapter over the shared [`lookup_session`], which `ensure_signed_in`
 /// then falls back to an interactive sign-in for.
 async fn try_existing_session(
     http: &reqwest::Client,
@@ -369,7 +369,7 @@ async fn try_existing_session(
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MigrationOutcome {
     /// Local accounts `accounts_connect`+wait completed for, in the order
-    /// they were processed. Not yet verified against the server — the
+    /// they were processed. Not yet verified against the server; the
     /// caller re-checks `accounts_list` afterwards (see `run_inner`).
     pub connected: Vec<String>,
     /// Local accounts that were already connected and so were skipped.
@@ -378,7 +378,7 @@ pub struct MigrationOutcome {
 
 /// For every address in `local_accounts` not already present in
 /// `already_connected`, call `accounts_connect`, extract its connect link,
-/// and hand it to `on_link(url, email)` — the caller's job is to show the
+/// and hand it to `on_link(url, email)`; the caller's job is to show the
 /// link (and, for the real CLI, wait for the user to finish, interactively
 /// or by polling). Already-connected addresses are skipped without calling
 /// `accounts_connect` at all.
@@ -387,7 +387,7 @@ pub struct MigrationOutcome {
 /// `&mut` so that `on_link` can also reach it (e.g. to poll `accounts_list`
 /// while waiting) without fighting the borrow checker; every lock here is
 /// released before the next `.await` point that might re-enter it. A plain
-/// `std::cell::RefCell` cannot be used here — clippy (rightly) flags a
+/// `std::cell::RefCell` cannot be used here: clippy (rightly) flags a
 /// borrow held across an `.await`, since a real concurrent poll of the
 /// same cell would panic; a `tokio::sync::Mutex` is built for exactly this.
 pub async fn run_migration<C, F, Fut>(
@@ -429,8 +429,8 @@ where
     Ok(MigrationOutcome { connected, skipped })
 }
 
-/// After the migration loop: re-verify who's actually connected — never
-/// trust an Enter keypress, or even a completed poll, at face value — then
+/// After the migration loop: re-verify who's actually connected (never
+/// trust an Enter keypress, or even a completed poll, at face value), then
 /// copy `default_send` (only for a *verified* address) and every trusted
 /// sender onto the server. Each `accounts_update` failure is a warning on
 /// stderr, never fatal, so one rejected update doesn't stop the next or
@@ -496,7 +496,7 @@ fn already_connected_line(addr: &str) -> String {
 /// as connected, the deadline passes, or the session turns out to be dead;
 /// otherwise, print a prompt and block for Enter. Returns `Err` only for a
 /// genuine I/O error reading stdin, or (via [`poll_until_connected`]) when
-/// the hosted session itself has expired — anything else (a timed-out poll,
+/// the hosted session itself has expired; anything else (a timed-out poll,
 /// a transient `accounts_list` failure) is a warning; the caller
 /// re-verifies who's actually connected once the whole migration is done.
 async fn wait_for_connection<C: McpCalls>(
@@ -534,12 +534,12 @@ async fn poll_until_connected<C: McpCalls>(calls: &Mutex<C>, email: &str) -> Res
 /// drive it with tiny durations under `tokio::test(start_paused = true)`
 /// instead of waiting for real minutes.
 ///
-/// A dead session ([`is_session_expired`]) bails immediately — otherwise
+/// A dead session ([`is_session_expired`]) bails immediately; otherwise
 /// this would spend its whole deadline re-POSTing a revoked refresh token
 /// every interval, only for the *next* account's `accounts_connect` to
 /// surface the reconnect hint. Every other `accounts_list` failure is
 /// transient and just a warning, retried until the deadline; a timeout is
-/// also just a warning — the caller moves on to the next account and
+/// also just a warning; the caller moves on to the next account and
 /// re-verifies who actually connected once the whole migration is done.
 async fn poll_until_connected_with<C: McpCalls>(
     calls: &Mutex<C>,
@@ -578,14 +578,14 @@ async fn poll_until_connected_with<C: McpCalls>(
 
 /// Extract the set of e-mail addresses appearing in `accounts_list`'s
 /// *healthy* mailbox lines (rendered by the server, one per line, as
-/// `  - <addr>[ (sign-in)]: <health>` — see `pidge-mcp`'s
+/// `  - <addr>[ (sign-in)]: <health>`; see `pidge-mcp`'s
 /// `tools::accounts::render_accounts`). Tolerant of the exact formatting: a
 /// line only needs to start with `-` once trimmed, and any whitespace-
 /// separated token on it containing `@` counts, stripped of surrounding
 /// punctuation and lower-cased. Lines that don't start with `-` (the
 /// sign-in/default-sender/trusted-senders lines, which may also contain
 /// addresses) are ignored, and so are mailbox lines whose health reads
-/// "needs reconnect" — the server is telling us to run `accounts_connect`
+/// "needs reconnect"; the server is telling us to run `accounts_connect`
 /// for that address again, not that it's already connected.
 pub fn parse_connected_addresses(text: &str) -> HashSet<String> {
     text.lines()
@@ -650,7 +650,7 @@ mod tests {
     fn parse_connected_addresses_extracts_healthy_mailbox_lines_only() {
         let addrs = parse_connected_addresses(ACCOUNTS_LIST_TEXT);
         assert_eq!(addrs, HashSet::from(["jane@example.com".to_string()]));
-        // The trusted-senders line isn't a mailbox line — it must not
+        // The trusted-senders line isn't a mailbox line; it must not
         // contribute an address, even though it contains an `@`.
         assert!(!addrs.contains("colleague@example.com"));
     }
@@ -873,7 +873,7 @@ mod tests {
         }
         let calls = Mutex::new(FlakyRpc { calls: 0 });
 
-        // Never succeeds — this must return Ok (with a timeout warning)
+        // Never succeeds; this must return Ok (with a timeout warning)
         // rather than propagate the transient error or hang.
         poll_until_connected_with(
             &calls,
@@ -910,7 +910,7 @@ mod tests {
         }
         let calls = Mutex::new(DeadSessionRpc { calls: 0 });
 
-        // A generous deadline — if this retried instead of bailing, the
+        // A generous deadline; if this retried instead of bailing, the
         // (paused) clock would need to advance the full 60s for the loop
         // to time out, and the test would still pass for the wrong reason,
         // so the real assertion is the call count below.
@@ -995,7 +995,7 @@ mod tests {
     #[tokio::test]
     async fn finish_migration_does_not_set_default_sender_for_an_unverified_account() {
         // `work@example.com` was Enter-confirmed (in `outcome.connected`)
-        // but the verify pass shows only `jane@example.com` as connected —
+        // but the verify pass shows only `jane@example.com` as connected;
         // the default-sender update must not be sent for it.
         let mut rpc = RecordingRpc::with_list_text("mailboxes:\n  - jane@example.com: ok\n");
         let outcome = MigrationOutcome {

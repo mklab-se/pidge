@@ -1,4 +1,4 @@
-# Remote MCP — Platform Implementation Plan (sub-project 2)
+# Remote MCP: Platform Implementation Plan (sub-project 2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust 2024 (MSRV 1.88), axum 0.8, tower-http trace, tracing-subscriber `json` feature, rmcp 3.4 (`ServerHandler::call_tool` override), Bicep (`Microsoft.App/managedEnvironments/managedCertificates`), Azure CLI, GitHub Actions with `azure/login@v2` OIDC.
 
-**Spec:** `docs/superpowers/specs/2026-09-22-remote-mcp-full-feature-design.md` — Part 2 (§2.1–§2.4)
+**Spec:** `docs/superpowers/specs/2026-09-22-remote-mcp-full-feature-design.md`: Part 2 (§2.1–§2.4)
 
 ## Global Constraints
 
@@ -23,11 +23,11 @@
 
 ## Review Focus
 
-1. A bearer token minted under the old hostname arrives after cutover — expected: accepted until its own expiry (Task 1 test `legacy_issuer_tokens_stay_valid`).
-2. A refresh token from before a `sign_out_everywhere` arrives — expected: refused with `invalid_grant`, and an access token from before it is refused with 401 (Task 2 tests).
-3. A request with `Host: pidge.mklab.se` and one with the Container Apps FQDN both reach the MCP endpoint during the transition — expected: both served (Task 1 test `alternate_hosts_are_accepted`).
+1. A bearer token minted under the old hostname arrives after cutover. Expected: accepted until its own expiry (Task 1 test `legacy_issuer_tokens_stay_valid`).
+2. A refresh token from before a `sign_out_everywhere` arrives. Expected: refused with `invalid_grant`, and an access token from before it is refused with 401 (Task 2 tests).
+3. A request with `Host: pidge.mklab.se` and one with the Container Apps FQDN both reach the MCP endpoint during the transition. Expected: both served (Task 1 test `alternate_hosts_are_accepted`).
 4. A tool call that fails must still produce exactly one structured log line with `outcome=error` and no message text from Graph (Task 3 test `tool_log_line_has_no_error_text`).
-5. The deploy workflow runs twice concurrently — expected: the second waits (concurrency group) and the smoke test fails the job if `/healthz` or discovery is wrong (Task 5, verified by the controller on the first real run).
+5. The deploy workflow runs twice concurrently. Expected: the second waits (concurrency group) and the smoke test fails the job if `/healthz` or discovery is wrong (Task 5, verified by the controller on the first real run).
 
 ---
 
@@ -63,7 +63,7 @@ fn legacy_issuer_tokens_stay_valid() {
 `config.rs` test: with `PIDGE_MCP_ALT_HOSTS="ca-x.example.io, pidge.mklab.se:443"` parsed into two trimmed entries; `PIDGE_MCP_LEGACY_ISSUERS="https://old.test/"` parsed with the trailing slash removed. (Build `Config` through a `Config::from_map(&HashMap<String,String>)` helper that `from_env` calls, so tests don't touch the process environment.)
 `flow_tests.rs` test `alternate_hosts_are_accepted`: build the harness with `alt_hosts = vec!["alt.test".into()]`, send `initialize` with `Host: alt.test` and a valid bearer → 200; with `Host: evil.test` → 4xx (rmcp's host check).
 
-- [ ] **Step 2: Run to verify failure** — `cargo test -p pidge-mcp legacy_issuer alternate_hosts from_map`.
+- [ ] **Step 2: Run to verify failure**: `cargo test -p pidge-mcp legacy_issuer alternate_hosts from_map`.
 
 - [ ] **Step 3: Implement**
 
@@ -84,8 +84,8 @@ pub fn verify_access(&self, token: &str) -> Result<AccessClaims> {
 `main.rs`: `Signer::new(..).with_legacy_issuers(config.legacy_issuers.clone())`.
 `app.rs::allowed_hosts`: `hosts.extend(state.config.alt_hosts.iter().cloned())`.
 
-- [ ] **Step 4: Run tests, clippy, fmt** — `cargo test -p pidge-mcp && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all`.
-- [ ] **Step 5: Commit** — `git commit -am "feat(mcp): alternate hosts and legacy issuers for the domain cutover"`
+- [ ] **Step 4: Run tests, clippy, fmt**: `cargo test -p pidge-mcp && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all`.
+- [ ] **Step 5: Commit**: `git commit -am "feat(mcp): alternate hosts and legacy issuers for the domain cutover"`
 
 ---
 
@@ -121,7 +121,7 @@ async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
 - [ ] **Step 2: Run to verify failure.**
 - [ ] **Step 3: Implement** per the file list. The bearer middleware's generation lookup must be cheap: `generation_for` checks the in-memory map first and only loads the record on a miss (one Key Vault read per user per process lifetime). `set_generation` updates the map.
 - [ ] **Step 4: Run tests, clippy, fmt.**
-- [ ] **Step 5: Commit** — `git commit -am "feat(mcp): sign_out_everywhere revokes all of a user's tokens"`
+- [ ] **Step 5: Commit**: `git commit -am "feat(mcp): sign_out_everywhere revokes all of a user's tokens"`
 
 ---
 
@@ -140,9 +140,9 @@ async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
 
 - [ ] **Step 1: Failing test** `tool_log_line_has_no_error_text`: mount Graph to return 400 with body "secret detail" for `mail_overview`; call the tool through `PidgeMcp::call_tool` (the `ServerHandler` method) with a `request_context`; assert exactly one captured line contains `tool_call` and `tool=mail_overview` (or the JSON equivalent) and `outcome=error`, and that "secret detail" and the address are absent.
 - [ ] **Step 2: Run to verify failure.**
-- [ ] **Step 3: Implement.** In `tools/mod.rs` the `#[tool_handler]` macro generates `call_tool`; to wrap it, keep the macro on a private inner type or call `self.tool_router.call(...)` yourself: replace `#[tool_handler(router = self.tool_router)]` with a hand-written `call_tool`/`list_tools` (`ToolRouter::call`, `ToolRouter::list_all`, `ToolRouter::get` are public in rmcp 3.4 — see how the macro expands in `rmcp-macros-3.4.0/src/tool_handler.rs`) so the timing wrapper sits around `self.tool_router.call(tcc).await`.
+- [ ] **Step 3: Implement.** In `tools/mod.rs` the `#[tool_handler]` macro generates `call_tool`; to wrap it, keep the macro on a private inner type or call `self.tool_router.call(...)` yourself: replace `#[tool_handler(router = self.tool_router)]` with a hand-written `call_tool`/`list_tools` (`ToolRouter::call`, `ToolRouter::list_all`, `ToolRouter::get` are public in rmcp 3.4; see how the macro expands in `rmcp-macros-3.4.0/src/tool_handler.rs`) so the timing wrapper sits around `self.tool_router.call(tcc).await`.
 - [ ] **Step 4: Run tests, clippy, fmt.**
-- [ ] **Step 5: Commit** — `git commit -am "feat(mcp): JSON logs with per-request and per-tool lines"`
+- [ ] **Step 5: Commit**: `git commit -am "feat(mcp): JSON logs with per-request and per-tool lines"`
 
 ---
 
@@ -169,7 +169,7 @@ async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
   - `publicUrl`: with cutover, `https://$DOMAIN`, `legacyIssuers` = the old `https://<fqdn>`; without cutover, `altHosts` = `$DOMAIN`.
   - Phase 4 prints the `az ad app update` command including BOTH callbacks (old FQDN and custom domain) when the custom domain's callback is missing; never runs it.
 - [ ] **Step 3: Dry-run**: `deploy/azure/deploy.sh --skip-build --skip-entra` with `PIDGE_MCP_CUSTOM_DOMAIN=pidge.mklab.se` and no cutover, from the controller's session (the implementer does not deploy); the implementer validates the script with `bash -n` and `shellcheck` if available.
-- [ ] **Step 4: Commit** — `git commit -am "feat(deploy): custom domain with managed certificate, purge protection, cutover switch"`
+- [ ] **Step 4: Commit**: `git commit -am "feat(deploy): custom domain with managed certificate, purge protection, cutover switch"`
 
 ---
 
@@ -187,7 +187,7 @@ async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
 - `setup-github-oidc.sh`: idempotent; creates the identity via Bicep param? Simpler: `az identity create`, `az identity federated-credential create`, `az role assignment create` ×2, then `gh variable set` ×3 and `gh secret set PIDGE_MCP_ALLOWED_EMAILS` from the environment (never echoing it).
 
 - [ ] **Step 1: Write the workflow and script**; `bash -n`; `actionlint` if available.
-- [ ] **Step 2: Commit** — `git commit -am "ci: deploy pidge-mcp from main via GitHub OIDC"`
+- [ ] **Step 2: Commit**: `git commit -am "ci: deploy pidge-mcp from main via GitHub OIDC"`
 - [ ] **Step 3 (controller):** run `setup-github-oidc.sh`, merge, observe the workflow run on main, confirm the new revision and the smoke test.
 
 ---
@@ -198,7 +198,7 @@ async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
 - Modify: `deploy/azure/README.md` (domain, cutover, logs schema, CI/CD, revocation, purge protection)
 - Modify: `CLAUDE.md` (one line: deploy workflow + env vars)
 
-- [ ] **Step 1: Write**; **Step 2: Commit** — `git commit -am "docs: platform — domain, logs, CI/CD, revocation"`
+- [ ] **Step 1: Write**; **Step 2: Commit**: `git commit -am "docs: platform (domain, logs, CI/CD, revocation)"`
 
 ---
 

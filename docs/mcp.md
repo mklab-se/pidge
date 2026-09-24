@@ -120,7 +120,7 @@ pidge mcp logout https://<your-server>/mcp
 which backend to try first, but the other backend is still tried if the
 preferred one has nothing stored. Without `--store`, the preferred backend
 is whichever one the local server index remembers for that url, or the OS
-keychain if there's no index entry for it — so on a machine with no usable
+keychain if there's no index entry for it, so on a machine with no usable
 keychain (headless, no Secret Service), pass `--store file` explicitly, or
 `status`/`logout` will fail trying the keychain first. `logout` forgets the
 stored session for that server, locally only: it removes the session from

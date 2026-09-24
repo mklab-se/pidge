@@ -1,4 +1,4 @@
-//! `pidge mcp ...` dispatcher — manage the connection to a hosted pidge MCP
+//! `pidge mcp ...` dispatcher: manage the connection to a hosted pidge MCP
 //! server (see `crates/pidge-client/src/mcp/` for the client-side protocol
 //! implementation this builds on).
 
@@ -29,14 +29,14 @@ pub async fn run(command: McpCommands, json: bool) -> Result<()> {
 /// server has no stored session at all. Kept separate from [`ClientError`]
 /// (see [`ClientError::McpSessionExpired`] for the "has a session but it's
 /// unrefreshable" case) since nothing in `pidge-client` needs to produce
-/// these — they're purely about the CLI's own server bookkeeping.
+/// these; they're purely about the CLI's own server bookkeeping.
 #[derive(Debug, thiserror::Error)]
 pub enum McpUsageError {
     #[error("no hosted server connected; run `pidge mcp connect <url>`")]
     NoServerConnected,
 
     /// `example` is a complete, ready-to-run command built by the caller
-    /// (e.g. `"pidge mcp status https://a.example.com"`) — the message
+    /// (e.g. `"pidge mcp status https://a.example.com"`); the message
     /// itself never hard-codes a subcommand name, since this enum is shared
     /// by every url-less resolution, not just `status`'s.
     #[error(
@@ -50,8 +50,8 @@ pub enum McpUsageError {
 
 /// Remap a [`ClientError::SessionExpired`] found anywhere in `err`'s chain
 /// into a [`ClientError::McpSessionExpired`] so both its message and
-/// `exitcode::classify`'s hint point at `pidge mcp connect <url>` — the fix
-/// for a hosted MCP session — instead of the hard-coded `pidge account add`
+/// `exitcode::classify`'s hint point at `pidge mcp connect <url>` (the fix
+/// for a hosted MCP session) instead of the hard-coded `pidge account add`
 /// hint that's only correct for a Microsoft account's own session.
 ///
 /// Every `pidge mcp` subcommand that can surface a hosted-session expiry

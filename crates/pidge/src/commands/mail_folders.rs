@@ -1,4 +1,4 @@
-//! `pidge mail folders` — list the mail folders in each signed-in account,
+//! `pidge mail folders`: list the mail folders in each signed-in account,
 //! with message counts. Handy for confirming where `mail move` will (or did)
 //! file things, and for discovering a folder's exact display name.
 
@@ -116,7 +116,7 @@ pub(crate) async fn resolve_folder_path(
     Ok(Some(current_id))
 }
 
-/// `pidge mail rmdir <path> -y` — delete a folder (and its contents, which
+/// `pidge mail rmdir <path> -y`: delete a folder (and its contents, which
 /// Outlook moves to Deleted Items) in each target account. Requires `-y`
 /// since it is destructive. A path that doesn't exist in an account is
 /// reported and skipped, not an error.
@@ -148,7 +148,7 @@ pub async fn rmdir(name: String, account_filter: Vec<String>, yes: bool) -> Resu
             }
             None => {
                 println!(
-                    "{} No folder {} in {} — skipped.",
+                    "{} No folder {} in {}, skipped.",
                     "·".dimmed(),
                     name.cyan(),
                     email.dimmed()
@@ -159,7 +159,7 @@ pub async fn rmdir(name: String, account_filter: Vec<String>, yes: bool) -> Resu
     Ok(())
 }
 
-/// `pidge mail mkdir <name>` — create a folder (or nested path like
+/// `pidge mail mkdir <name>`: create a folder (or nested path like
 /// `Kvitton/MKLab`) in each target account, idempotently. Existing levels
 /// are left alone.
 pub async fn mkdir(name: String, account_filter: Vec<String>) -> Result<()> {

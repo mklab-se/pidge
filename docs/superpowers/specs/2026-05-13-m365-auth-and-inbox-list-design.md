@@ -1,7 +1,7 @@
-# M365 authentication + `pidge inbox list` — design
+# M365 authentication + `pidge inbox list`: design
 
 **Status:** Approved 2026-05-13
-**Goal:** Land the first real pidge feature — OAuth-based sign-in to one or more Microsoft 365 / personal Microsoft accounts, with `pidge inbox list` as the validation command that lists messages from every signed-in account merged.
+**Goal:** Land the first real pidge feature: OAuth-based sign-in to one or more Microsoft 365 / personal Microsoft accounts, with `pidge inbox list` as the validation command that lists messages from every signed-in account merged.
 **Scope:** Auth surface (`pidge auth login|list|status|logout|default`), Microsoft Graph client for mail, one read command (`pidge inbox list`). Multi-account from day one. Three-crate workspace split.
 
 ## Non-goals
@@ -10,7 +10,7 @@
 - No calendar commands. Same reason. Scopes for calendar **are** requested at sign-in so no re-consent later.
 - No folder navigation. Only the Inbox folder is read in this feature.
 - No local cache or offline mode.
-- No per-account scope override — every account consents to the same scope set.
+- No per-account scope override: every account consents to the same scope set.
 - No service-principal / app-only / non-delegated auth. Pidge always acts as the signed-in user on their own mailbox/calendar.
 
 ## Architecture
@@ -53,7 +53,7 @@ crates/pidge-client/src/
 └── error.rs             # ClientError (auth, network, graph)
 
 crates/pidge/src/commands/
-├── mod.rs               # (existing — extended)
+├── mod.rs               # (existing, extended)
 ├── auth.rs              # Top-level dispatch
 ├── auth_login.rs        # `pidge auth login`
 ├── auth_list.rs         # `pidge auth list`
@@ -68,10 +68,10 @@ crates/pidge/src/commands/
 The foundation spec explicitly said decomposition would happen "when HTTP/provider code lands." That moment is now. Splitting now means:
 
 1. `pidge-core::message::Message` becomes the contract every future provider (Gmail, IMAP, etc.) implements against. Commands depend on `Message`, not on Microsoft Graph JSON.
-2. `pidge-client` is testable in isolation with `wiremock` — no clap or output formatting in scope.
-3. The release pipeline's `crates-io` job needs to publish the three crates in dependency order (`pidge-core` → `pidge-client` → `pidge`) with the usual 30s sleeps. The release workflow gains this — matches cosq's pattern exactly.
+2. `pidge-client` is testable in isolation with `wiremock`, no clap or output formatting in scope.
+3. The release pipeline's `crates-io` job needs to publish the three crates in dependency order (`pidge-core` → `pidge-client` → `pidge`) with the usual 30s sleeps. The release workflow gains this, matching cosq's pattern exactly.
 
-## Auth flow — OAuth 2.0 device authorization grant
+## Auth flow: OAuth 2.0 device authorization grant
 
 ### One-time developer setup (you, Kristofer)
 
@@ -198,7 +198,7 @@ Hand-rolled implementation of [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628)
      - Stop unconditionally after `expires_in` seconds elapsed
 
 4. On success: parse the id_token JWT to extract `tid` (tenant_id). The JWT decoder
-   is a tiny helper — split on `.`, base64-decode the middle segment, JSON-parse,
+   is a tiny helper: split on `.`, base64-decode the middle segment, JSON-parse,
    read `tid`. No signature verification: we trust the TLS path to
    login.microsoftonline.com.
 
@@ -274,7 +274,7 @@ If the config file or its directory doesn't exist at first run, pidge creates th
 }
 ```
 
-Stored as a single JSON string per (service=`pidge`, account=`<email>`) pair. Single blob (vs. separate access/refresh entries) means a keychain miss for either token is impossible — they're written and read atomically.
+Stored as a single JSON string per (service=`pidge`, account=`<email>`) pair. Single blob (vs. separate access/refresh entries) means a keychain miss for either token is impossible; they're written and read atomically.
 
 ## Command surface
 
@@ -328,7 +328,7 @@ Defaults:
 All tokens valid.
 ```
 
-If any account's refresh token is known-bad (last attempt returned `invalid_grant`), an extra line per affected account: `  ⚠ kristofer@live.com: session expired — run \`pidge auth login\` to re-add`.
+If any account's refresh token is known-bad (last attempt returned `invalid_grant`), an extra line per affected account: `  ⚠ kristofer@live.com: session expired, run \`pidge auth login\` to re-add`.
 
 ### `pidge auth logout`
 
@@ -369,10 +369,10 @@ kristofer@mklab.se            Calendly            Meeting confirmed: Pidge demo,
 **Defaults:** all signed-in accounts, top 25 merged sorted by `receivedDateTime` desc.
 
 **Flags:**
-- `--account <email>` — filter to one account (repeatable for a subset). When the result is one-account-only, the ACCOUNT column is hidden.
-- `-n` / `--limit <N>` — max rows in merged output. Default 25. Per-account fetch is `ceil(N * 1.2 / num_accounts).max(10)` to balance over-fetch vs. correctness.
-- `--unread` — adds Graph `$filter=isRead eq false` per request.
-- `--output text|json` — global flag pattern; `text` (default) is the table above, `json` is an array of message objects.
+- `--account <email>`: filter to one account (repeatable for a subset). When the result is one-account-only, the ACCOUNT column is hidden.
+- `-n` / `--limit <N>`: max rows in merged output. Default 25. Per-account fetch is `ceil(N * 1.2 / num_accounts).max(10)` to balance over-fetch vs. correctness.
+- `--unread`: adds Graph `$filter=isRead eq false` per request.
+- `--output text|json`: global flag pattern; `text` (default) is the table above, `json` is an array of message objects.
 
 **Per-row rendering:**
 - `●` dimmed magenta glyph before `FROM` when `is_read == false`. Removed with `--no-color`.
@@ -397,7 +397,7 @@ kristofer@mklab.se            Calendly            Meeting confirmed: Pidge demo,
 
 `preview` is the Graph `bodyPreview` field (first ~255 plain-text chars). Included only in JSON output, not the table.
 
-**Merge implementation:** Fetch happens in parallel across accounts (`futures::future::join_all`). Each request uses `$select=id,subject,from,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc&$top=<per-account-N>`. After all requests return, results are flattened, sorted by `received_at` desc, sliced to N. A failure on one account does NOT fail the command — it surfaces a `WARNING:` to stderr and the command exits 0 if at least one account succeeded (exit 1 if all failed).
+**Merge implementation:** Fetch happens in parallel across accounts (`futures::future::join_all`). Each request uses `$select=id,subject,from,receivedDateTime,isRead,bodyPreview&$orderby=receivedDateTime desc&$top=<per-account-N>`. After all requests return, results are flattened, sorted by `received_at` desc, sliced to N. A failure on one account does NOT fail the command; it surfaces a `WARNING:` to stderr and the command exits 0 if at least one account succeeded (exit 1 if all failed).
 
 ## Error handling
 
@@ -492,16 +492,16 @@ The release workflow's `crates-io` job currently publishes one crate. Now it pub
 - OAuth 2.0 device code sign-in for Microsoft 365 and personal Microsoft accounts (`pidge auth login`)
 - Multi-account support: `pidge auth list`, `pidge auth status`, `pidge auth logout`, `pidge auth default --send/--calendar`
 - Tokens stored in OS keychain (macOS Keychain, Windows Credential Manager, Linux libsecret)
-- `pidge inbox list` — list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, `--output text|json`
+- `pidge inbox list`: list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, `--output text|json`
 - One-time setup script `scripts/register-pidge-app.sh` for registering the pidge app in Entra
 ```
 
 ## Deferred, in roadmap order
 
-1. `pidge mail send`, `pidge mail draft`, `pidge mail reply` — uses `Mail.Send` + `Mail.ReadWrite` already consented
-2. `pidge mail delete`, `pidge mail move`, `pidge mail mark-read` — `Mail.ReadWrite`
+1. `pidge mail send`, `pidge mail draft`, `pidge mail reply`: uses `Mail.Send` + `Mail.ReadWrite` already consented
+2. `pidge mail delete`, `pidge mail move`, `pidge mail mark-read`: `Mail.ReadWrite`
 3. `pidge inbox search` and folder navigation (`pidge mail folders`, `pidge inbox list --folder <name>`)
-4. `pidge calendar list`, `pidge calendar add`, `pidge calendar delete` — uses `Calendars.ReadWrite` already consented
+4. `pidge calendar list`, `pidge calendar add`, `pidge calendar delete`: uses `Calendars.ReadWrite` already consented
 5. Per-account scope override (e.g., a "read-only" secondary account)
 6. Local cache / offline mode
 7. Gmail provider (uses the same `pidge-core::Message` contract)
@@ -511,6 +511,6 @@ The release workflow's `crates-io` job currently publishes one crate. Now it pub
 - **`keyring` headless Linux.** No `libsecret` means no token storage. Acceptable to error with install instructions for now. A future "encrypted file fallback" can be added if real users hit this.
 - **Microsoft personal-account tenant ID is a well-known GUID.** `9188040d-6c67-4c5b-b112-36a304b66dad` for personal accounts (MSA) has been stable for years but isn't formally guaranteed. Code uses it only as a friendly label in `pidge auth list`, not as a behavioral assumption.
 - **`expires_in` is sometimes missing in refresh responses.** When it is, default to 3600s. The 60s clock-skew buffer absorbs minor inaccuracy.
-- **Refresh-token rotation behavior differs per account type.** Personal MSA always rotates the refresh token; Entra org accounts often don't. The code persists whatever comes back either way — no branching needed.
-- **RFC 8628 polling subtleties.** The `slow_down` response should bump the interval by 5s (per RFC) and continue polling — common mistake is to treat it as an error. The implementation must distinguish `slow_down` (continue with longer interval) from `access_denied` / `expired_token` (abort). Covered by wiremock unit tests for each of the five documented error codes.
+- **Refresh-token rotation behavior differs per account type.** Personal MSA always rotates the refresh token; Entra org accounts often don't. The code persists whatever comes back either way, no branching needed.
+- **RFC 8628 polling subtleties.** The `slow_down` response should bump the interval by 5s (per RFC) and continue polling. A common mistake is to treat it as an error. The implementation must distinguish `slow_down` (continue with longer interval) from `access_denied` / `expired_token` (abort). Covered by wiremock unit tests for each of the five documented error codes.
 - **JWT base64 padding.** Microsoft's id_token middle segment uses base64url *without* padding. The decoder uses `base64::engine::general_purpose::URL_SAFE_NO_PAD` (not `URL_SAFE`). Trivial but easy to get wrong on first attempt.

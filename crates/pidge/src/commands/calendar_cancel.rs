@@ -1,4 +1,4 @@
-//! `pidge calendar cancel <hash>` — organizer cancellation with notification.
+//! `pidge calendar cancel <hash>`: organizer cancellation with notification.
 
 use anyhow::Result;
 use std::io::Write;

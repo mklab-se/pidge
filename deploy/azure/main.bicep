@@ -1,4 +1,4 @@
-// pidge remote MCP server — Azure infrastructure.
+// pidge remote MCP server: Azure infrastructure.
 //
 // One resource group, one Container App, and the least infrastructure that
 // still meets the bar: RBAC-only Key Vault for per-user refresh tokens and
@@ -139,7 +139,7 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     softDeleteRetentionInDays: 30
     // Purge protection is on: a purged vault (and the refresh tokens and
     // signing key it held) cannot be recovered. This is irreversible once
-    // set — there is no way to turn it back off for this vault.
+    // set: there is no way to turn it back off for this vault.
     enablePurgeProtection: true
     publicNetworkAccess: 'Enabled'
     networkAcls: {

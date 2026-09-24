@@ -54,7 +54,7 @@ deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Contai
 ```
 
 - Workspace root `Cargo.toml` defines shared dependencies and version
-- `pidge-core` has no HTTP or auth code — it's safe to depend on from any consumer
+- `pidge-core` has no HTTP or auth code, so it's safe to depend on from any consumer
 - `pidge-client` knows nothing about clap or terminal output. `AuthClient` persists tokens through an `Arc<dyn TokenBackend>`; the default `LocalBackend` is the CLI's keychain/file behaviour, hosted consumers inject their own (`from_env_with_backend`)
 - `pidge-mcp` reuses `pidge-client` (Graph, token refresh) and `pidge-core` (rendering, flags, time ranges); it never shells out to the CLI. Design: `docs/superpowers/specs/2026-09-22-remote-mcp-full-feature-design.md`; ops and tool list: `deploy/azure/README.md`
 
@@ -67,7 +67,7 @@ deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Contai
 - **Cache invalidation:** every mutating tool (draft, send, act, calendar writes, account changes) calls `cache.invalidate_user` for the caller; reads are cached per user for 60 s.
 - **Sending:** only `mail_send` sends, only by draft id, at most 30 per hour per user. Unsubscribe e-mails, calendar invitations, attendee changes, cancellation notes and RSVP messages are charged against the same cap.
 - **markitdown hardening:** scrubbed environment; a fresh per-conversion work dir as `HOME`/`TMPDIR`, removed on every path; 30 s timeout with kill-on-drop; 4 GB address-space limit on Linux; 2 MB output cap; stderr discarded (it can quote the document); at most 2 concurrent conversions. The server marks itself non-dumpable on Linux so the child cannot read its environment.
-- **Deploy:** the `deploy` job of `.github/workflows/release.yml` deploys on every `v*` tag (the same trigger that releases the CLI) and on a manual dispatch, never on a push to `main`; every env var the running server reads is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs` — `deploy/azure/deploy.sh` and the deploy job also read some deploy-time-only vars (`PIDGE_RG`, `PIDGE_CLIENT_ID`, `IMAGE_TAG`, `PIDGE_MCP_CUSTOM_DOMAIN`, `PIDGE_MCP_CUTOVER`) that `deploy.sh` translates into the vars `Config::from_env` actually sees.
+- **Deploy:** the `deploy` job of `.github/workflows/release.yml` deploys on every `v*` tag (the same trigger that releases the CLI) and on a manual dispatch, never on a push to `main`; every env var the running server reads is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs`; `deploy/azure/deploy.sh` and the deploy job also read some deploy-time-only vars (`PIDGE_RG`, `PIDGE_CLIENT_ID`, `IMAGE_TAG`, `PIDGE_MCP_CUSTOM_DOMAIN`, `PIDGE_MCP_CUTOVER`) that `deploy.sh` translates into the vars `Config::from_env` actually sees.
 - **CLI side:** `pidge mcp connect/status/logout` (`crates/pidge/src/commands/mcp*.rs`) sign a local user into a hosted `pidge-mcp` server and migrate their local accounts onto it, via the client-side protocol in `crates/pidge-client/src/mcp/`; user guide: `docs/mcp.md`.
 
 ## Key Patterns
@@ -89,7 +89,7 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
 
 1. `/release patch` (or `minor`/`major`)
 2. Skill bumps version, updates CHANGELOG, runs pre-flight checks, tags, pushes
-3. Release workflow runs CI, then builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries (Linux, macOS Intel+ARM, Windows) with a CycloneDX SBOM per target, creates GitHub Release, updates Homebrew tap (`mklab-se/homebrew-tap`), publishes `pidge-core` → `pidge-client` → `pidge` to crates.io, publishes the MCP image, and deploys `pidge-mcp` to Azure — one tag ships the CLI and the server together
+3. Release workflow runs CI, then builds [auditable](https://github.com/rust-secure-code/cargo-auditable) binaries (Linux, macOS Intel+ARM, Windows) with a CycloneDX SBOM per target, creates GitHub Release, updates Homebrew tap (`mklab-se/homebrew-tap`), publishes `pidge-core` → `pidge-client` → `pidge` to crates.io, publishes the MCP image, and deploys `pidge-mcp` to Azure: one tag ships the CLI and the server together
 
 **Required GitHub secrets:**
 - `CARGO_REGISTRY_TOKEN` (in `crates-io` environment)
@@ -100,7 +100,7 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
 - Edition 2024, MSRV 1.88 (floor set by Ailloy 2.2 / ratatui 0.30 / keyring 4)
 - `cargo clippy` with `-D warnings` (zero warnings policy)
 - `cargo fmt` enforced in CI
-- Building from source on Windows needs NASM and CMake on `PATH` — `aws-lc-rs` (reqwest's TLS crypto
+- Building from source on Windows needs NASM and CMake on `PATH`: `aws-lc-rs` (reqwest's TLS crypto
   backend) compiles optimized assembly routines at build time. macOS and Linux need nothing extra.
   The release workflow's Windows leg installs NASM via `ilammy/setup-nasm@v1`; CMake and MSVC are
   already on the `windows-latest` image.
@@ -108,7 +108,7 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
 ## Dependency Policy
 
 We keep this tool's dependencies at their latest compatible versions, not just the versions that
-happen to still compile. Staying current is the default, not something we get to eventually —
+happen to still compile. Staying current is the default, not something we get to eventually;
 letting dependencies drift is how technical debt accumulates unnoticed until a security advisory or
 a forced breaking upgrade makes it urgent. When a newer major is available and there's no concrete,
 documented reason not to take it (see any `# Stays on ...` comments in `Cargo.toml` for the current
@@ -125,7 +125,7 @@ mdeck + pidge + rigg + rusty-tmpl).
 
 ## Workflow: when a real e-mail renders badly
 
-The HTML renderer (`render_html_body` in `commands/mail_show.rs`) is exercised by snapshot tests against anonymized fixtures of real-world e-mails. **Don't fix rendering bugs against a live mailbox — convert the bad e-mail into a fixture first.** That way the regression is caught forever and we never need a live token to repro.
+The HTML renderer (`render_html_body` in `commands/mail_show.rs`) is exercised by snapshot tests against anonymized fixtures of real-world e-mails. **Don't fix rendering bugs against a live mailbox; convert the bad e-mail into a fixture first.** That way the regression is caught forever and we never need a live token to repro.
 
 The loop:
 
@@ -133,10 +133,10 @@ The loop:
    ```bash
    cargo run -- mail show <fragment> --raw-html > crates/pidge/tests/fixtures/raw/<name>.html
    ```
-   `tests/fixtures/raw/` is gitignored — these files contain real user data and must never be committed.
+   `tests/fixtures/raw/` is gitignored: these files contain real user data and must never be committed.
 
 2. **Anonymize it.** Produce `crates/pidge/tests/fixtures/<name>.html` from the raw file:
-   - Preserve every HTML tag and attribute (`<table>`, `<tr>`, `<td>`, `<a>`, `<img>`, all `style=`, `class=`, etc.) — the renderer's behavior depends on structure.
+   - Preserve every HTML tag and attribute (`<table>`, `<tr>`, `<td>`, `<a>`, `<img>`, all `style=`, `class=`, etc.); the renderer's behavior depends on structure.
    - Replace every piece of human-readable prose with Lorem Ipsum of comparable length. Preserve trailing punctuation. For non-English originals, sprinkle in a few accented characters (`ö`, `å`, `é`, …) so the test still exercises non-ASCII paths.
    - Replace personal identifiers (recipient name, e-mail, bio) with `Jane Doe` / `jane.doe@example.com` etc.
    - Replace **every** URL with an `example.com` equivalent. Keep the URL shape (query string structure, length, multiple parameters) but turn each opaque token into a Lorem-style placeholder. Tracking pixels stay (the renderer's job is to suppress them).
@@ -148,11 +148,11 @@ The loop:
 
 5. **Re-run without the env var** to confirm the test is stable: `cargo test -p pidge render_html_`.
 
-Snapshots use the visible form `[link=URL]visible text[/link]` for OSC 8 escapes so diffs stay human-readable. The structural-invariant tests (`render_html_emits_no_raw_html_tags`, `render_html_collapses_blank_runs`, `render_html_strips_tracking_pixel_chars`, `render_html_wraps_anchors_with_osc8`, `render_html_suppresses_image_alt_text`) run against every fixture automatically — no extra wiring needed.
+Snapshots use the visible form `[link=URL]visible text[/link]` for OSC 8 escapes so diffs stay human-readable. The structural-invariant tests (`render_html_emits_no_raw_html_tags`, `render_html_collapses_blank_runs`, `render_html_strips_tracking_pixel_chars`, `render_html_wraps_anchors_with_osc8`, `render_html_suppresses_image_alt_text`) run against every fixture automatically, no extra wiring needed.
 
 ## Design Docs
 
 Specs and implementation plans live under `docs/superpowers/`:
 
-- `docs/superpowers/specs/` — design documents
-- `docs/superpowers/plans/` — implementation plans
+- `docs/superpowers/specs/`: design documents
+- `docs/superpowers/plans/`: implementation plans

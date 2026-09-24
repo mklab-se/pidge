@@ -1,7 +1,7 @@
-//! `pidge contacts refresh` — rebuild the local index by scanning recent
+//! `pidge contacts refresh`: rebuild the local index by scanning recent
 //! mail (inbox senders) and calendar (organizer + attendees).
 //!
-//! Coverage of recipient lists (to/cc/bcc) from inbox is deferred — pidge's
+//! Coverage of recipient lists (to/cc/bcc) from inbox is deferred; pidge's
 //! current `list_inbox` `$select` doesn't request them. See the design spec
 //! `docs/superpowers/specs/2026-05-21-contact-resolution-design.md`.
 

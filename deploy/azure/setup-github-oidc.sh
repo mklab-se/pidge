@@ -17,7 +17,7 @@
 #     resource group
 #   - a Role Based Access Control Administrator role assignment for that
 #     identity, scoped to the resource group and conditioned to only allow
-#     it to assign/remove AcrPull and Key Vault Secrets Officer — the two
+#     it to assign/remove AcrPull and Key Vault Secrets Officer, the two
 #     roles the Bicep template itself assigns during deploy. If an earlier
 #     run of this script left an unconditioned RBAC Administrator
 #     assignment in place, it is replaced with the conditioned one.

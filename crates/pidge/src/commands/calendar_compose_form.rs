@@ -15,6 +15,6 @@ use crate::cli::CalendarNewArgs;
 /// or `None` if they cancel. Today this is a no-op stub.
 pub fn run_form(_initial: CalendarNewArgs) -> Result<Option<CalendarNewArgs>> {
     anyhow::bail!(
-        "The calendar wizard isn't wired yet — pass --title, --start, and other flags directly."
+        "The calendar wizard isn't wired yet; pass --title, --start, and other flags directly."
     )
 }

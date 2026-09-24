@@ -1,7 +1,7 @@
 //! Persistent configuration file for pidge.
 //!
 //! Path: `${XDG_CONFIG_HOME:-~/.config}/pidge/config.yaml`.
-//! Contains only non-sensitive metadata — tokens live in the OS keychain.
+//! Contains only non-sensitive metadata; tokens live in the OS keychain.
 
 use std::path::{Path, PathBuf};
 

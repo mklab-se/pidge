@@ -1,4 +1,4 @@
-//! `pidge calendar move-time <hash> --start ... [--end ...]` — reschedule.
+//! `pidge calendar move-time <hash> --start ... [--end ...]`: reschedule.
 
 use anyhow::Result;
 use chrono::Utc;

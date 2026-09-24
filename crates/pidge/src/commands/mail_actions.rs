@@ -1,8 +1,8 @@
 //! Simple mail actions that operate on a single message by fragment:
 //! `mark-read`, `mark-unread`, `flag`, `unflag`, `archive`. Archive also
-//! has a bulk mode (`--from` / `--older-than`) — see `archive_bulk`.
+//! has a bulk mode (`--from` / `--older-than`); see `archive_bulk`.
 //!
-//! All five share the same shape — resolve the fragment, hit a Graph endpoint,
+//! All five share the same shape: resolve the fragment, hit a Graph endpoint,
 //! print a one-line confirmation. Stale 404s purge the cache entry so a future
 //! list refresh picks up the new server state.
 
@@ -81,7 +81,7 @@ pub async fn archive(fragment: String) -> Result<()> {
 
 /// Dispatch for `pidge mail archive`: single (fragment) or bulk (`--from` /
 /// `--older-than`). Mirrors `mail delete` so the two destructive surfaces
-/// share their safety model — bulk always needs `-y` and one filter.
+/// share their safety model: bulk always needs `-y` and one filter.
 pub async fn archive_dispatch(
     fragment: Option<String>,
     from: Vec<String>,
@@ -118,7 +118,7 @@ async fn archive_bulk(
 
     if !yes {
         return Err(anyhow!(
-            "Bulk archive requires explicit `-y` confirmation — there is no \
+            "Bulk archive requires explicit `-y` confirmation; there is no \
              interactive prompt. Re-run with `-y` if you really mean it."
         ));
     }
@@ -210,7 +210,7 @@ pub(crate) fn describe_filter(
 
 /// Date-only bulk: walk the Inbox newest-first and stop once we cross
 /// the cutoff, moving matched messages to `destination`. Mirrors
-/// `delete_bulk_for_account` — see that function's comments for the
+/// `delete_bulk_for_account`; see that function's comments for the
 /// rationale on PAGE_SIZE / MAX_PAGES / sort-and-stop. Shared by
 /// `mail archive` (destination `"archive"`) and `mail move`.
 #[allow(clippy::too_many_arguments)]
@@ -247,7 +247,7 @@ pub(crate) async fn move_bulk_inbox_for_account(
         let page_len = result.messages.len();
         skip += page_len - matched_now;
 
-        // Sorted desc by received_at — once the oldest on the page is
+        // Sorted desc by received_at: once the oldest on the page is
         // already newer than the cutoff, nothing further back can match.
         if let Some(c) = cutoff {
             let oldest = result
@@ -300,7 +300,7 @@ pub(crate) async fn move_bulk_by_sender_for_account(
         let matches: Vec<&pidge_core::Message> = messages
             .iter()
             .filter(|m| {
-                // Graph $search is fuzzy — re-check exact sender match
+                // Graph $search is fuzzy; re-check exact sender match
                 // before moving anything. Also apply the date cutoff if set.
                 m.from.address.to_ascii_lowercase() == *sender
                     && cutoff.is_none_or(|c| m.received_at < c)
@@ -320,7 +320,7 @@ pub(crate) async fn move_bulk_by_sender_for_account(
 ///
 /// Concurrency is capped at `MAX_INFLIGHT` because Graph's per-mailbox
 /// move endpoint trips an `ApplicationThrottled` (HTTP 429) on aggressive
-/// parallelism — we saw it as low as ~8 inflight moves. On 429 we retry
+/// parallelism; we saw it as low as ~8 inflight moves. On 429 we retry
 /// with exponential backoff up to `MAX_RETRIES` times.
 pub(crate) async fn move_many(
     graph: &GraphClient,

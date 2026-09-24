@@ -1,4 +1,4 @@
-//! `pidge mail show <fragment>` — display a single message with full body.
+//! `pidge mail show <fragment>`: display a single message with full body.
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Local, Utc};
@@ -229,7 +229,7 @@ async fn render_inline_images_block(
                 }
             }
             Err(e) => {
-                eprintln!("  [image: {} — fetch failed: {e}]", att.name);
+                eprintln!("  [image: {} (fetch failed: {e})]", att.name);
             }
         }
     }
@@ -461,7 +461,7 @@ mod tests {
     // To accept a new rendered output as the snapshot, run:
     //     UPDATE_SNAPSHOTS=1 cargo test -p pidge render_html_
     //
-    // — make sure to review the resulting diff before committing.
+    // Make sure to review the resulting diff before committing.
 
     const LINKEDIN_HTML: &str = include_str!("../../tests/fixtures/linkedin_jobs_digest.html");
     const SPEEDLEDGER_HTML: &str = include_str!("../../tests/fixtures/speedledger_newsletter.html");
@@ -475,7 +475,7 @@ mod tests {
     /// crate version bumps.
     ///
     /// OSC 8 sequences are all-ASCII (`ESC ] 8 ; ; URL ESC \`); SGR sequences
-    /// are `ESC [ params m`. Both are byte-safe to scan around — multi-byte
+    /// are `ESC [ params m`. Both are byte-safe to scan around: multi-byte
     /// UTF-8 chars like `ö` are preserved unchanged in the non-escape gaps.
     fn osc8_to_visible(input: &str) -> String {
         const OPEN: &str = "\x1b]8;;";
@@ -523,7 +523,7 @@ mod tests {
                 EscKind::Csi => {
                     // ESC [ digits-and-semicolons m → drop entirely. If the
                     // pattern doesn't terminate with 'm' (some other CSI),
-                    // skip just the ESC [ and keep walking — we don't emit
+                    // skip just the ESC [ and keep walking; we don't emit
                     // any of those today, so any unknown CSI is a bug worth
                     // showing in the snapshot.
                     let after = &rest[pos + CSI.len()..];
@@ -533,7 +533,7 @@ mod tests {
                             rest = &after[e + 1..];
                         }
                         _ => {
-                            // Unknown CSI — fall through, keep `\x1b[` visible
+                            // Unknown CSI: fall through, keep `\x1b[` visible
                             // so the snapshot fails loudly.
                             out.push_str(CSI);
                             rest = after;
@@ -577,7 +577,7 @@ mod tests {
 
         // Build a compact line-by-line diff (cap output to keep panic readable).
         let mut diff = String::new();
-        diff.push_str("snapshot mismatch — first differing lines:\n");
+        diff.push_str("snapshot mismatch, first differing lines:\n");
         let actual_lines: Vec<&str> = actual.lines().collect();
         let expected_lines: Vec<&str> = expected.lines().collect();
         let mut shown = 0;
@@ -687,7 +687,7 @@ mod tests {
         // We add ANSI underline + cyan so the user sees something is clickable
         // without hovering.
         //
-        // Force colors on for this test — the production code path checks
+        // Force colors on for this test; the production code path checks
         // SHOULD_COLORIZE (TTY detection / NO_COLOR / --no-color), which would
         // suppress them under `cargo test`.
         colored::control::set_override(true);
@@ -703,11 +703,11 @@ mod tests {
             .find(osc8_open)
             .expect("expected an OSC 8 sequence in the output");
         let after_open = &rendered[open_idx + osc8_open.len()..];
-        let url_end = after_open.find(st).expect("malformed OSC 8 — no ST");
+        let url_end = after_open.find(st).expect("malformed OSC 8: no ST");
         let body = &after_open[url_end + st.len()..];
         let body_end = body
             .find(osc8_close)
-            .expect("malformed OSC 8 — no closing sequence");
+            .expect("malformed OSC 8: no closing sequence");
         let visible_span = &body[..body_end];
 
         assert!(

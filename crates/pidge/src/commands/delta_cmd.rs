@@ -1,7 +1,7 @@
-//! `pidge mail delta` / `pidge calendar delta` — change feeds for agents.
+//! `pidge mail delta` / `pidge calendar delta`: change feeds for agents.
 //!
 //! First call (no cursor) establishes state and returns a cursor; later calls
-//! return only what changed plus a fresh cursor. Output is always JSON —
+//! return only what changed plus a fresh cursor. Output is always JSON;
 //! these commands exist for agents.
 
 use anyhow::{Result, anyhow};

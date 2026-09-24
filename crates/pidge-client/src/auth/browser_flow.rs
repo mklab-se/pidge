@@ -5,8 +5,8 @@
 //! Device-code flow works perfectly for work/school M365 accounts, but personal
 //! Microsoft accounts (live.com / outlook.com / hotmail.com) consistently hit
 //! `invalid_request: response_type missing` errors deep inside Microsoft's MSA
-//! pipeline. After significant debugging — and trying multiple redirect-URI
-//! shapes (nativeclient, http://localhost, urn:ietf:wg:oauth:2.0:oob) — the
+//! pipeline. After significant debugging, and trying multiple redirect-URI
+//! shapes (nativeclient, http://localhost, urn:ietf:wg:oauth:2.0:oob), the
 //! conclusion was that personal MSA's device-code support is fragile in ways
 //! that can't be papered over via app-registration tweaks.
 //!
@@ -17,7 +17,7 @@
 //!
 //! Flow:
 //!
-//! 1. Bind a `TcpListener` on `127.0.0.1:0` — OS picks a free port.
+//! 1. Bind a `TcpListener` on `127.0.0.1:0`; the OS picks a free port.
 //! 2. Generate a 64-char random `code_verifier`, derive `code_challenge =
 //!    base64url(SHA256(code_verifier))`, and a random `state` for CSRF.
 //! 3. Open the user's browser to
@@ -62,7 +62,7 @@ pub struct AuthSuccess {
 /// Run the full browser flow to completion. Returns the access+refresh
 /// tokens and (optionally) the id_token for tenant extraction.
 ///
-/// `on_open` is called once we know the authorize URL — the caller is
+/// `on_open` is called once we know the authorize URL; the caller is
 /// expected to print it to the user and best-effort spawn their browser.
 pub async fn run<F: FnOnce(&str)>(
     http: &reqwest::Client,
@@ -99,7 +99,7 @@ pub async fn run<F: FnOnce(&str)>(
     if returned_state != state {
         return Err(ClientError::Graph {
             status: 400,
-            message: "OAuth state mismatch — possible CSRF or stale request".to_string(),
+            message: "OAuth state mismatch: possible CSRF or stale request".to_string(),
         });
     }
 
@@ -189,7 +189,7 @@ pub(crate) fn build_authorize_url_with_hint(
             .append_pair("code_challenge", challenge)
             .append_pair("code_challenge_method", "S256")
             // `prompt=select_account` forces Microsoft to show the account picker
-            // even if the user is already signed in to *some* account — this is
+            // even if the user is already signed in to *some* account. This is
             // what stops "browser is already signed in to my M365 account so
             // pidge auto-grabs that one when I wanted my live.com account".
             .append_pair("prompt", "select_account");
@@ -209,15 +209,15 @@ pub(crate) struct CallbackParams {
 /// query parameters, write a success/error response, close. Single-shot.
 ///
 /// `timeout` bounds how long we'll wait for the browser to hit the callback,
-/// covering both the initial connection *and* the request read that follows
-/// — a client that opens the socket and never sends a request line still
+/// covering both the initial connection *and* the request read that follows,
+/// so a client that opens the socket and never sends a request line still
 /// hits the deadline rather than hanging forever. The Microsoft flow uses 5
 /// minutes (matching Microsoft's own OAuth code TTL); the MCP sign-in flow
 /// (see `crate::mcp::oauth`) uses a longer window since it's a separate,
 /// often manually-triggered, sign-in step.
 ///
 /// `label` identifies who this callback is for (e.g. `"Microsoft sign-in"`
-/// or `"MCP sign-in"`) — it prefixes the error message when the remote party
+/// or `"MCP sign-in"`); it prefixes the error message when the remote party
 /// reports `error`/`error_description`, so an MCP-server error isn't
 /// misattributed to Microsoft.
 /// A timeout for the user to read: whole minutes as "5 min", else seconds.
@@ -294,7 +294,7 @@ pub(crate) async fn wait_for_callback(
             .ok();
         return Err(ClientError::Graph {
             status: 400,
-            message: format!("{label}: {e} — {detail}"),
+            message: format!("{label}: {e} ({detail})"),
         });
     }
 

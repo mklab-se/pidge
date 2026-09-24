@@ -1,10 +1,10 @@
-//! File-based fallback for OAuth tokens — an opt-in alternative to the OS keychain.
+//! File-based fallback for OAuth tokens, an opt-in alternative to the OS keychain.
 //!
 //! Tokens are written as JSON at `${XDG_CONFIG_HOME:-~/.config}/pidge/tokens/<email>.json`
 //! (the same parent directory as `config.yaml`). On Unix the file is created with mode 0600
 //! so only the owning user can read or write it; on Windows we rely on the default ACL.
 //!
-//! This backend is less secure than [`crate::auth::store::KeychainStore`] — refresh tokens
+//! This backend is less secure than [`crate::auth::store::KeychainStore`]: refresh tokens
 //! sit in plaintext on disk. It exists so headless or repeated-build scenarios (where the
 //! OS keychain prompts for approval on every binary hash change) stay usable. Choose this
 //! deliberately via `pidge auth login --store=file`.
@@ -82,7 +82,7 @@ fn safe_filename(email: &str) -> String {
 }
 
 /// Write `contents` to `path`, creating it if necessary, with mode 0600 on
-/// Unix (a no-op permissions-wise on other platforms — we rely on the
+/// Unix (a no-op permissions-wise on other platforms; we rely on the
 /// default ACL there). Shared by [`FileStore`] and `crate::mcp::store`.
 #[cfg(unix)]
 pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -97,8 +97,8 @@ pub(crate) fn write_private(path: &Path, contents: &str) -> std::io::Result<()> 
         .open(path)?;
     // `.mode(0o600)` only takes effect when the file is newly created (per
     // `open(2)`'s handling of the mode argument). Tighten permissions
-    // explicitly so a pre-existing file with looser permissions — left over
-    // from before this hardening, or created some other way — gets locked
+    // explicitly so a pre-existing file with looser permissions (left over
+    // from before this hardening, or created some other way) gets locked
     // down too, not just newly-created ones.
     f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     f.write_all(contents.as_bytes())?;

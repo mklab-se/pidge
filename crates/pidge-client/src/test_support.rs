@@ -4,7 +4,7 @@
 //! `dirs::config_dir()` reads `HOME`/`XDG_CONFIG_HOME`, which are global to
 //! the whole process. Two independent test modules each overriding those
 //! vars behind their own lock can still race across threads within one test
-//! binary — one test's `HOME` swap or restore can land mid-flight in
+//! binary: one test's `HOME` swap or restore can land mid-flight in
 //! another. A thread-local override avoids the problem outright: it is
 //! visible only to the thread that set it, so parallel `#[test]` functions
 //! on different threads never interfere, and no lock is required at all.

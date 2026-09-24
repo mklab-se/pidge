@@ -1,4 +1,4 @@
-//! `pidge trust ...` — manage the trusted-senders list.
+//! `pidge trust ...`: manage the trusted-senders list.
 
 use anyhow::Result;
 use colored::Colorize;

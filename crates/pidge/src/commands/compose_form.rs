@@ -1,4 +1,4 @@
-//! Full-screen TUI compose form — used by `mail new` and `drafts edit`
+//! Full-screen TUI compose form, used by `mail new` and `drafts edit`
 //! (later: `mail reply`, `mail reply-all`, `mail forward`).
 //!
 //! Replaces the inquire wizard's field-by-field prompt sequence with a single
@@ -29,7 +29,7 @@
 //! - `Ctrl-S`: validate and send (`Outcome::Send`)
 //! - `Ctrl-D`: validate and save as draft (`Outcome::Draft`)
 //! - `Ctrl-A`: enter add-attachment mode
-//! - `Esc`: ask "discard?" — if confirmed, returns `Outcome::Cancel`
+//! - `Esc`: ask "discard?"; if confirmed, returns `Outcome::Cancel`
 //!
 //! Field-specific:
 //! - From: `Left` / `Right` or `Space` cycle signed-in accounts
@@ -56,7 +56,7 @@ use ratatui_textarea::{Input, Key, TextArea};
 
 // --- public types ----------------------------------------------------------
 
-/// What kind of compose the user is doing — drives the form's title and a
+/// What kind of compose the user is doing. Drives the form's title and a
 /// few sensible defaults (e.g. body-optional for replies, since Graph
 /// supplies the auto-quoted text).
 #[derive(Debug, Clone)]
@@ -94,7 +94,7 @@ pub enum Outcome {
 
 /// Run the TUI form to completion.
 ///
-/// `accounts` is the list of e-mail addresses the user is signed in to —
+/// `accounts` is the list of e-mail addresses the user is signed in to,
 /// used to populate the From dropdown. `initial` pre-fills every field
 /// (use `Compose::default()` for a blank new e-mail).
 pub fn run(initial: Compose, accounts: Vec<String>, context: Context) -> Result<Outcome> {
@@ -132,7 +132,7 @@ enum Mode {
     Edit,
     AddingAttach,
     ConfirmingCancel,
-    /// Soft-warning overlay before sending — empty subject and/or body
+    /// Soft-warning overlay before sending: empty subject and/or body
     /// triggers this rather than hard-failing. Y/Enter sends anyway;
     /// N/Esc goes back to Edit with focus on `focus_on_cancel`.
     ConfirmingSend {
@@ -184,7 +184,7 @@ impl<'a> State<'a> {
             context,
         };
         // If we have no recipients yet (new send), keep focus on To so the
-        // user can start typing immediately. Otherwise start in the body —
+        // user can start typing immediately. Otherwise start in the body;
         // the recipients are already filled.
         if !s.to.is_empty() && !s.subject.is_empty() {
             s.focus = Field::Body;
@@ -193,7 +193,7 @@ impl<'a> State<'a> {
     }
 
     /// True when every required field passes validation. On failure returns
-    /// the field the user needs to fix and a user-facing message — the
+    /// the field the user needs to fix and a user-facing message; the
     /// caller moves focus to that field and shows the message in a
     /// dismiss-on-any-key modal so the user stays inside the form.
     fn validate(&self) -> Result<Compose, (Field, String)> {
@@ -302,7 +302,7 @@ fn first_line(t: &TextArea) -> String {
 
 /// Split a "a@b, c@d; e@f" string into individual addresses, validating each
 /// loosely (must contain `@`). Empty input returns an empty Vec without
-/// erroring — the caller decides whether that's acceptable.
+/// erroring; the caller decides whether that's acceptable.
 pub fn parse_addresses(raw: &str) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for s in raw.split([',', ';']) {
@@ -373,7 +373,7 @@ fn handle_event(state: &mut State, ev: Event) -> Result<Option<Outcome>> {
             ));
         }
         (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-            // Drafts are explicitly for incomplete work — no nags.
+            // Drafts are explicitly for incomplete work; no nags.
             return Ok(try_submit(
                 state,
                 Outcome::Draft,
@@ -707,9 +707,9 @@ fn draw_attach_row(frame: &mut Frame, area: Rect, state: &State) {
 
     if state.attachments.is_empty() {
         let hint = if focused {
-            "(none — press 'a' or Enter to add)"
+            "(none; press 'a' or Enter to add)"
         } else {
-            "(none — Ctrl-A to add)"
+            "(none; Ctrl-A to add)"
         };
         spans.push(Span::styled(
             hint,

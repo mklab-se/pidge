@@ -1,4 +1,4 @@
-//! `pidge account list` — display signed-in accounts with default markers
+//! `pidge account list`: display signed-in accounts with default markers
 //! and storage-backend info (replaces the old `auth status` command).
 
 use anyhow::Result;

@@ -8,7 +8,7 @@
 //! auth-code + PKCE flow (reusing the local-callback-server plumbing in
 //! [`crate::auth::browser_flow`]). [`store::McpTokenStore`] persists the
 //! resulting [`McpTokens`] the same way `pidge-client`'s Microsoft tokens are
-//! stored — OS keychain by default, an opt-in plaintext file otherwise.
+//! stored: OS keychain by default, an opt-in plaintext file otherwise.
 //! [`rpc::McpRpc`] is a minimal JSON-RPC client for the MCP `/mcp` endpoint
 //! itself (Streamable HTTP transport: JSON or SSE bodies, session-id
 //! stickiness).
@@ -33,7 +33,7 @@ use crate::error::ClientError;
 /// A signed-in session against one pidge MCP server.
 ///
 /// `server` is the canonical MCP resource URL (`Discovery::resource` at the
-/// time of sign-in/refresh, e.g. `https://mcp.example.com/mcp`) — it doubles
+/// time of sign-in/refresh, e.g. `https://mcp.example.com/mcp`); it doubles
 /// as the `resource` parameter on every authorize/token/refresh call and as
 /// the key [`McpTokenStore`] persists under. It's the value to pass back in
 /// as `mcp_url` to [`oauth::valid_access_token`] and as the URL
@@ -64,7 +64,7 @@ impl McpTokens {
 }
 
 /// Hand-written so `access_token`/`refresh_token` are never printed by an
-/// incidental `{:?}` — this struct is `pub` and handled by the CLI, so a
+/// incidental `{:?}`; this struct is `pub` and handled by the CLI, so a
 /// stray debug print (a log line, a test failure message, …) shouldn't leak
 /// bearer credentials.
 impl std::fmt::Debug for McpTokens {
@@ -81,7 +81,7 @@ impl std::fmt::Debug for McpTokens {
 
 /// Normalize a server URL down to its origin (`scheme://host[:port]`),
 /// dropping any path. Used both as the keychain account name and as the
-/// basis for the on-disk file name — anything that identifies "which MCP
+/// basis for the on-disk file name: anything that identifies "which MCP
 /// server" without caring which specific endpoint path was passed in. `pub`
 /// so callers (e.g. `pidge mcp logout`) can compare a user-typed url against
 /// [`store::StoredServer::server`], which is always stored in this form.

@@ -1,4 +1,4 @@
-# Remote MCP — Tools and Accounts Implementation Plan
+# Remote MCP: Tools and Accounts Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -32,41 +32,41 @@
 ## File structure
 
 **`crates/pidge-core/src/`** (pure, no I/O)
-- `render.rs` — *new*: `render_html(html, width, LinkStyle) -> String`, `collapse_blank_runs`, `strip_quoted_history(text) -> String`. Moved from the CLI's `mail_show.rs`.
-- `flags.rs` — *new*: `ItemFlags`, `compute_flags(&Message, &UserContext) -> ItemFlags`.
-- `contacts.rs` — *modify*: add `ResolveOutcome`, `resolve_one`, `contact_matches` (moved from CLI `name_resolve.rs`).
-- `timerange.rs` — *new*: `Range` enum, `parse_range(&str, from/to, tz, now) -> Result<(DateTime<Utc>, DateTime<Utc>)>`.
-- `availability.rs` — *new*: `free_slots(busy, range, duration, working_hours, tz) -> Vec<Slot>`.
-- `message.rs` — *modify*: `Message` gains `to: Vec<MessageFrom>`, `cc: Vec<MessageFrom>` (serde default).
-- `lib.rs` — export the new modules.
+- `render.rs`: *new*: `render_html(html, width, LinkStyle) -> String`, `collapse_blank_runs`, `strip_quoted_history(text) -> String`. Moved from the CLI's `mail_show.rs`.
+- `flags.rs`: *new*: `ItemFlags`, `compute_flags(&Message, &UserContext) -> ItemFlags`.
+- `contacts.rs`: *modify*: add `ResolveOutcome`, `resolve_one`, `contact_matches` (moved from CLI `name_resolve.rs`).
+- `timerange.rs`: *new*: `Range` enum, `parse_range(&str, from/to, tz, now) -> Result<(DateTime<Utc>, DateTime<Utc>)>`.
+- `availability.rs`: *new*: `free_slots(busy, range, duration, working_hours, tz) -> Vec<Slot>`.
+- `message.rs`: *modify*: `Message` gains `to: Vec<MessageFrom>`, `cc: Vec<MessageFrom>` (serde default).
+- `lib.rs`: export the new modules.
 
 **`crates/pidge/src/commands/`**
-- `mail_show.rs` — *modify*: `render_html_body` becomes a thin wrapper over `pidge_core::render::render_html(.., LinkStyle::Osc8)`; snapshot tests unchanged.
-- `name_resolve.rs` — *modify*: re-export from `pidge_core::contacts`; its tests move to core.
+- `mail_show.rs`: *modify*: `render_html_body` becomes a thin wrapper over `pidge_core::render::render_html(.., LinkStyle::Osc8)`; snapshot tests unchanged.
+- `name_resolve.rs`: *modify*: re-export from `pidge_core::contacts`; its tests move to core.
 
 **`crates/pidge-client/src/`**
-- `graph/mail.rs` — *modify*: list `$select` adds `toRecipients,ccRecipients`; `to_message` maps them; `unsubscribe_one_click(url)`.
-- `graph/people.rs` — *new*: `list_people(account, top) -> Vec<Person>` (GET `/me/people`).
-- `graph/events.rs` — *modify*: `rsvp_event` gains `proposed: Option<ProposedTime>`.
-- `graph/mod.rs` — *modify*: wire the above.
+- `graph/mail.rs`: *modify*: list `$select` adds `toRecipients,ccRecipients`; `to_message` maps them; `unsubscribe_one_click(url)`.
+- `graph/people.rs`: *new*: `list_people(account, top) -> Vec<Person>` (GET `/me/people`).
+- `graph/events.rs`: *modify*: `rsvp_event` gains `proposed: Option<ProposedTime>`.
+- `graph/mod.rs`: *modify*: wire the above.
 
 **`crates/pidge-mcp/src/`**
-- `users.rs` — *new*: `UserRecord`, `MailboxRecord`, `UserStore` (load/save via `SecretStore`, ownership checks).
-- `mailbox.rs` — *modify*: token backend reads/writes `MailboxRecord` (owner + tokens) instead of a bare `TokenSet`.
-- `oauth/mod.rs` — *modify*: sign-in callback creates/updates the user record; new `/connect/callback` path shares the exchange; `PendingAuthorization` gains a `kind`.
-- `cache.rs` — *new*: `ReadCache` (per-user LRU with TTL, `invalidate_user`).
-- `context.rs` — *new*: `ToolContext { user, record, accounts, tz }` built per call; `resolve_account`, `account_for_message`.
-- `render.rs` — *new*: shared text formatting for items/events, `untrusted()`, `cap()`.
-- `tools/mod.rs` — *rewrite*: `PidgeMcp` with the tool router assembled from the families below.
-- `tools/mail_read.rs` — `mail_overview`, `mail_search`, `mail_read`, `mail_folders`.
-- `tools/mail_write.rs` — `mail_draft`, `mail_send`, send-from rules, contact cache.
-- `tools/mail_act.rs` — `mail_act`.
-- `tools/calendar.rs` — `calendar_agenda`, `calendar_availability`, `calendar_respond`, `calendar_event`.
-- `tools/accounts.rs` — `accounts_list`, `accounts_connect`, `accounts_update`.
-- `tools/attachments.rs` — `mail_attachment` + `/dl/{token}` route + markitdown runner.
-- `prompts.rs` — *new*: three MCP prompts.
-- `mcp.rs` — *delete* (replaced by `tools/`).
-- `deploy/azure/Dockerfile` — *modify*: python-slim base with markitdown.
+- `users.rs`: *new*: `UserRecord`, `MailboxRecord`, `UserStore` (load/save via `SecretStore`, ownership checks).
+- `mailbox.rs`: *modify*: token backend reads/writes `MailboxRecord` (owner + tokens) instead of a bare `TokenSet`.
+- `oauth/mod.rs`: *modify*: sign-in callback creates/updates the user record; new `/connect/callback` path shares the exchange; `PendingAuthorization` gains a `kind`.
+- `cache.rs`: *new*: `ReadCache` (per-user LRU with TTL, `invalidate_user`).
+- `context.rs`: *new*: `ToolContext { user, record, accounts, tz }` built per call; `resolve_account`, `account_for_message`.
+- `render.rs`: *new*: shared text formatting for items/events, `untrusted()`, `cap()`.
+- `tools/mod.rs`: *rewrite*: `PidgeMcp` with the tool router assembled from the families below.
+- `tools/mail_read.rs`: `mail_overview`, `mail_search`, `mail_read`, `mail_folders`.
+- `tools/mail_write.rs`: `mail_draft`, `mail_send`, send-from rules, contact cache.
+- `tools/mail_act.rs`: `mail_act`.
+- `tools/calendar.rs`: `calendar_agenda`, `calendar_availability`, `calendar_respond`, `calendar_event`.
+- `tools/accounts.rs`: `accounts_list`, `accounts_connect`, `accounts_update`.
+- `tools/attachments.rs`: `mail_attachment` + `/dl/{token}` route + markitdown runner.
+- `prompts.rs`: *new*: three MCP prompts.
+- `mcp.rs`: *delete* (replaced by `tools/`).
+- `deploy/azure/Dockerfile`: *modify*: python-slim base with markitdown.
 
 ---
 
@@ -150,7 +150,7 @@ mod tests {
 
 - [ ] **Step 3: Run to verify failure**
 
-Run: `cargo test -p pidge-core render` — Expected: compile error, `render` module missing.
+Run: `cargo test -p pidge-core render`. Expected: compile error, `render` module missing.
 
 - [ ] **Step 4: Implement `render.rs`**
 
@@ -164,7 +164,7 @@ use html2text::render::{RichAnnotation, TaggedLineElement};
 pub enum LinkStyle {
     /// OSC 8 hyperlink escapes around the link text (terminals).
     Osc8,
-    /// `text (url)` — for plain-text consumers such as an AI harness.
+    /// `text (url)`: for plain-text consumers such as an AI harness.
     Inline,
     /// Link text only.
     Plain,
@@ -263,7 +263,7 @@ pub fn strip_quoted_history(text: &str) -> String {
 }
 ```
 
-Wait: the inline test expects `See the page (https://x.test/a).` — html2text may emit the link text as its own element so the output is `See the page (https://x.test/a).` only if the trailing `.` is a separate element; it is (annotations differ). Keep the test as written; if html2text splits differently, adjust the expected string to what it actually produces **after reading the output**, not the other way round.
+Wait: the inline test expects `See the page (https://x.test/a).`; html2text may emit the link text as its own element so the output is `See the page (https://x.test/a).` only if the trailing `.` is a separate element; it is (annotations differ). Keep the test as written; if html2text splits differently, adjust the expected string to what it actually produces **after reading the output**, not the other way round.
 
 - [ ] **Step 5: Wire `pidge-core` exports and the CLI wrapper**
 
@@ -307,7 +307,7 @@ Remove the now-unused `use html2text::...` import inside the old function.
 
 - [ ] **Step 6: Run all tests**
 
-Run: `cargo test -p pidge-core render && cargo test -p pidge render_html_` — Expected: all pass, snapshots unchanged. If a snapshot differs, the OSC8 path differs from before: diff the output against the fixture and fix `render_html`, do not regenerate snapshots.
+Run: `cargo test -p pidge-core render && cargo test -p pidge render_html_`. Expected: all pass, snapshots unchanged. If a snapshot differs, the OSC8 path differs from before: diff the output against the fixture and fix `render_html`, do not regenerate snapshots.
 
 - [ ] **Step 7: Clippy, fmt, commit**
 
@@ -375,7 +375,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cargo test -p pidge-core flags` — Expected: compile error (`to`/`cc` fields, module missing).
+- [ ] **Step 2: Run to verify failure**: `cargo test -p pidge-core flags`. Expected: compile error (`to`/`cc` fields, module missing).
 
 - [ ] **Step 3: Add recipients to `Message`**
 
@@ -452,9 +452,9 @@ pub fn compute_flags(m: &Message, ctx: &UserContext) -> ItemFlags {
 ```
 Add `pub mod flags;` to `lib.rs`.
 
-- [ ] **Step 6: Run** — `cargo test --workspace` — Expected: pass (CLI snapshot/JSON tests that serialise `Message` may need `to`/`cc` in expected JSON; update those expectations only where the new fields appear).
+- [ ] **Step 6: Run**: `cargo test --workspace`. Expected: pass (CLI snapshot/JSON tests that serialise `Message` may need `to`/`cc` in expected JSON; update those expectations only where the new fields appear).
 
-- [ ] **Step 7: Commit** — `git commit -am "feat(core): recipients on list rows and item flags"`
+- [ ] **Step 7: Commit**: `git commit -am "feat(core): recipients on list rows and item flags"`
 
 ---
 
@@ -465,7 +465,7 @@ Add `pub mod flags;` to `lib.rs`.
 
 **Interfaces:**
 - Produces: `pidge_core::contacts::{ResolveOutcome, resolve_one, contact_matches}` with the exact semantics of the CLI's `name_resolve::resolve_one` (`@` prefix = lookup, otherwise literal).
-- Produces: `ContactsCache::resolve_any(&self, token) -> ResolveOutcome` — like `resolve_one` but treats a token *without* `@` and without a `@domain` part as a name lookup too (the MCP passes names without the `@` convention). Rule: if the token contains `@` followed by a `.`, it is a literal address; otherwise look it up.
+- Produces: `ContactsCache::resolve_any(&self, token) -> ResolveOutcome`: like `resolve_one` but treats a token *without* `@` and without a `@domain` part as a name lookup too (the MCP passes names without the `@` convention). Rule: if the token contains `@` followed by a `.`, it is a literal address; otherwise look it up.
 
 - [ ] **Step 1: Move the code**
 
@@ -504,7 +504,7 @@ impl ContactsCache {
 }
 ```
 
-- [ ] **Step 4: Run** — `cargo test --workspace` — Expected: pass. **Step 5: Commit** — `git commit -am "refactor(core): contact resolution lives in pidge-core"`
+- [ ] **Step 4: Run**: `cargo test --workspace`. Expected: pass. **Step 5: Commit**: `git commit -am "refactor(core): contact resolution lives in pidge-core"`
 
 ---
 
@@ -517,7 +517,7 @@ impl ContactsCache {
 - Produces:
   - `pub enum Range { Today, Tomorrow, ThisWeek, NextWeek, Next, Days(u32), Absolute { from: DateTime<Utc>, to: DateTime<Utc> } }`
   - `pub fn parse_range(range: Option<&str>, from: Option<&str>, to: Option<&str>, tz: chrono_tz::Tz, now: DateTime<Utc>) -> Result<(DateTime<Utc>, DateTime<Utc>), String>`
-  - Rules: `today` = local midnight→next midnight; `tomorrow` likewise; `this_week` = Monday 00:00 of the current week → next Monday; `next_week` = following Monday → the one after; `next` = now → now + 14 days (callers take the first event); `Nd` (e.g. `3d`) = now − N days → now (for mail) — document that mail ranges are backward-looking and calendar ranges forward-looking, so `parse_range` takes a `direction: Direction { Past, Future }` argument; `from`/`to` ISO 8601 (date or datetime, naive values interpreted in `tz`).
+  - Rules: `today` = local midnight→next midnight; `tomorrow` likewise; `this_week` = Monday 00:00 of the current week → next Monday; `next_week` = following Monday → the one after; `next` = now → now + 14 days (callers take the first event); `Nd` (e.g. `3d`) = now − N days → now (for mail); document that mail ranges are backward-looking and calendar ranges forward-looking, so `parse_range` takes a `direction: Direction { Past, Future }` argument; `from`/`to` ISO 8601 (date or datetime, naive values interpreted in `tz`).
   - `pub enum Direction { Past, Future }`
 
 - [ ] **Step 1: Failing tests** (fixed `now` = 2026-09-23T10:00:00+02:00 Stockholm, a Wednesday)
@@ -562,7 +562,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run to verify failure** — `cargo test -p pidge-core timerange`.
+- [ ] **Step 2: Run to verify failure**: `cargo test -p pidge-core timerange`.
 
 - [ ] **Step 3: Implement**
 
@@ -618,7 +618,7 @@ pub use chrono::Weekday as _Weekday;
 ```
 Remove the last line if unused (clippy will say). `chrono-tz` is already a `pidge-core` dependency.
 
-- [ ] **Step 4: Run tests, clippy, commit** — `git commit -am "feat(core): time-range parsing in the user's timezone"`
+- [ ] **Step 4: Run tests, clippy, commit**: `git commit -am "feat(core): time-range parsing in the user's timezone"`
 
 ---
 
@@ -632,7 +632,7 @@ Remove the last line if unused (clippy will say). `chrono-tz` is already a `pidg
   - `pub struct Busy { pub start: DateTime<Utc>, pub end: DateTime<Utc> }`
   - `pub struct WorkingHours { pub start_hour: u32, pub end_hour: u32, pub weekdays: [bool; 7] }` (index 0 = Monday) with `Default` = 08–18, Mon–Fri
   - `pub struct Slot { pub start: DateTime<Utc>, pub end: DateTime<Utc> }`
-  - `pub fn free_slots(busy: &[Busy], range: (DateTime<Utc>, DateTime<Utc>), duration: Duration, hours: &WorkingHours, tz: Tz, max: usize) -> Vec<Slot>` — walks each local working day inside the range, subtracts merged busy intervals, keeps gaps ≥ duration, at most `max`.
+  - `pub fn free_slots(busy: &[Busy], range: (DateTime<Utc>, DateTime<Utc>), duration: Duration, hours: &WorkingHours, tz: Tz, max: usize) -> Vec<Slot>`: walks each local working day inside the range, subtracts merged busy intervals, keeps gaps ≥ duration, at most `max`.
 
 - [ ] **Step 1: Failing tests**
 
@@ -711,11 +711,11 @@ pub fn free_slots(busy: &[Busy], range: (DateTime<Utc>, DateTime<Utc>), duration
 }
 ```
 
-- [ ] **Step 4: Run, clippy, commit** — `git commit -am "feat(core): free-slot computation for availability"`
+- [ ] **Step 4: Run, clippy, commit**: `git commit -am "feat(core): free-slot computation for availability"`
 
 ---
 
-### Task 6: `pidge-client` additions — people, proposed-new-time RSVP, one-click unsubscribe
+### Task 6: `pidge-client` additions: people, proposed-new-time RSVP, one-click unsubscribe
 
 **Files:**
 - Create: `crates/pidge-client/src/graph/people.rs`
@@ -725,7 +725,7 @@ pub fn free_slots(busy: &[Busy], range: (DateTime<Utc>, DateTime<Utc>), duration
 **Interfaces:**
 - Produces: `GraphClient::list_people(&self, account: &str, top: usize) -> Result<Vec<Person>, ClientError>` with `pub struct Person { pub display_name: String, pub address: String }` (GET `/me/people?$top={top}&$select=displayName,scoredEmailAddresses`, take the first scored address).
 - Produces: `pub struct ProposedTime { pub start: DateTime<Utc>, pub end: DateTime<Utc>, pub tz: String }` and `GraphClient::rsvp_event(&self, account, event_id, kind, comment, send_response, proposed: Option<&ProposedTime>)`. The body gains `"proposedNewTime": {"start": {"dateTime": .., "timeZone": tz}, "end": {..}}` when `proposed` is `Some` (Graph accepts it on `tentativelyAccept` and `decline`).
-- Produces: `GraphClient::unsubscribe_one_click(&self, url: &str) -> Result<(), ClientError>` — POST with body `List-Unsubscribe=One-Click`, content type `application/x-www-form-urlencoded`, 10 s timeout, any 2xx = ok. (Move the logic from the CLI's `mail_unsubscribe.rs::one_click_post`; the CLI calls the client method.)
+- Produces: `GraphClient::unsubscribe_one_click(&self, url: &str) -> Result<(), ClientError>`: POST with body `List-Unsubscribe=One-Click`, content type `application/x-www-form-urlencoded`, 10 s timeout, any 2xx = ok. (Move the logic from the CLI's `mail_unsubscribe.rs::one_click_post`; the CLI calls the client method.)
 
 - [ ] **Step 1: Failing wiremock tests**
 
@@ -735,7 +735,7 @@ pub fn free_slots(busy: &[Busy], range: (DateTime<Utc>, DateTime<Utc>), duration
 
 - [ ] **Step 2: Run to verify failure**, **Step 3: Implement the three methods**, updating the one existing `rsvp_event` caller in `crates/pidge/src/commands/calendar_rsvp.rs` to pass `None`.
 
-- [ ] **Step 4: Run, clippy, commit** — `git commit -am "feat(client): people, proposed new time on RSVP, one-click unsubscribe"`
+- [ ] **Step 4: Run, clippy, commit**: `git commit -am "feat(client): people, proposed new time on RSVP, one-click unsubscribe"`
 
 ---
 
@@ -817,9 +817,9 @@ async fn ownership_is_enforced_and_legacy_secrets_are_adopted() {
 
 `SecretTokenBackend` now wraps a `UserStore`: `load` returns `rec.tokens`; `save` loads the record (to keep `owner`), replaces `tokens`, saves. If no record exists on `save` (first store during sign-in), the caller must have created it: change `AuthClient::store_tokens` usage in the OAuth callback (Task 8) to call `UserStore::save_mailbox` directly with the owner, and keep `TokenBackend::save` for refresh-rotation only (it errors with `SessionExpired` if the record is missing).
 
-- [ ] **Step 5: Wire into `AppState`** — add `pub users: UserStore` (constructed in `main.rs` from the same `secrets`). Run `cargo test -p pidge-mcp`; the existing flow tests still store a bare token via `store_tokens` — they will be updated in Task 8; if they fail now, mark the two affected tests `#[ignore]` with a `// re-enabled in Task 8` comment and re-enable there.
+- [ ] **Step 5: Wire into `AppState`**: add `pub users: UserStore` (constructed in `main.rs` from the same `secrets`). Run `cargo test -p pidge-mcp`; the existing flow tests still store a bare token via `store_tokens`: they will be updated in Task 8; if they fail now, mark the two affected tests `#[ignore]` with a `// re-enabled in Task 8` comment and re-enable there.
 
-- [ ] **Step 6: Commit** — `git commit -am "feat(mcp): per-user records and mailbox ownership"`
+- [ ] **Step 6: Commit**: `git commit -am "feat(mcp): per-user records and mailbox ownership"`
 
 ---
 
@@ -831,7 +831,7 @@ async fn ownership_is_enforced_and_legacy_secrets_are_adopted() {
 - Delete: `crates/pidge-mcp/src/mcp.rs` (its three tools are superseded; `whoami` becomes `accounts_list`)
 
 **Interfaces:**
-- `PendingAuthorization` gains `pub kind: PendingKind` where `pub enum PendingKind { SignIn, Connect { owner: String } }`. For `Connect`, the callback: exchanges the code, reads `/me`, `check_ownership(mailbox, owner)`, `save_mailbox`, appends to the owner's `UserRecord.mailboxes` (dedup), then renders a small success page (`pages::done("Mailbox connected. You can close this tab.")`) — no client redirect because no OAuth client is waiting.
+- `PendingAuthorization` gains `pub kind: PendingKind` where `pub enum PendingKind { SignIn, Connect { owner: String } }`. For `Connect`, the callback: exchanges the code, reads `/me`, `check_ownership(mailbox, owner)`, `save_mailbox`, appends to the owner's `UserRecord.mailboxes` (dedup), then renders a small success page (`pages::done("Mailbox connected. You can close this tab.")`); no client redirect because no OAuth client is waiting.
 - `GET /connect?state=<id>` is how a connect link starts: it looks up the pending entry (must be `Connect`) and redirects to Microsoft exactly like `/authorize` does. Links are minted by `accounts_connect` and expire with the pending TTL (10 min).
 - `context.rs`:
 ```rust
@@ -841,7 +841,7 @@ pub struct ToolContext {
     pub tz: chrono_tz::Tz,
 }
 impl ToolContext {
-    /// Build from the request; loads the user record (creating it for the sign-in mailbox if missing — covers spike-era users).
+    /// Build from the request; loads the user record (creating it for the sign-in mailbox if missing; covers spike-era users).
     pub async fn from_request(state: &SharedState, ctx: &RequestContext<RoleServer>) -> Result<Self, McpError>;
     /// Accounts to operate on: the named one (must be owned) or all.
     pub fn accounts(&self, account: Option<&str>) -> Result<Vec<String>, McpError>;
@@ -854,9 +854,9 @@ pub fn graph_error(e: ClientError) -> McpError;           // SessionExpired → 
 ```
 - `tools/mod.rs`: `pub struct PidgeMcp { state: SharedState, tool_router: ToolRouter<Self> }` with `#[tool_router(router = tool_router)]` blocks in each family file combined via `+` (rmcp supports `Self::mail_read_router() + Self::mail_write_router() + …`; see rmcp's `ToolRouter` `Add` impl). `ServerHandler::get_info` moves here with the instructions text from the spec's security rules.
 - `tools/accounts.rs` tools:
-  - `accounts_list` — renders: sign-in, default sender, timezone, each mailbox with health (`ok` if `load_mailbox` returns tokens and `needs_refresh()` is false or refresh succeeds; otherwise `needs reconnect`).
-  - `accounts_connect { email?: String }` — inserts a `Connect` pending entry (state = `random_id()`), returns `Connect {email or "the mailbox"} by opening: {base}/connect?state=…  (valid 10 minutes)`. Does not call Graph.
-  - `accounts_update { default_sender?: String, timezone?: String, disconnect?: String, trust?: String, untrust?: String }` — validates (`default_sender` must be owned, `timezone` must parse as `chrono_tz::Tz`, cannot disconnect the sign-in mailbox), saves, invalidates cache (Task 9 adds the call), returns the new `accounts_list` text.
+  - `accounts_list`: renders: sign-in, default sender, timezone, each mailbox with health (`ok` if `load_mailbox` returns tokens and `needs_refresh()` is false or refresh succeeds; otherwise `needs reconnect`).
+  - `accounts_connect { email?: String }`: inserts a `Connect` pending entry (state = `random_id()`), returns `Connect {email or "the mailbox"} by opening: {base}/connect?state=…  (valid 10 minutes)`. Does not call Graph.
+  - `accounts_update { default_sender?: String, timezone?: String, disconnect?: String, trust?: String, untrust?: String }`: validates (`default_sender` must be owned, `timezone` must parse as `chrono_tz::Tz`, cannot disconnect the sign-in mailbox), saves, invalidates cache (Task 9 adds the call), returns the new `accounts_list` text.
 
 - [ ] **Step 1: Failing flow tests** (extend `flow_tests.rs`)
 
@@ -894,26 +894,26 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
 
 - [ ] **Step 2: Run to verify failure**, **Step 3: Implement** the callback branch, `/connect`, `context.rs`, `tools/mod.rs` and `tools/accounts.rs`, delete `mcp.rs`, update `app.rs` to use `tools::PidgeMcp`.
 
-- [ ] **Step 4: Tool tests** (`tools/accounts.rs`, using a `ToolHarness` helper added to `tools/mod.rs` tests: builds `AppState` with wiremock Graph + file secrets + a saved `UserRecord`, and calls tool methods directly with a `RequestContext` whose extensions carry `http::request::Parts` with `AuthenticatedUser` — write `fn request_context(email: &str) -> RequestContext<RoleServer>` once and reuse it in every tool test):
+- [ ] **Step 4: Tool tests** (`tools/accounts.rs`, using a `ToolHarness` helper added to `tools/mod.rs` tests: builds `AppState` with wiremock Graph + file secrets + a saved `UserRecord`, and calls tool methods directly with a `RequestContext` whose extensions carry `http::request::Parts` with `AuthenticatedUser`; write `fn request_context(email: &str) -> RequestContext<RoleServer>` once and reuse it in every tool test):
   - `accounts_list` shows sign-in and default sender.
   - `accounts_update { timezone: "Mars/Olympus" }` errors; `{ default_sender: "notmine@x" }` errors; `{ default_sender: <second mailbox> }` saves.
   - `accounts_connect` returns a URL containing `/connect?state=` and inserts a `Connect` pending entry with the right owner.
 
-- [ ] **Step 5: Run, clippy, commit** — `git commit -am "feat(mcp): user records on sign-in, connect flow, accounts tools"`
+- [ ] **Step 5: Run, clippy, commit**: `git commit -am "feat(mcp): user records on sign-in, connect flow, accounts tools"`
 
 ---
 
 ### Task 9: Read cache
 
 **Files:**
-- Create: `crates/pidge-mcp/src/cache.rs`; modify `state.rs`, `Cargo.toml` (add `lru = "0.16"` to workspace and crate — check the version in `Cargo.lock` first and use that)
+- Create: `crates/pidge-mcp/src/cache.rs`; modify `state.rs`, `Cargo.toml` (add `lru = "0.16"` to workspace and crate; check the version in `Cargo.lock` first and use that)
 
 **Interfaces:**
 ```rust
 pub struct ReadCache { inner: Mutex<HashMap<String, lru::LruCache<String, (Instant, String)>>>, ttl: Duration, per_user: usize }
 impl ReadCache {
     pub fn new(ttl: Duration, per_user: usize) -> Self;           // 60 s, 256
-    pub fn key(tool: &str, args: &impl Serialize) -> String;      // tool + "\n" + serde_json canonical (sorted keys via serde_json::to_value then to_string — `preserve_order` is on; sort with a BTreeMap conversion)
+    pub fn key(tool: &str, args: &impl Serialize) -> String;      // tool + "\n" + serde_json canonical (sorted keys via serde_json::to_value then to_string; `preserve_order` is on; sort with a BTreeMap conversion)
     pub fn get(&self, user: &str, key: &str) -> Option<String>;   // None if expired
     pub fn put(&self, user: &str, key: String, value: String);
     pub fn invalidate_user(&self, user: &str);
@@ -955,7 +955,7 @@ fn key_is_order_independent() {
 
 - [ ] **Step 2: Run to verify failure**, **Step 3: Implement** (canonicalise by converting `serde_json::Value` objects into `BTreeMap` recursively before `to_string`).
 
-- [ ] **Step 4: Call `invalidate_user` from `accounts_update`** (the only write that exists so far); **run, clippy, commit** — `git commit -am "feat(mcp): per-user read cache"`
+- [ ] **Step 4: Call `invalidate_user` from `accounts_update`** (the only write that exists so far); **run, clippy, commit**: `git commit -am "feat(mcp): per-user read cache"`
 
 ---
 
@@ -968,7 +968,7 @@ fn key_is_order_independent() {
 **Interfaces:**
 - `render.rs`:
   - `pub fn untrusted(text: &str) -> String` (wrap), `pub fn cap(text: &str, max_chars: usize) -> String` (append `[… truncated …]`), `pub fn who(r: &MessageFrom) -> String` (`Name <addr>` or addr), `pub fn age(t: DateTime<Utc>, now: DateTime<Utc>) -> String` (`12m`, `3h`, `2d`), `pub fn local(t: DateTime<Utc>, tz: Tz) -> String` (`2026-09-23 14:05`).
-  - `pub fn message_item(i: usize, m: &Message, flags: &ItemFlags, tz: Tz, now: DateTime<Utc>, invite_event_id: Option<&str>) -> String` — the exact list-item block:
+  - `pub fn message_item(i: usize, m: &Message, flags: &ItemFlags, tz: Tz, now: DateTime<Utc>, invite_event_id: Option<&str>) -> String`: the exact list-item block:
     ```
     1. id: <id>
        thread: <conversation id>   account: <account>
@@ -979,10 +979,10 @@ fn key_is_order_independent() {
     ```
     plus `   invite: event_id=<id>` when present.
 - `mail_read.rs` tools (all through `ToolContext` and the cache):
-  - `mail_overview { since?, unread_only?, folder?, account?, limit? }` — for each account: `list_folder(folder, limit, 0, unread_only)` (`inbox`/`drafts`/`sentitems`/`archive` map to Graph well-known names; anything else is treated as a folder id), filter by `received_at >= since` from `parse_range(.., Direction::Past)`, merge, sort desc, truncate to `limit`. Invite detection: `m.subject` starts with `Invitation:`/`Inbjudan:` **or** Graph `meetingMessageType` — add `meetingMessageType` and `event.id` to the list `$select`? Graph does not allow `event` on list rows; so for Part 1 the invite flag is set when a message's Graph type is `#microsoft.graph.eventMessage` (`@odata.type` is present in list rows: add `#[serde(rename = "@odata.type", default)] odata_type: Option<String>` to `GraphMessage` and `Message.is_invite: bool` in core — small addition to Task 2 scope, do it here). The event id is fetched lazily in `mail_read` via `get_message`'s `event` expansion later; for `mail_overview` print `invite: yes (use mail_read for the event id)`.
-  - `mail_search { query, from?, subject?, after?, before?, has_attachments?, folder?, account?, limit? }` — build the Graph search string `"{query} from:{from} subject:{subject} received>={after} received<={before} hasAttachments:true"` and call `search_messages` per account; merge, sort desc.
-  - `mail_read { id, thread?, account? }` — resolve the account: if given, use it; else try each owned account's `get_message` until one succeeds (404 → next). Body: `render_html(body, 100, LinkStyle::Inline)` for HTML, `strip_quoted_history` when `thread`, cap at 12 000, wrap untrusted. Thread mode: `list_conversation(account, conversation_id)`, newest first, each with `strip_quoted_history`, each contribution capped at 4 000. Append headers-derived facts: `list: yes` if `fetch_message_headers` contains `List-Unsubscribe` (single message mode only).
-  - `mail_folders { account? }` — `list_mail_folders` per account, one line per folder: `<name>  id=<id>  unread=<n>/<total>`.
+  - `mail_overview { since?, unread_only?, folder?, account?, limit? }`: for each account: `list_folder(folder, limit, 0, unread_only)` (`inbox`/`drafts`/`sentitems`/`archive` map to Graph well-known names; anything else is treated as a folder id), filter by `received_at >= since` from `parse_range(.., Direction::Past)`, merge, sort desc, truncate to `limit`. Invite detection: `m.subject` starts with `Invitation:`/`Inbjudan:` **or** Graph `meetingMessageType`. Add `meetingMessageType` and `event.id` to the list `$select`? Graph does not allow `event` on list rows; so for Part 1 the invite flag is set when a message's Graph type is `#microsoft.graph.eventMessage` (`@odata.type` is present in list rows: add `#[serde(rename = "@odata.type", default)] odata_type: Option<String>` to `GraphMessage` and `Message.is_invite: bool` in core; small addition to Task 2 scope, do it here). The event id is fetched lazily in `mail_read` via `get_message`'s `event` expansion later; for `mail_overview` print `invite: yes (use mail_read for the event id)`.
+  - `mail_search { query, from?, subject?, after?, before?, has_attachments?, folder?, account?, limit? }`: build the Graph search string `"{query} from:{from} subject:{subject} received>={after} received<={before} hasAttachments:true"` and call `search_messages` per account; merge, sort desc.
+  - `mail_read { id, thread?, account? }`: resolve the account: if given, use it; else try each owned account's `get_message` until one succeeds (404 → next). Body: `render_html(body, 100, LinkStyle::Inline)` for HTML, `strip_quoted_history` when `thread`, cap at 12 000, wrap untrusted. Thread mode: `list_conversation(account, conversation_id)`, newest first, each with `strip_quoted_history`, each contribution capped at 4 000. Append headers-derived facts: `list: yes` if `fetch_message_headers` contains `List-Unsubscribe` (single message mode only).
+  - `mail_folders { account? }`: `list_mail_folders` per account, one line per folder: `<name>  id=<id>  unread=<n>/<total>`.
 
 - [ ] **Step 1: Failing tool tests** (`ToolHarness` from Task 8; mount Graph mocks):
   - overview merges two accounts newest first and applies `since=today`.
@@ -990,7 +990,7 @@ fn key_is_order_independent() {
   - `mail_read` on an id owned by the second account is found by fallback; HTML body rendered inline-links; thread mode strips quotes.
   - second identical overview call within TTL hits the cache (assert the Graph mock `.expect(1)`).
 
-- [ ] **Step 2–4: Run failing, implement, run passing.** **Step 5: Commit** — `git commit -am "feat(mcp): mail_overview, mail_search, mail_read, mail_folders"`
+- [ ] **Step 2–4: Run failing, implement, run passing.** **Step 5: Commit**: `git commit -am "feat(mcp): mail_overview, mail_search, mail_read, mail_folders"`
 
 ---
 
@@ -1001,19 +1001,19 @@ fn key_is_order_independent() {
 - Modify: `state.rs` (contacts + send counters)
 
 **Interfaces:**
-- `contacts.rs`: `pub struct ContactCaches { inner: Mutex<HashMap<String, (Instant, ContactsCache)>> }` with `pub async fn get(&self, state: &SharedState, user: &UserRecord) -> Result<ContactsCache, McpError>` — builds from `list_people(account, 200)` for every mailbox plus senders of the last 100 inbox rows (`upsert` with `ContactSource::Mail`/`Calendar` as the CLI's `contacts_refresh.rs` does), keeps it for 24 h.
+- `contacts.rs`: `pub struct ContactCaches { inner: Mutex<HashMap<String, (Instant, ContactsCache)>> }` with `pub async fn get(&self, state: &SharedState, user: &UserRecord) -> Result<ContactsCache, McpError>`: builds from `list_people(account, 200)` for every mailbox plus senders of the last 100 inbox rows (`upsert` with `ContactSource::Mail`/`Calendar` as the CLI's `contacts_refresh.rs` does), keeps it for 24 h.
 - Pure rule in `mail_write.rs`, tested without I/O:
 ```rust
 pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: Option<&str>, record: &UserRecord) -> Result<String, String>
 ```
   reply/reply_all/forward → `received_by` (error if `None`); new → `from_account` or `record.default_sender`; any `from_account` must be owned.
-- `resolve_recipients(tokens: &[String], cache: &ContactsCache) -> Result<Vec<String>, String>` — `Literal`/`One` → address; `Unknown` → error `Unknown recipient "x"`; `Ambiguous` → error listing `name <address>` candidates and asking for an address.
+- `resolve_recipients(tokens: &[String], cache: &ContactsCache) -> Result<Vec<String>, String>`: `Literal`/`One` → address; `Unknown` → error `Unknown recipient "x"`; `Ambiguous` → error listing `name <address>` candidates and asking for an address.
 - `mail_draft { kind, in_reply_to?, draft_id?, to?, cc?, bcc?, subject?, body, from_account? }`:
   - `new`: `create_draft(account, &Outgoing { subject, body_text: body, to, cc, bcc })`, or `update_draft` when `draft_id` is given.
   - `reply`/`reply_all`: `account_for_message(in_reply_to)` (same fallback as `mail_read`), `create_reply_draft`/`create_reply_all_draft(account, id, body)`; when `to`/`cc` given, follow with `update_draft` to set them.
   - `forward`: `create_forward_draft(account, id, &to, body)`.
   - Result: `draft_id`, `account`, then the preview from `get_message(account, draft_id)` (from/to/cc/subject/body text, body capped 4 000). Invalidate cache.
-- `mail_send { draft_id, account? }`: account resolution by fallback; `get_message` to verify it is a draft in Drafts and read `from`; `choose_sender` is not re-run (the draft already carries the account) but the result text notes when a reply's account differs from the original's (`from` of the draft vs `account_for_message(in_reply_to)` is not available here, so compare the draft's account with the `In-Reply-To`-derived account only when the draft has a `conversation_id` whose first message lives in another owned account — implement as: if `list_conversation` on the draft's account returns nothing but another owned account returns messages, add the note). Rate cap: `AppState.sends: Mutex<HashMap<String, Vec<Instant>>>`, prune older than 1 h, refuse at 30 with `Send limit reached (30 per hour)`. Then `send_draft`, invalidate cache, return `Sent "<subject>" to <recipients> from <account>`.
+- `mail_send { draft_id, account? }`: account resolution by fallback; `get_message` to verify it is a draft in Drafts and read `from`; `choose_sender` is not re-run (the draft already carries the account) but the result text notes when a reply's account differs from the original's (`from` of the draft vs `account_for_message(in_reply_to)` is not available here, so compare the draft's account with the `In-Reply-To`-derived account only when the draft has a `conversation_id` whose first message lives in another owned account; implement as: if `list_conversation` on the draft's account returns nothing but another owned account returns messages, add the note). Rate cap: `AppState.sends: Mutex<HashMap<String, Vec<Instant>>>`, prune older than 1 h, refuse at 30 with `Send limit reached (30 per hour)`. Then `send_draft`, invalidate cache, return `Sent "<subject>" to <recipients> from <account>`.
 
 - [ ] **Step 1: Failing tests**
   - `choose_sender` table test (4 cases: reply uses receiver; new uses default; explicit owned wins; explicit unowned errors).
@@ -1022,7 +1022,7 @@ pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: O
   - `mail_send` refuses the 31st send within an hour (pre-fill the counter).
   - `mail_send` on an unknown draft id → error mentions `draft`.
 
-- [ ] **Step 2–4: implement and pass.** **Step 5: Commit** — `git commit -am "feat(mcp): mail_draft and mail_send with send-from rules"`
+- [ ] **Step 2–4: implement and pass.** **Step 5: Commit**: `git commit -am "feat(mcp): mail_draft and mail_send with send-from rules"`
 
 ---
 
@@ -1033,17 +1033,17 @@ pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: O
 
 **Interfaces:**
 - `mail_act { ids: Vec<String> (1–100), action: "read"|"unread"|"flag"|"unflag"|"archive"|"move"|"categorize"|"delete"|"unsubscribe", folder?: String, categories?: Vec<String>, account?: String }`
-- Ids are grouped by owning account (`account` given → all in it; else fallback resolution per id with `get_message`-free approach: try `batch_all` per account with `GET /me/messages/{id}?$select=id` first — one batch per account — and assign each id to the first account that returns 200).
+- Ids are grouped by owning account (`account` given → all in it; else fallback resolution per id with `get_message`-free approach: try `batch_all` per account with `GET /me/messages/{id}?$select=id` first (one batch per account) and assign each id to the first account that returns 200).
 - Per account one `batch_all` with `BatchRequest::json(id, "PATCH", "/me/messages/{id}", json!({"isRead": true}))` etc.; `archive` = `POST /me/messages/{id}/move` body `{"destinationId":"archive"}`; `delete` → `"deleteditems"`; `move` → `folder`; `categorize` → `{"categories": [...]}`.
 - `unsubscribe`: sequential per id: `fetch_message_headers` → `parse_unsubscribe` → `OneClickPost(url)` → `unsubscribe_one_click`; `Mailto` → `send_mail(account, &Outgoing { to: [address], subject, body_text })`; `HttpsOnly(url)` → result `manual: open <url>`; `None` → `no unsubscribe header`.
 - Output: one line per id: `<id> ok` / `<id> failed: <status>`; summary line; invalidate cache.
 
 - [ ] **Step 1: Failing tests**: batch PATCH bodies for `read` and `flag` (wiremock on `/$batch` with `body_partial_json`); `delete` uses `deleteditems`; `unsubscribe` posts one-click; more than 100 ids → error.
-- [ ] **Step 2–4: implement, pass.** **Step 5: Commit** — `git commit -am "feat(mcp): mail_act bulk actions"`
+- [ ] **Step 2–4: implement, pass.** **Step 5: Commit**: `git commit -am "feat(mcp): mail_act bulk actions"`
 
 ---
 
-### Task 13: Calendar reads — agenda and availability
+### Task 13: Calendar reads: agenda and availability
 
 **Files:**
 - Create: `crates/pidge-mcp/src/tools/calendar.rs` (reads first; Task 14 adds writes)
@@ -1056,21 +1056,21 @@ pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: O
       where: <location or join link>   organizer: <name>   me: accepted   attendees: 4
   ```
   All-day events render `all day Wed 23 Sep`.
-- `calendar_agenda { range?, from?, to?, pending_only?, account? }` — `parse_range(.., Direction::Future)`; for each account `list_calendars` then `list_calendar_view(account, Some(cal.id), start, end, 200)` for every calendar; merge; sort by start; `pending_only` keeps `response_status ∈ {None, NotResponded}` and `!is_organizer`; `range=next` keeps only the first event with `start.at > now`. Empty → `Nothing on the calendar for <range>.`
-- `calendar_availability { duration_minutes, range?, from?, to?, start_hour?, end_hour?, account? }` — same event fetch; `Busy` from events that are not declined and not all-day (all-day counts as busy only if `show_as` is unavailable — `Event` has no `show_as`; treat all-day as free); `free_slots(.., max 20)`; render `Wed 23 Sep 13:00–15:30 (150 min)`.
+- `calendar_agenda { range?, from?, to?, pending_only?, account? }`: `parse_range(.., Direction::Future)`; for each account `list_calendars` then `list_calendar_view(account, Some(cal.id), start, end, 200)` for every calendar; merge; sort by start; `pending_only` keeps `response_status ∈ {None, NotResponded}` and `!is_organizer`; `range=next` keeps only the first event with `start.at > now`. Empty → `Nothing on the calendar for <range>.`
+- `calendar_availability { duration_minutes, range?, from?, to?, start_hour?, end_hour?, account? }`: same event fetch; `Busy` from events that are not declined and not all-day (all-day counts as busy only if `show_as` is unavailable: `Event` has no `show_as`; treat all-day as free); `free_slots(.., max 20)`; render `Wed 23 Sep 13:00–15:30 (150 min)`.
 
 - [ ] **Step 1: Failing tests**: two accounts merged and sorted; `pending_only`; `next` returns exactly one; availability subtracts a mocked meeting.
-- [ ] **Step 2–4: implement, pass.** **Step 5: Commit** — `git commit -am "feat(mcp): calendar_agenda and calendar_availability"`
+- [ ] **Step 2–4: implement, pass.** **Step 5: Commit**: `git commit -am "feat(mcp): calendar_agenda and calendar_availability"`
 
 ---
 
-### Task 14: Calendar writes — respond and event
+### Task 14: Calendar writes: respond and event
 
 **Files:**
 - Modify: `crates/pidge-mcp/src/tools/calendar.rs`
 
 **Interfaces:**
-- `calendar_respond { id, response: "accept"|"tentative"|"decline", message?, send_response?, propose?: { start, end }, account? }` — account by fallback (`get_event` per owned account); `propose` only with tentative/decline (else error); `rsvp_event(account, id, kind, message, send_response, proposed)` with `ProposedTime { start, end, tz: record.timezone }`; invalidate; result `Declined "<subject>" and proposed Thu 24 Sep 14:00–15:00.`
+- `calendar_respond { id, response: "accept"|"tentative"|"decline", message?, send_response?, propose?: { start, end }, account? }`: account by fallback (`get_event` per owned account); `propose` only with tentative/decline (else error); `rsvp_event(account, id, kind, message, send_response, proposed)` with `ProposedTime { start, end, tz: record.timezone }`; invalidate; result `Declined "<subject>" and proposed Thu 24 Sep 14:00–15:00.`
 - `calendar_event { action: "create"|"update"|"cancel", id?, title?, start?, end?, all_day?, attendees?, location?, body?, online_meeting?, message?, account? }`:
   - create: `ctx.sender(account)`; attendees via `resolve_recipients`; `create_event(account, None, &NewEvent { subject, start, end, tz, all_day, location, body_text, body_html: false, required_attendees, optional_attendees: vec![], recurrence: None, online_meeting, reminder: Reminder::default() })`; then `get_event` and render.
   - update: `get_event` to load current values, overlay provided fields, `update_event`.
@@ -1078,11 +1078,11 @@ pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: O
   - Times parsed with `parse_point` semantics from `timerange.rs` (expose `pub fn parse_point`).
 
 - [ ] **Step 1: Failing tests**: decline with proposal sends `proposedNewTime`; propose with accept errors; create posts attendees resolved from the contact cache; cancel by non-organizer errors.
-- [ ] **Step 2–4: implement, pass.** **Step 5: Commit** — `git commit -am "feat(mcp): calendar_respond and calendar_event"`
+- [ ] **Step 2–4: implement, pass.** **Step 5: Commit**: `git commit -am "feat(mcp): calendar_respond and calendar_event"`
 
 ---
 
-### Task 15: Attachments — read via markitdown, images, download links
+### Task 15: Attachments: read via markitdown, images, download links
 
 **Files:**
 - Create: `crates/pidge-mcp/src/tools/attachments.rs`, `crates/pidge-mcp/src/markitdown.rs`
@@ -1090,7 +1090,7 @@ pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: O
 
 **Interfaces:**
 - `jwt.rs`: `DownloadClaims { typ: "download", jti, exp (15 min), sub, account, message_id, attachment_id, filename }`, `Signer::issue_download(..)`, `Signer::verify_download(token)`.
-- `markitdown.rs`: `pub async fn convert(bytes: &[u8], filename: &str) -> Result<String, ConvertError>` — writes to a temp file under `std::env::temp_dir()` with the original extension, runs `markitdown <path>` (`PIDGE_MCP_MARKITDOWN` env overrides the binary, default `markitdown`) with `tokio::process::Command`, `tokio::time::timeout(30 s)`, kills on timeout, deletes the file in all paths, returns stdout as UTF-8. `ConvertError { Timeout, TooLarge, Failed(String), Missing }`.
+- `markitdown.rs`: `pub async fn convert(bytes: &[u8], filename: &str) -> Result<String, ConvertError>`: writes to a temp file under `std::env::temp_dir()` with the original extension, runs `markitdown <path>` (`PIDGE_MCP_MARKITDOWN` env overrides the binary, default `markitdown`) with `tokio::process::Command`, `tokio::time::timeout(30 s)`, kills on timeout, deletes the file in all paths, returns stdout as UTF-8. `ConvertError { Timeout, TooLarge, Failed(String), Missing }`.
 - `mail_attachment { id, attachment_id, mode?: "read"|"link", offset?, account? }`:
   - resolve account by fallback; `list_attachments` to get name/type/size; size > 25 MB → `TooLarge` message.
   - `read`: `get_attachment_bytes`; `image/*` (≤ 5 MB) → `CallToolResult::success(vec![ContentBlock::text("<name>, <type>, <size>"), ContentBlock::image(base64, mime)])`; otherwise `convert` → `cap(text[offset..], 30_000)` wrapped untrusted, with `next: offset=<n>` when truncated.
@@ -1113,7 +1113,7 @@ pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: O
   - `mail_attachment mode=link` returns a `/dl/` URL; `GET /dl/<token>` streams mocked bytes with the filename header; a token for another user's sub is rejected (404).
   - image attachment returns an image content block.
 
-- [ ] **Step 2–4: implement, pass.** **Step 5: Build the image locally once** (`docker build -f deploy/azure/Dockerfile -t pidge-mcp:local .`) and run `docker run --rm pidge-mcp:local markitdown --version` is not possible (entrypoint); instead `docker run --rm --entrypoint markitdown pidge-mcp:local --version` — Expected: prints a version. **Step 6: Commit** — `git commit -am "feat(mcp): mail_attachment with markitdown conversion and download links"`
+- [ ] **Step 2–4: implement, pass.** **Step 5: Build the image locally once** (`docker build -f deploy/azure/Dockerfile -t pidge-mcp:local .`) and run `docker run --rm pidge-mcp:local markitdown --version` is not possible (entrypoint); instead `docker run --rm --entrypoint markitdown pidge-mcp:local --version`. Expected: prints a version. **Step 6: Commit**: `git commit -am "feat(mcp): mail_attachment with markitdown conversion and download links"`
 
 ---
 
@@ -1133,7 +1133,7 @@ pub fn choose_sender(kind: DraftKind, received_by: Option<&str>, from_account: O
 - [ ] **Step 1: Test** that `list_prompts` returns the three names (in-process via `PidgeMcp::list_prompts` with a `RequestContext`).
 - [ ] **Step 2: Implement**, update docs, run the whole suite: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check`.
 - [ ] **Step 3: Deploy to the spike environment** with `deploy/azure/deploy.sh --skip-entra` and verify from the Pidge connector in Claude Code: `accounts_list`, `mail_overview`, `calendar_agenda range=this_week`, `mail_draft kind=new` to yourself + `mail_send`, `mail_attachment` on a message with a PDF. Record what worked in the plan's closing notes.
-- [ ] **Step 4: Commit** — `git commit -am "feat(mcp): prompts, instructions, docs for the full tool set"`
+- [ ] **Step 4: Commit**: `git commit -am "feat(mcp): prompts, instructions, docs for the full tool set"`
 
 ---
 

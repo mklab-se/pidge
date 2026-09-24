@@ -3,7 +3,7 @@
 //! `pidge-mcp`'s `crates/pidge-mcp/src/app.rs`).
 //!
 //! Each call is a single `POST` carrying one JSON-RPC request, with
-//! `Accept: application/json, text/event-stream` — the server may answer
+//! `Accept: application/json, text/event-stream`; the server may answer
 //! with either a plain JSON body or a `text/event-stream` body whose last
 //! `data:` line carries the JSON-RPC response. The server hands back an
 //! `Mcp-Session-Id` header on `initialize`; every later call on the same
@@ -26,13 +26,13 @@ pub struct ToolResult {
     /// The concatenated text of every `type: "text"` content block, in
     /// order, with no separator between blocks.
     pub text: String,
-    /// The JSON-RPC result's `isError` flag — a tool-level failure reported
+    /// The JSON-RPC result's `isError` flag: a tool-level failure reported
     /// as a normal result rather than a JSON-RPC `error` response, per the
     /// MCP spec.
     pub is_error: bool,
 }
 
-/// A JSON-RPC session against one MCP server. Not thread-safe by itself —
+/// A JSON-RPC session against one MCP server. Not thread-safe by itself;
 /// wrap in a mutex/actor if shared across tasks.
 pub struct McpRpc {
     http: reqwest::Client,
@@ -194,7 +194,7 @@ impl McpRpc {
         Ok(())
     }
 
-    /// POST one JSON-RPC frame and parse whatever comes back — JSON or SSE.
+    /// POST one JSON-RPC frame and parse whatever comes back, JSON or SSE.
     /// `expected_id` is the id of the request we sent (`None` for a
     /// notification); for an SSE body it picks out the one event that is
     /// our actual response among any the server also chose to interleave
@@ -267,7 +267,7 @@ fn header_to_str(v: &HeaderValue) -> Option<&str> {
 /// Split an SSE body into its individual events. Lines are grouped on blank
 /// lines (the SSE event boundary); a `data:` field that spans several lines
 /// is reassembled by joining them with `"\n"`, per the SSE spec. Only the
-/// `data:` field is used — `event:`, `id:`, `retry:` and comment lines are
+/// `data:` field is used; `event:`, `id:`, `retry:` and comment lines are
 /// ignored, since the Streamable HTTP transport only needs the JSON-RPC
 /// payload. An event whose joined `data:` doesn't parse as JSON is silently
 /// dropped rather than failing the whole body.
@@ -302,7 +302,7 @@ fn parse_sse_events(text: &str) -> Vec<Value> {
 
 /// Pick the event that is our actual JSON-RPC response out of an SSE body.
 ///
-/// With `expected_id`, selects the event whose top-level `id` matches — the
+/// With `expected_id`, selects the event whose top-level `id` matches; the
 /// Streamable HTTP transport can interleave server notifications (no `id`)
 /// or server-initiated requests (a different `id`) into the same stream
 /// before or after our response. Without an expected id (we sent a
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn parse_sse_events_joins_multiline_data_and_skips_unparsable() {
-        // A multi-line `data:` field is reassembled by joining with "\n" —
+        // A multi-line `data:` field is reassembled by joining with "\n":
         // `{"a":\n1}` is still valid JSON, so this also proves the join
         // happened rather than each line being parsed on its own.
         let text = "data: {\"a\":\ndata: 1}\n\ndata: not json\n\ndata: {\"b\":2}\n\n";
@@ -478,7 +478,7 @@ mod tests {
     async fn call_tool_selects_the_response_matching_the_request_id_amid_other_sse_events() {
         // The stream carries a server notification (no `id`) before our
         // response and a server-initiated request (a different `id`) after
-        // it — the client must pick out only the event matching the id it
+        // it; the client must pick out only the event matching the id it
         // sent, not just take the last event in the stream.
         let sse_body = concat!(
             "event: message\n",

@@ -14,19 +14,19 @@
 
 ## File Structure
 
-- `crates/pidge-core/src/config.rs` (modify) — add `ClassifyConfig` + `ConfigKey` get/set/unset.
-- `crates/pidge-client/src/graph/mail.rs` (modify) — `get_categories` / `set_categories`.
-- `crates/pidge-client/src/graph/mod.rs` (modify) — `GraphClient` wrappers + re-exports.
-- `crates/pidge/src/commands/classify_parse.rs` (create) — pure parser + allowed-set validation.
-- `crates/pidge/src/commands/classify_model.rs` (create) — `LabelModel` trait + ailloy impl + prompt assembly.
-- `crates/pidge/src/commands/classify_cache.rs` (create) — best-effort on-disk cache.
-- `crates/pidge/src/commands/ai_classify.rs` (create) — `pidge ai classify` (single/text/batch).
-- `crates/pidge/src/commands/mail_categorize.rs` (create) — `pidge categorize`.
-- `crates/pidge/src/commands/config_cmd.rs` (create) — `pidge config`.
-- `crates/pidge/src/commands/mod.rs` (modify) — register new modules.
-- `crates/pidge/src/cli.rs` (modify) — `AiCommands::Classify`, top-level `Categorize`, `Config` subcommands.
-- `crates/pidge/src/commands/ai.rs` (modify) — dispatch `Classify`.
-- `crates/pidge/src/main.rs` (modify) — dispatch `Categorize` and `Config`.
+- `crates/pidge-core/src/config.rs` (modify): add `ClassifyConfig` + `ConfigKey` get/set/unset.
+- `crates/pidge-client/src/graph/mail.rs` (modify): `get_categories` / `set_categories`.
+- `crates/pidge-client/src/graph/mod.rs` (modify): `GraphClient` wrappers + re-exports.
+- `crates/pidge/src/commands/classify_parse.rs` (create): pure parser + allowed-set validation.
+- `crates/pidge/src/commands/classify_model.rs` (create): `LabelModel` trait + ailloy impl + prompt assembly.
+- `crates/pidge/src/commands/classify_cache.rs` (create): best-effort on-disk cache.
+- `crates/pidge/src/commands/ai_classify.rs` (create): `pidge ai classify` (single/text/batch).
+- `crates/pidge/src/commands/mail_categorize.rs` (create): `pidge categorize`.
+- `crates/pidge/src/commands/config_cmd.rs` (create): `pidge config`.
+- `crates/pidge/src/commands/mod.rs` (modify): register new modules.
+- `crates/pidge/src/cli.rs` (modify): `AiCommands::Classify`, top-level `Categorize`, `Config` subcommands.
+- `crates/pidge/src/commands/ai.rs` (modify): dispatch `Classify`.
+- `crates/pidge/src/main.rs` (modify): dispatch `Categorize` and `Config`.
 - `CHANGELOG.md` (modify).
 
 ---
@@ -297,7 +297,7 @@ struct GraphCategories {
     categories: Vec<String>,
 }
 
-/// GET /me/messages/{id}?$select=categories — read a message's categories.
+/// GET /me/messages/{id}?$select=categories: read a message's categories.
 pub async fn get_categories(
     http: &reqwest::Client,
     base_url: &str,
@@ -315,7 +315,7 @@ pub async fn get_categories(
     Ok(body.categories)
 }
 
-/// PATCH /me/messages/{id} with `{ "categories": [...] }` — replace categories.
+/// PATCH /me/messages/{id} with `{ "categories": [...] }`: replace categories.
 pub async fn set_categories(
     http: &reqwest::Client,
     base_url: &str,
@@ -374,7 +374,7 @@ git commit -m "feat(client): get/set message categories via Graph"
 
 ```rust
 //! Pure parsing of a model's text response into a deduped label set, plus
-//! optional validation against an allowed set. No I/O — unit-testable.
+//! optional validation against an allowed set. No I/O, unit-testable.
 
 /// Parse a model's raw `content` into an ordered, deduped, lowercased label
 /// set. Tolerates a JSON array, or a comma/newline separated list. Empty
@@ -792,7 +792,7 @@ pub enum ConfigCommands {
 Create `config_cmd.rs`:
 
 ```rust
-//! `pidge config` — read/write pidge's own settings.
+//! `pidge config`: read/write pidge's own settings.
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
@@ -887,7 +887,7 @@ In `main.rs`, dispatch the new command (next to the other `Commands::` arms):
 Commands::Config { command } => commands::config_cmd::run(command),
 ```
 
-(`pidge config` is synchronous; call it without `.await`. If the dispatch is inside an async match returning a future, wrap as `async { ... }` consistent with neighbouring sync arms — follow the pattern already used by `Completion`.)
+(`pidge config` is synchronous; call it without `.await`. If the dispatch is inside an async match returning a future, wrap as `async { ... }` consistent with neighbouring sync arms; follow the pattern already used by `Completion`.)
 
 - [ ] **Step 3: Run tests + manual smoke**
 
@@ -946,7 +946,7 @@ Note: make `Show` the default by accepting a bare `pidge categorize <fragment>` 
 Create `mail_categorize.rs`:
 
 ```rust
-//! `pidge categorize` — manage native Outlook categories on a message.
+//! `pidge categorize`: manage native Outlook categories on a message.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -1029,7 +1029,7 @@ git commit -m "feat: pidge categorize (native Outlook categories)"
 
 ---
 
-## Task 8: `pidge ai classify` — single & text modes
+## Task 8: `pidge ai classify`: single & text modes
 
 **Files:**
 - Create: `crates/pidge/src/commands/ai_classify.rs`
@@ -1090,7 +1090,7 @@ Classify {
 Create `ai_classify.rs`. Resolve the effective prompt (flag → `--prompt-file` → `config.classify.prompt`), then dispatch by mode. Include a pure helper `resolve_prompt` with tests; the model call itself is integration-tested manually.
 
 ```rust
-//! `pidge ai classify` — compute label(s) for an e-mail (or literal text)
+//! `pidge ai classify`: compute label(s) for an e-mail (or literal text)
 //! using the configured AI provider.
 
 use anyhow::{Result, anyhow};
@@ -1226,7 +1226,7 @@ In `ai.rs` dispatch:
 Some(AiCommands::Classify(args)) => crate::commands::ai_classify::run(args, json).await,
 ```
 
-(Thread `json` into `ai::run` — change its signature to `run(cmd, json)` and update the call site in `main.rs`.)
+(Thread `json` into `ai::run`: change its signature to `run(cmd, json)` and update the call site in `main.rs`.)
 
 - [ ] **Step 3: Run tests + manual smoke**
 
@@ -1244,7 +1244,7 @@ git commit -m "feat: pidge ai classify (single + text modes)"
 
 ---
 
-## Task 9: `pidge ai classify` — batch mode
+## Task 9: `pidge ai classify`: batch mode
 
 **Files:**
 - Modify: `crates/pidge/src/commands/ai_classify.rs`
@@ -1345,7 +1345,7 @@ git commit -m "feat: pidge ai classify batch mode (filters, parallelism, cache, 
 
 **Files:**
 - Modify: `CHANGELOG.md`
-- Modify: `crates/pidge/src/commands/skill.rs` (only if it enumerates commands — the generic skill discovers at runtime, so likely no change)
+- Modify: `crates/pidge/src/commands/skill.rs` (only if it enumerates commands; the generic skill discovers at runtime, so likely no change)
 
 - [ ] **Step 1: Full gate**
 
@@ -1357,9 +1357,9 @@ Expected: clean, all pass. Fix any `too_many_arguments` with `#[allow(...)]` con
 ```markdown
 ### Added
 
-- **AI e-mail classification.** `pidge ai classify` labels e-mail(s) using the configured AI provider (via ailloy) against a user-defined prompt — single message, arbitrary `--text`, or batch (`--from`/`--older-than`/`--folder`/`-n`) with `--parallel N`. Multi-label aware; `--labels a,b,c` validates the answer; `--set-category` writes the result to the message's native Outlook categories. Results are cached by message-id + prompt.
-- **`pidge categorize`** — manage native Outlook categories (`show`/`set`/`add`/`clear`).
-- **`pidge config`** — git-style get/set/unset/show for pidge's own settings, including `classify.prompt`, `classify.parallel`, `classify.cache`, `classify.labels`.
+- **AI e-mail classification.** `pidge ai classify` labels e-mail(s) using the configured AI provider (via ailloy) against a user-defined prompt: single message, arbitrary `--text`, or batch (`--from`/`--older-than`/`--folder`/`-n`) with `--parallel N`. Multi-label aware; `--labels a,b,c` validates the answer; `--set-category` writes the result to the message's native Outlook categories. Results are cached by message-id + prompt.
+- **`pidge categorize`**: manage native Outlook categories (`show`/`set`/`add`/`clear`).
+- **`pidge config`**: git-style get/set/unset/show for pidge's own settings, including `classify.prompt`, `classify.parallel`, `classify.cache`, `classify.labels`.
 ```
 
 - [ ] **Step 3: Commit**
@@ -1375,4 +1375,4 @@ git commit -m "docs: changelog for AI classification, categorize, config"
 
 - **Spec coverage:** prompt config (T1/T6), test-via-`ai` (T8 `--text`), single/batch + filters (T8/T9), parallelism (T9 + config T1), provider via ailloy (T4), store-as-label (T7 `categorize` + T8/T9 `--set-category`), cache (T5/T9), multi-label set throughout (T3 parser, T7/T8/T9). Sort-by-label explicitly deferred.
 - **Type consistency:** `LabelModel::classify(&self, prompt, input) -> Result<String>` used identically in T4/T8/T9; `parse_labels`/`validate_labels` signatures stable; `ClassifyArgs` tuple variant mirrors `ComposeArgs`.
-- **Known follow-up:** `select_messages` reuses `mail_actions` patterns — if it drifts large, split into `classify_select.rs` (noted in T9).
+- **Known follow-up:** `select_messages` reuses `mail_actions` patterns; if it drifts large, split into `classify_select.rs` (noted in T9).

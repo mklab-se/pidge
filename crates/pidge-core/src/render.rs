@@ -8,7 +8,7 @@ use html2text::render::{RichAnnotation, TaggedLineElement};
 pub enum LinkStyle {
     /// OSC 8 hyperlink escapes around the link text (terminals).
     Osc8,
-    /// `text (url)` — for plain-text consumers such as an AI harness.
+    /// `text (url)`, for plain-text consumers such as an AI harness.
     Inline,
     /// Link text only.
     Plain,

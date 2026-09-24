@@ -1,4 +1,4 @@
-//! `pidge contacts find <query>` — look up known contacts locally.
+//! `pidge contacts find <query>`: look up known contacts locally.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -31,7 +31,7 @@ pub async fn run(query: String, limit: usize, json: bool) -> Result<()> {
         if cache.by_email.is_empty() {
             println!(
                 "{}",
-                "No contacts in the local index — run `pidge contacts refresh` first.".dimmed()
+                "No contacts in the local index; run `pidge contacts refresh` first.".dimmed()
             );
         } else {
             println!("{}", "No matching contacts.".dimmed());

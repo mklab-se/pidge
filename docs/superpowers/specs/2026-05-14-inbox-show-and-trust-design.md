@@ -1,11 +1,11 @@
-# `pidge inbox show` + trusted-senders — design
+# `pidge inbox show` + trusted-senders: design
 
 **Status:** Approved 2026-05-14
-**Goal:** Implement `pidge inbox show <fragment>` — substring-lookup a message by its 8-char short hash, fetch full content from Microsoft Graph, and render headers + body + attachments cleanly in the terminal. Add a small trusted-senders feature: per-account list of email addresses whose inline images pidge will auto-display (using the terminal's image protocol when available, e.g. Ghostty/Kitty/iTerm2). Adds `pidge trust list/add/remove` as a sibling top-level subcommand.
+**Goal:** Implement `pidge inbox show <fragment>`: substring-lookup a message by its 8-char short hash, fetch full content from Microsoft Graph, and render headers + body + attachments cleanly in the terminal. Add a small trusted-senders feature: per-account list of email addresses whose inline images pidge will auto-display (using the terminal's image protocol when available, e.g. Ghostty/Kitty/iTerm2). Adds `pidge trust list/add/remove` as a sibling top-level subcommand.
 
 ## Non-goals
 
-- `pidge inbox attachment download <fragment> <name>` — its own follow-up feature; the `show` command exposes attachment names and sizes but does not save them.
+- `pidge inbox attachment download <fragment> <name>`: its own follow-up feature; the `show` command exposes attachment names and sizes but does not save them.
 - Domain wildcards in the trust list (e.g., `*@github.com`). Exact email-address match only in v1.
 - Inline-in-original-position image rendering (would require a real HTML renderer). Trusted-sender images are rendered AT THE END of the body in attachment order.
 - Markdown rendering. Email body parsing uses `html2text` (HTML → plain text with light list/heading/blockquote formatting); markdown stays deferred until a command genuinely produces markdown content.
@@ -36,7 +36,7 @@ questions about the revenue split between accounts.
 The big change this quarter is the +18% from EU contracts. Have a look
 at the breakdown in the second sheet of q1-numbers.xlsx.
 
-— Maria
+Maria
 
 ────────────────────────────────────────────────────────────
 
@@ -63,9 +63,9 @@ Inline images:
 
 ### Flags on `pidge inbox show`
 
-- `--mark-read` / `-r` — also PATCH `isRead: true` on the server after rendering. Without this, viewing a message in pidge doesn't change its read state in Outlook on your phone.
-- `--show-images` — force inline-image rendering for this one invocation regardless of trust list. Useful for one-off "I trust this sender just this once."
-- `--json` (global) — emit JSON instead of formatted text. JSON output never embeds image bytes (would balloon the output) — see "JSON output shape" below.
+- `--mark-read` / `-r`: also PATCH `isRead: true` on the server after rendering. Without this, viewing a message in pidge doesn't change its read state in Outlook on your phone.
+- `--show-images`: force inline-image rendering for this one invocation regardless of trust list. Useful for one-off "I trust this sender just this once."
+- `--json` (global): emit JSON instead of formatted text. JSON output never embeds image bytes (would balloon the output); see "JSON output shape" below.
 
 ### `pidge trust`
 
@@ -111,7 +111,7 @@ pidge trust remove <email>             # remove from trust list (idempotent)
 
 Notes on the JSON shape:
 - `body.html` is the raw Graph body content when `content_type == "html"`; for `text` bodies it is `null` and `text` carries the content.
-- `body.text` is always present — either the raw plain-text body or the result of running `html2text` over the HTML.
+- `body.text` is always present: either the raw plain-text body or the result of running `html2text` over the HTML.
 - `attachments[].content_id` is the `contentId` Microsoft Graph reports for inline attachments (used to match `<img src="cid:...">` references in the HTML). `null` for non-inline attachments.
 - `bcc` is included for completeness but will almost always be empty on incoming messages (BCC is stripped before delivery).
 - `--show-images` and `--mark-read` flags do not change the JSON shape; they only affect text output and server side-effects.
@@ -132,7 +132,7 @@ Notes on the JSON shape:
 
 ### New types (`pidge-core`)
 
-**`crates/pidge-core/src/message.rs`** — extend the existing module with full-message types:
+**`crates/pidge-core/src/message.rs`**: extend the existing module with full-message types:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,7 +148,7 @@ pub struct FullMessage {
     pub sent_at: chrono::DateTime<chrono::Utc>,
     pub is_read: bool,
     pub body_content_type: BodyContentType,
-    pub body_content: String,                    // raw body — HTML or plain text per content_type
+    pub body_content: String,                    // raw body: HTML or plain text per content_type
     pub has_attachments: bool,
 }
 
@@ -169,9 +169,9 @@ pub struct Attachment {
 }
 ```
 
-Pidge-core remains provider-agnostic — these are normalized shapes the Graph mapper produces.
+Pidge-core remains provider-agnostic; these are normalized shapes the Graph mapper produces.
 
-### `pidge-core::config` — trusted senders
+### `pidge-core::config`: trusted senders
 
 Extend `Config`:
 
@@ -198,7 +198,7 @@ impl Config {
 
 Email comparison is case-insensitive (Microsoft Graph normalizes addresses but users can still type `Maria@MKLab.se` vs `maria@mklab.se`).
 
-### `pidge-client::graph::mail` — new functions
+### `pidge-client::graph::mail`: new functions
 
 ```rust
 pub async fn get_message(
@@ -233,11 +233,11 @@ pub async fn mark_read(
 ```
 
 - `get_message`: `GET /me/messages/{id}?$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,isRead,body,hasAttachments` and map to `FullMessage`.
-- `list_attachments`: `GET /me/messages/{id}/attachments?$select=name,contentType,size,isInline,contentId`. Only called when `hasAttachments == true`. Filters out non-file attachments (item attachments — rare email-with-email-attached case) by checking `@odata.type == "#microsoft.graph.fileAttachment"`.
-- `get_attachment_bytes`: `GET /me/messages/{id}/attachments/{att_id}` — returns the full attachment record including `contentBytes` (base64). Decodes to `Vec<u8>`. Used for rendering inline images. Returns 404 → `ClientError::Graph { status: 404, ... }`.
+- `list_attachments`: `GET /me/messages/{id}/attachments?$select=name,contentType,size,isInline,contentId`. Only called when `hasAttachments == true`. Filters out non-file attachments (item attachments, the rare email-with-email-attached case) by checking `@odata.type == "#microsoft.graph.fileAttachment"`.
+- `get_attachment_bytes`: `GET /me/messages/{id}/attachments/{att_id}`, which returns the full attachment record including `contentBytes` (base64). Decodes to `Vec<u8>`. Used for rendering inline images. Returns 404 → `ClientError::Graph { status: 404, ... }`.
 - `mark_read`: `PATCH /me/messages/{id}` with body `{"isRead": true}`. Returns `()` on success.
 
-### `pidge-client::graph::GraphClient` — wrapper methods
+### `pidge-client::graph::GraphClient`: wrapper methods
 
 Add five methods to `GraphClient`, each acquiring a fresh access token via `auth.get_valid_token(account)`:
 
@@ -248,9 +248,9 @@ pub async fn get_attachment_bytes(&self, account: &str, message_id: &str, attach
 pub async fn mark_read(&self, account: &str, message_id: &str) -> Result<(), ClientError>;
 ```
 
-`list_attachments` returns `Attachment` records but **not** the bytes — those come on demand via `get_attachment_bytes`. This separation matters because attachment bytes are large; we only fetch them when we actually want to render an inline image.
+`list_attachments` returns `Attachment` records but **not** the bytes; those come on demand via `get_attachment_bytes`. This separation matters because attachment bytes are large; we only fetch them when we actually want to render an inline image.
 
-### `pidge` CLI — new commands
+### `pidge` CLI: new commands
 
 `cli.rs` gains:
 
@@ -293,7 +293,7 @@ The `Trust` arm in `Cli::run` forwards `self.json` to `commands::trust::run(comm
 
 ```
 crates/pidge/src/commands/
-├── inbox.rs            (existing — `list` only; the `Show` arm dispatches into inbox_show)
+├── inbox.rs            (existing, `list` only; the `Show` arm dispatches into inbox_show)
 ├── inbox_show.rs       (new)
 ├── trust.rs            (new)
 ```
@@ -369,9 +369,9 @@ pub async fn run(command: TrustCommands, json: bool) -> Result<()> {
 
 Library: `viuer = "0.9"`. It auto-detects terminal capability with the order Kitty > iTerm2 > sixel > half-blocks. Ghostty implements the Kitty graphics protocol, so it's covered.
 
-Function used: `viuer::print_from_file` (for file path input) — but our bytes come from Graph, so we use `viuer::print(&dyn_image, &config)` after decoding via the `image` crate.
+Function used: `viuer::print_from_file` (for file path input), but our bytes come from Graph, so we use `viuer::print(&dyn_image, &config)` after decoding via the `image` crate.
 
-Wait — the `image` crate has separate features for png/jpeg/etc. Adding it bloats the binary. Alternative: use `viuer::print_from_buffer(buf, &config)` directly if it accepts encoded bytes... it does NOT. viuer wants a `DynamicImage`.
+Wait: the `image` crate has separate features for png/jpeg/etc. Adding it bloats the binary. Alternative: use `viuer::print_from_buffer(buf, &config)` directly if it accepts encoded bytes... it does NOT. viuer wants a `DynamicImage`.
 
 Resolution: depend on `image = "0.25"` with default features OFF and only `png`, `jpeg`, `webp` enabled. That covers ~95% of inline email images and keeps the binary footprint sane.
 
@@ -398,9 +398,9 @@ async fn render_inline_images(
                             att.name, humansize::format_size(att.size_bytes, humansize::DECIMAL));
                     }
                 }
-                Err(e) => eprintln!("  [image: {} — decode failed: {e}]", att.name),
+                Err(e) => eprintln!("  [image: {}: decode failed: {e}]", att.name),
             },
-            Err(e) => eprintln!("  [image: {} — fetch failed: {e}]", att.name),
+            Err(e) => eprintln!("  [image: {}: fetch failed: {e}]", att.name),
         }
     }
 }
@@ -436,16 +436,16 @@ Added to `[workspace.dependencies]`:
 Under `[Unreleased] ### Added`:
 
 ```markdown
-- `pidge inbox show <fragment>` — substring-lookup a message by its 8-char short hash and display headers + body + attachment list
+- `pidge inbox show <fragment>`: substring-lookup a message by its 8-char short hash and display headers + body + attachment list
 - `pidge inbox show --mark-read` / `-r` to mark the message as read on the server
 - `pidge inbox show --show-images` to force inline image rendering for one invocation
-- `pidge trust list/add/remove` — manage the trusted-senders list; inline images auto-render for trusted senders in image-capable terminals (Ghostty, Kitty, iTerm2)
+- `pidge trust list/add/remove`: manage the trusted-senders list; inline images auto-render for trusted senders in image-capable terminals (Ghostty, Kitty, iTerm2)
 - Trusted senders stored at `trusted_senders:` in `~/.config/pidge/config.yaml`
 ```
 
 ## Risks / open considerations
 
-- **`html2text` heuristics aren't always pretty.** Most emails render cleanly; some marketing emails with weird table-based layouts may produce ragged text. Acceptable — the alternative (a full HTML renderer) is way out of scope. Users wanting pixel-perfect rendering can click any URL in the body to open the original in a browser.
+- **`html2text` heuristics aren't always pretty.** Most emails render cleanly; some marketing emails with weird table-based layouts may produce ragged text. Acceptable: the alternative (a full HTML renderer) is way out of scope. Users wanting pixel-perfect rendering can click any URL in the body to open the original in a browser.
 - **Inline images don't appear in their original positions.** Tradeoff: we don't have a HTML rendering pipeline that can interleave images with text in the terminal. Showing all inline images at the end is a reasonable simplification.
 - **`viuer` falls back to half-block rendering on non-image-capable terminals.** This may look poor at low resolutions; the implementation prints the placeholder text instead when `viuer::print` returns an error, but viuer's heuristic for "this terminal can't do images" is not perfect. If a user reports ugly output on a specific terminal, we'd add an explicit `PIDGE_DISABLE_INLINE_IMAGES=1` opt-out.
 - **`image` crate bloat.** Even with minimal features, decoding adds ~300KB to the binary. Acceptable given the feature value.
@@ -453,8 +453,8 @@ Under `[Unreleased] ### Added`:
 
 ## Deferred to next features
 
-- `pidge inbox attachment download <fragment> <attachment-name>` — its own feature
-- Domain wildcards in trust list (`*@github.com`) — would need refactoring `is_sender_trusted` and the CLI
+- `pidge inbox attachment download <fragment> <attachment-name>`: its own feature
+- Domain wildcards in trust list (`*@github.com`): would need refactoring `is_sender_trusted` and the CLI
 - "Trust on first view" prompt in interactive mode (`pidge inbox show` with no `--show-images` and an untrusted sender: prompt "trust this sender? [y/N]")
 - Image position preservation in body (would require building or vendoring an HTML-to-terminal renderer)
 - Per-account trust scoping

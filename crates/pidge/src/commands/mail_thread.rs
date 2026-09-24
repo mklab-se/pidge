@@ -1,4 +1,4 @@
-//! `pidge mail thread <fragment>` — the whole conversation, oldest first.
+//! `pidge mail thread <fragment>`: the whole conversation, oldest first.
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;

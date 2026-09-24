@@ -3,7 +3,7 @@ name: Release
 # One trigger for everything that ships: the `v*` tag the release skill
 # pushes. CI gates every job below; then the CLI binaries, SBOMs, GitHub
 # Release, Homebrew formula, crates.io crates and the MCP image are
-# published, and pidge-mcp is deployed to Azure — all from the same tagged
+# published, and pidge-mcp is deployed to Azure, all from the same tagged
 # commit. Nothing deploys on a push to `main`.
 #
 # `workflow_dispatch` is the manual "redeploy the server" button: it runs

@@ -22,7 +22,7 @@ pub enum FragmentError {
     #[error("no match found for fragment '{fragment}'")]
     NotFound { fragment: String },
 
-    #[error("fragment '{fragment}' matches {count} entries — provide more characters")]
+    #[error("fragment '{fragment}' matches {count} entries; provide more characters")]
     Ambiguous { fragment: String, count: usize },
 }
 
@@ -39,7 +39,7 @@ pub enum CacheLookup<T = CachedMessageRef> {
     ///
     /// The inner vec is capped at 10 entries by `find_by_fragment`
     /// to keep error messages readable. If more than 10 entries actually match,
-    /// only the first 10 are surfaced — callers should ask the user for a
+    /// only the first 10 are surfaced; callers should ask the user for a
     /// longer fragment rather than try to enumerate all candidates.
     Ambiguous(Vec<(String, T)>),
 }
@@ -364,7 +364,7 @@ mod tests {
         }
         assert_eq!(cache.entries.len(), MAX_ENTRIES);
 
-        // Insert one new entry — should evict one old entry
+        // Insert one new entry, should evict one old entry
         cache.insert_many(&[("new-graph-id".into(), "user@example.com".into())]);
         assert_eq!(cache.entries.len(), MAX_ENTRIES);
 

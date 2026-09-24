@@ -1,4 +1,4 @@
-//! `pidge config` — read/write pidge's own settings.
+//! `pidge config`: read/write pidge's own settings.
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;

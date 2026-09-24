@@ -1,4 +1,4 @@
-//! `pidge mail delete` — single or bulk delete with safety gates.
+//! `pidge mail delete`: single or bulk delete with safety gates.
 //!
 //! Graph's DELETE /me/messages/{id} moves the message to Deleted Items (it's
 //! not a hard delete). Recovery is still possible from Outlook's Deleted
@@ -7,7 +7,7 @@
 //! Safety:
 //! - Single delete asks for an interactive Confirm by default; `-y` skips.
 //! - Bulk delete (`--older-than`) ALWAYS requires `-y`. There is no
-//!   interactive prompt — bulk mode is intended for scripts where typing
+//!   interactive prompt; bulk mode is intended for scripts where typing
 //!   `y` would be inconvenient, and forcing a flag means the user can't
 //!   trip into it accidentally.
 
@@ -46,7 +46,7 @@ pub async fn run(
 /// Delete an exact, hand-picked set of messages named by hash fragments.
 /// Each fragment is resolved against the local cache; resolution failures are
 /// reported but don't abort the run (the resolvable ones still get deleted).
-/// Requires `-y` — there's no per-message prompt for a batch this size.
+/// Requires `-y`; there's no per-message prompt for a batch this size.
 async fn delete_multi(fragments: Vec<String>, yes: bool) -> Result<()> {
     let gate = crate::guardrail::gate(
         crate::guardrail::GuardrailAction::Bulk,
@@ -189,7 +189,7 @@ async fn delete_bulk(
 
     if !yes {
         return Err(anyhow!(
-            "Bulk delete requires explicit `-y` confirmation — there is no \
+            "Bulk delete requires explicit `-y` confirmation; there is no \
              interactive prompt. Re-run with `-y` if you really mean it."
         ));
     }
@@ -233,7 +233,7 @@ async fn delete_bulk(
     let mut total_deleted = 0usize;
     for email in &target_emails {
         let count = if from_set.is_empty() {
-            // Date-only mode: same shape as before — walk Inbox newest-first
+            // Date-only mode: same shape as before: walk Inbox newest-first
             // and stop once we cross the cutoff.
             delete_bulk_for_account(
                 &graph,
@@ -283,7 +283,7 @@ fn describe_filter(
 
 /// Sender-filter bulk: one Graph search per sender across the whole
 /// mailbox, then delete each match. Mirrors the corresponding archive
-/// helper — see `mail_actions::archive_bulk_by_sender_for_account` for
+/// helper; see `mail_actions::archive_bulk_by_sender_for_account` for
 /// the rationale (in short: marketing often auto-routes to Junk, so an
 /// Inbox-only scan would miss it).
 async fn delete_bulk_by_sender_for_account(
@@ -385,7 +385,7 @@ async fn delete_bulk_for_account(
             .filter(|m| m.received_at < cutoff)
             .collect();
 
-        // Delete in parallel within a small concurrency window — keeps Graph
+        // Delete in parallel within a small concurrency window. Keeps Graph
         // happy and the user feedback timely.
         let futures = to_delete.iter().map(|m| {
             let id = m.graph_id_alias();
@@ -398,7 +398,7 @@ async fn delete_bulk_for_account(
                     let _ = purge_from_cache(&pidge_core::short_hash(&to_delete[i].id));
                 }
                 Err(ClientError::Graph { status: 404, .. }) => {
-                    // already gone — ignore
+                    // already gone, ignore
                 }
                 Err(e) => {
                     eprintln!(
@@ -411,7 +411,7 @@ async fn delete_bulk_for_account(
         }
 
         // Stop paging if the OLDEST item on this page is still newer than
-        // the cutoff — everything beyond is even newer.
+        // the cutoff; everything beyond is even newer.
         let oldest = result
             .messages
             .iter()
@@ -431,8 +431,8 @@ async fn delete_bulk_for_account(
 /// Resolve a `--older-than` argument to an absolute UTC cutoff.
 ///
 /// Accepts:
-/// - `YYYY-MM-DD` — interpreted as midnight UTC on that date
-/// - `Nd` / `Nw` / `Nm` / `Ny` — N days/weeks/months/years before now
+/// - `YYYY-MM-DD`: interpreted as midnight UTC on that date
+/// - `Nd` / `Nw` / `Nm` / `Ny`: N days/weeks/months/years before now
 pub fn parse_older_than(spec: &str) -> Result<DateTime<Utc>> {
     let trimmed = spec.trim();
     // Absolute date?

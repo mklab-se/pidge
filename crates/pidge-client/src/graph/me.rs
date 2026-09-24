@@ -1,4 +1,4 @@
-//! GET /me — fetch the signed-in user's identity.
+//! GET /me: fetch the signed-in user's identity.
 
 use serde::Deserialize;
 

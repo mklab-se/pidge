@@ -1,4 +1,4 @@
-//! GET /me/calendars — list calendars on the signed-in account.
+//! GET /me/calendars: list calendars on the signed-in account.
 
 use pidge_core::Calendar;
 use serde::Deserialize;

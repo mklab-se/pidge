@@ -15,7 +15,7 @@
 #      once it is, the live certificate id is reused. --skip-certificate
 #      asserts that and fails loudly if it isn't so.
 #   4. Register the server's OAuth callback(s) on the pidge Entra app. With a
-#      custom domain this only ever prints the command — it touches
+#      custom domain this only ever prints the command: it touches
 #      production auth config for a domain cutover, so a human runs it.
 #      Skipped entirely with --skip-entra: the read of the Entra app
 #      (needed even to detect what's already registered) requires
@@ -85,7 +85,7 @@ esac
 
 # --- Live state -------------------------------------------------------------
 # Read before anything changes. `list` distinguishes "no app yet" (empty)
-# from an az failure (non-zero exit, which stops the script) — treating a
+# from an az failure (non-zero exit, which stops the script); treating a
 # failed read as "no app" would unbind the domain.
 LIVE_EXISTS="$(az containerapp list --resource-group "$RESOURCE_GROUP" \
   --query "[?name=='$APP_NAME'].name" -o tsv)"

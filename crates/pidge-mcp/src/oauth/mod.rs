@@ -7,7 +7,7 @@
 //! consent page naming the client and where it will be sent, its Continue
 //! (`/authorize/go`) bounces to Microsoft login, and `/callback` verifies the
 //! returned account against the allowlist and, because the very same sign-in
-//! grants Graph access to that account's mailbox, stores its refresh token —
+//! grants Graph access to that account's mailbox, stores its refresh token:
 //! sign-in and mailbox connection are one step.
 //!
 //! An account is identified by its `userPrincipalName` (never the editable

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::error::ClientError;
 
-/// A delta change carries only the properties that changed (plus id) —
+/// A delta change carries only the properties that changed (plus id), so
 /// everything except `graph_id` is optional.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct DeltaMessage {
@@ -132,7 +132,7 @@ pub async fn mail_delta(
                     });
             }
             // Graph delta change items carry only the properties that
-            // changed (plus id) — parse leniently and let consumers fetch
+            // changed (plus id), so parse leniently and let consumers fetch
             // details on demand.
             let _ = account;
             serde_json::from_value::<DeltaMessage>(v)

@@ -94,7 +94,7 @@ git commit -m "Add linkify, sha2, and comfy-table custom_styling for output refr
 - Modify: `crates/pidge-core/Cargo.toml`
 - Modify: `crates/pidge-core/src/lib.rs`
 
-The cache module — first with just the types and the deterministic short-hash function. LRU and find-by-fragment land in later tasks.
+The cache module, first with just the types and the deterministic short-hash function. LRU and find-by-fragment land in later tasks.
 
 - [ ] **Step 1: Add `sha2` to `pidge-core`'s dependencies**
 
@@ -190,7 +190,7 @@ The full `lib.rs` should now look like:
 ```rust
 //! Core types for pidge: accounts, configuration, and the normalized message model.
 //!
-//! This crate is intentionally provider-agnostic — it knows nothing about HTTP,
+//! This crate is intentionally provider-agnostic: it knows nothing about HTTP,
 //! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
 
 mod account;
@@ -389,7 +389,7 @@ Append to the `#[cfg(test)] mod tests` block in `cache.rs`:
         }
         assert_eq!(cache.entries.len(), MAX_ENTRIES);
 
-        // Insert one new entry — should evict one old entry
+        // Insert one new entry, should evict one old entry
         cache.insert_many(&[("new-graph-id".into(), "user@example.com".into())]);
         assert_eq!(cache.entries.len(), MAX_ENTRIES);
 
@@ -777,7 +777,7 @@ git commit -m "Add linkify_text helper that OSC 8-wraps URLs in arbitrary text"
 
 ---
 
-## Task 7: CLI changes — global `--json`, `--compact`, remove `--output`
+## Task 7: CLI changes: global `--json`, `--compact`, remove `--output`
 
 **Files:**
 - Modify: `crates/pidge/src/cli.rs`
@@ -897,7 +897,7 @@ Find the `impl Cli { pub async fn run(self) -> Result<()> }` block. Change the m
 
 Leave the other arms (`Ai`, `Completion`, `Version`, `None`) unchanged.
 
-- [ ] **Step 6: Build will fail — that's expected**
+- [ ] **Step 6: Build will fail, that's expected**
 
 `cargo build -p pidge` will now fail because `commands::auth::run` and `commands::inbox::run` don't yet accept a `json` parameter. We'll fix those in Tasks 8–10. No action this step.
 
@@ -937,14 +937,14 @@ pub async fn run(command: AuthCommands, json: bool) -> Result<()> {
 }
 ```
 
-`auth_login`, `auth_logout`, `auth_default` are interactive — they don't get `json`. `auth_list` and `auth_status` are data-output commands and do.
+`auth_login`, `auth_logout`, `auth_default` are interactive: they don't get `json`. `auth_list` and `auth_status` are data-output commands and do.
 
 - [ ] **Step 2: Update `auth_list.rs` to emit JSON when requested**
 
 Replace the entire contents of `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/auth_list.rs` with:
 
 ```rust
-//! `pidge auth list` — display signed-in accounts.
+//! `pidge auth list`: display signed-in accounts.
 
 use anyhow::Result;
 use chrono::Utc;
@@ -1047,7 +1047,7 @@ fn relative_time(now: chrono::DateTime<Utc>, then: chrono::DateTime<Utc>) -> Str
 Replace the entire contents of `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/auth_status.rs` with:
 
 ```rust
-//! `pidge auth status` — summary of accounts and defaults.
+//! `pidge auth status`: summary of accounts and defaults.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -1137,7 +1137,7 @@ This is the big one. Replace the current single render function with three (rich
 Overwrite `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/inbox.rs` with:
 
 ```rust
-//! `pidge inbox list` — list messages merged across signed-in accounts.
+//! `pidge inbox list`: list messages merged across signed-in accounts.
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Datelike, Local, Utc};
@@ -1448,7 +1448,7 @@ Expected: clean.
 - [ ] **Step 3: Run tests**
 
 Run: `cargo test -p pidge 2>&1 | tail -3`
-Expected: all passing — at least 8 (2 banner + 2 inbox + 2 hyperlink + 4 linkify, plus auth tests added earlier in feature work if any).
+Expected: all passing: at least 8 (2 banner + 2 inbox + 2 hyperlink + 4 linkify, plus auth tests added earlier in feature work if any).
 
 Run: `cargo test --workspace 2>&1 | tail -3`
 Expected: all passing across all crates.
@@ -1476,7 +1476,7 @@ Expected: shows `-c, --compact` flag; no `--output` flag.
 ```bash
 cargo run -q -- inbox list 2>&1; echo "exit=$?"
 ```
-Expected: `Error: No accounts signed in.` exit 1 (no panic — keychain empty, config empty).
+Expected: `Error: No accounts signed in.` exit 1 (no panic: keychain empty, config empty).
 
 ```bash
 cargo run -q -- auth status
@@ -1516,7 +1516,7 @@ Open `/Users/kristofer/repos/mklab-se/pidge/CHANGELOG.md`. Under the existing `#
 - `pidge inbox list` shows a stable 8-char short hash ID per message; cached at `~/.cache/pidge/messages.json` for substring lookup by future `pidge inbox show`
 - `pidge inbox list` rich layout: subject + 2-line preview, bold+magenta for unread, cyan for read; `--compact`/`-c` for the one-row-per-message style
 - URLs in subject and preview text are OSC 8 hyperlinks (clickable in modern terminals)
-- Cleaner table style — horizontal line under header only, no vertical borders
+- Cleaner table style: horizontal line under header only, no vertical borders
 ```
 
 - [ ] **Step 2: Commit**
@@ -1612,16 +1612,16 @@ In the controller's reply, summarize:
 **Placeholder scan:** No "TBD", "TODO", "implement later", "add appropriate validation" markers in the plan. Every code block is the actual content to land. The transient build failures between Tasks 7 and 9 are explicitly called out as expected and the batch commit lands at the end of Task 9.
 
 **Type consistency:**
-- `MessageCache`, `CachedMessageRef`, `CacheLookup`, `short_hash` — defined in Task 2/3/4, used consistently in Task 9.
-- `MessageRow { message, short_hash }` — local struct in `inbox.rs`, defined Task 9.
-- `MessageOut<'a>` — local serde struct in `inbox.rs`, defined Task 9. Fields match the spec's JSON shape.
-- `linkify_text` — defined Task 6, called in Task 9 from `style_subject` and the preview rendering branch.
-- `hyperlink` — defined Task 5, called from `linkify_text` in Task 6.
-- `Cli.json` global flag — added Task 7, threaded through to auth (Task 8) and inbox (Task 9).
-- `InboxCommands::List { account, limit, unread, compact }` — defined Task 7, destructured in Task 9.
-- `OutputFormat` enum — DELETED in Task 7; no references remain.
+- `MessageCache`, `CachedMessageRef`, `CacheLookup`, `short_hash`: defined in Task 2/3/4, used consistently in Task 9.
+- `MessageRow { message, short_hash }`: local struct in `inbox.rs`, defined Task 9.
+- `MessageOut<'a>`: local serde struct in `inbox.rs`, defined Task 9. Fields match the spec's JSON shape.
+- `linkify_text`: defined Task 6, called in Task 9 from `style_subject` and the preview rendering branch.
+- `hyperlink`: defined Task 5, called from `linkify_text` in Task 6.
+- `Cli.json` global flag: added Task 7, threaded through to auth (Task 8) and inbox (Task 9).
+- `InboxCommands::List { account, limit, unread, compact }`: defined Task 7, destructured in Task 9.
+- `OutputFormat` enum: DELETED in Task 7; no references remain.
 
 **Notable risks called out:**
-- The polling `comfy-table.set_header` accepts `Vec<&str>` — verified by reading existing code in this codebase; this is the same shape as the foundation already uses.
+- The polling `comfy-table.set_header` accepts `Vec<&str>`: verified by reading existing code in this codebase; this is the same shape as the foundation already uses.
 - `console` crate (transitive via `comfy-table`'s `custom_styling` feature) is pure Rust; no system dependencies. Build time grows slightly.
 - The transient broken-build window between Tasks 7 (CLI signature change) and 9 (commands updated) is acceptable inside the subagent's work but means we don't commit until Task 9.

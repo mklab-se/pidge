@@ -24,7 +24,7 @@ pub enum ClientError {
     #[error("device code flow: user denied consent")]
     DeviceCodeAccessDenied,
 
-    #[error("device code flow: {kind}{}", description.as_ref().map(|d| format!(" — {d}")).unwrap_or_default())]
+    #[error("device code flow: {kind}{}", description.as_ref().map(|d| format!(": {d}")).unwrap_or_default())]
     DeviceCodeOther {
         kind: String,
         description: Option<String>,
@@ -35,8 +35,8 @@ pub enum ClientError {
 
     /// A hosted pidge MCP session (`pidge mcp connect` et al.) turned out to
     /// be unrefreshable. Distinct from [`Self::SessionExpired`], which hints
-    /// at `pidge account add` — the fix for a Microsoft account's own
-    /// session, not a hosted MCP one — so this carries its own message and
+    /// at `pidge account add` (the fix for a Microsoft account's own
+    /// session, not a hosted MCP one), so this carries its own message and
     /// its own `exitcode::classify` arm.
     #[error(
         "session expired for the hosted pidge server. Run `pidge mcp connect {server}` to sign in again."
@@ -58,7 +58,7 @@ pub enum ClientError {
     )]
     Throttled { retry_after: Option<u64> },
 
-    #[error("the delta cursor has expired — re-bootstrap without --cursor")]
+    #[error("the delta cursor has expired; re-bootstrap without --cursor")]
     DeltaExpired,
 
     #[error("core: {0}")]

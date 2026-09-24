@@ -54,9 +54,9 @@ cargo install pidge
 ```
 
 On Windows, building from source needs [NASM](https://www.nasm.us/) and [CMake](https://cmake.org/)
-on `PATH` (plus the Visual Studio Build Tools most Rust installs already have) — they're needed to
+on `PATH` (plus the Visual Studio Build Tools most Rust installs already have); they're needed to
 compile [`aws-lc-rs`](https://github.com/aws/aws-lc-rs), the TLS crypto backend. macOS and Linux need
-nothing extra. If you'd rather skip the build tools entirely, use `cargo binstall` or Homebrew below —
+nothing extra. If you'd rather skip the build tools entirely, use `cargo binstall` or Homebrew below:
 both fetch a pre-built binary.
 
 ## Build from Source
@@ -84,17 +84,17 @@ cargo binstall pidge
 
 Dynamic completions adapt to whatever flags and subcommands the current binary supports. Add to your shell config:
 
-**Bash** — add to `~/.bashrc`:
+**Bash**: add to `~/.bashrc`:
 ```bash
 source <(COMPLETE=bash pidge)
 ```
 
-**Zsh** — add to `~/.zshrc`:
+**Zsh**: add to `~/.zshrc`:
 ```bash
 source <(COMPLETE=zsh pidge)
 ```
 
-**Fish** — add to `~/.config/fish/config.fish`:
+**Fish**: add to `~/.config/fish/config.fish`:
 ```bash
 source (COMPLETE=fish pidge | psub)
 ```
@@ -103,22 +103,22 @@ source (COMPLETE=fish pidge | psub)
 
 If you prefer static completions, use `pidge completion <shell>`:
 
-**Bash** — add to `~/.bashrc`:
+**Bash**: add to `~/.bashrc`:
 ```bash
 source <(pidge completion bash)
 ```
 
-**Zsh** — add to `~/.zshrc`:
+**Zsh**: add to `~/.zshrc`:
 ```bash
 source <(pidge completion zsh)
 ```
 
-**Fish** — save to completions directory:
+**Fish**: save to completions directory:
 ```bash
 pidge completion fish > ~/.config/fish/completions/pidge.fish
 ```
 
-**PowerShell** — add to profile:
+**PowerShell**: add to profile:
 ```powershell
 pidge completion powershell >> $PROFILE
 ```

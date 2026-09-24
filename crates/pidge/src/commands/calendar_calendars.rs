@@ -1,4 +1,4 @@
-//! `pidge calendar calendars` — list calendars across signed-in accounts.
+//! `pidge calendar calendars`: list calendars across signed-in accounts.
 
 use anyhow::Result;
 use colored::Colorize;

@@ -1,4 +1,4 @@
-//! `pidge account remove` — sign out and delete an account's tokens.
+//! `pidge account remove`: sign out and delete an account's tokens.
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;

@@ -46,7 +46,7 @@ fn is_transient(status: reqwest::StatusCode) -> bool {
 /// exponentially (1s·2^attempt) with 0–250 ms jitter. After the attempts are
 /// exhausted a throttling status becomes [`ClientError::Throttled`] so
 /// callers (and agents, via exit code 5) can distinguish it. All other
-/// responses — success or error — are returned for the caller to interpret.
+/// responses (success or error) are returned for the caller to interpret.
 ///
 /// The request must be clonable (all pidge requests carry buffered JSON/text
 /// bodies); a non-clonable request is sent once without retry.
@@ -172,7 +172,7 @@ impl GraphClient {
         .await
     }
 
-    /// GET /me/mailFolders/{folder_id}/messages — list a custom folder.
+    /// GET /me/mailFolders/{folder_id}/messages: list a custom folder.
     pub async fn list_folder(
         &self,
         account: &str,
@@ -337,7 +337,7 @@ impl GraphClient {
         mail::set_categories(&self.http, &self.base_url, &token, message_id, categories).await
     }
 
-    /// POST /me/messages/{id}/move — move to a folder by ID or well-known name.
+    /// POST /me/messages/{id}/move: move to a folder by ID or well-known name.
     pub async fn move_message(
         &self,
         account: &str,
@@ -348,13 +348,13 @@ impl GraphClient {
         mail::move_message(&self.http, &self.base_url, &token, message_id, destination).await
     }
 
-    /// GET /me/mailFolders — list the account's top-level folders.
+    /// GET /me/mailFolders: list the account's top-level folders.
     pub async fn list_mail_folders(&self, account: &str) -> Result<Vec<MailFolder>, ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::list_mail_folders(&self.http, &self.base_url, &token).await
     }
 
-    /// POST /me/mailFolders — create a top-level folder, returning it.
+    /// POST /me/mailFolders: create a top-level folder, returning it.
     pub async fn create_mail_folder(
         &self,
         account: &str,
@@ -364,7 +364,7 @@ impl GraphClient {
         mail::create_mail_folder(&self.http, &self.base_url, &token, display_name).await
     }
 
-    /// GET /me/mailFolders/{parent_id}/childFolders — list a folder's children.
+    /// GET /me/mailFolders/{parent_id}/childFolders: list a folder's children.
     pub async fn list_child_folders(
         &self,
         account: &str,
@@ -374,7 +374,7 @@ impl GraphClient {
         mail::list_child_folders(&self.http, &self.base_url, &token, parent_id).await
     }
 
-    /// POST /me/mailFolders/{parent_id}/childFolders — create a child folder.
+    /// POST /me/mailFolders/{parent_id}/childFolders: create a child folder.
     pub async fn create_child_folder(
         &self,
         account: &str,
@@ -385,7 +385,7 @@ impl GraphClient {
         mail::create_child_folder(&self.http, &self.base_url, &token, parent_id, display_name).await
     }
 
-    /// DELETE /me/mailFolders/{id} — delete a folder (contents move to
+    /// DELETE /me/mailFolders/{id}: delete a folder (contents move to
     /// Deleted Items).
     pub async fn delete_mail_folder(
         &self,
@@ -396,7 +396,7 @@ impl GraphClient {
         mail::delete_mail_folder(&self.http, &self.base_url, &token, folder_id).await
     }
 
-    /// POST /me/sendMail — compose-and-send a new message.
+    /// POST /me/sendMail: compose-and-send a new message.
     pub async fn send_mail(&self, account: &str, message: &Outgoing) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::send_mail(&self.http, &self.base_url, &token, message).await
@@ -447,7 +447,7 @@ impl GraphClient {
         mail::list_drafts(&self.http, &self.base_url, &token, account, limit, skip).await
     }
 
-    /// POST /me/messages — create a draft, returning its new message ID.
+    /// POST /me/messages: create a draft, returning its new message ID.
     pub async fn create_draft(
         &self,
         account: &str,
@@ -492,13 +492,13 @@ impl GraphClient {
             .await
     }
 
-    /// POST /me/messages/{id}/send — send an existing draft.
+    /// POST /me/messages/{id}/send: send an existing draft.
     pub async fn send_draft(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::send_draft(&self.http, &self.base_url, &token, message_id).await
     }
 
-    /// PATCH /me/messages/{id} — overwrite a draft's editable fields.
+    /// PATCH /me/messages/{id}: overwrite a draft's editable fields.
     pub async fn update_draft(
         &self,
         account: &str,
@@ -509,7 +509,7 @@ impl GraphClient {
         mail::update_draft(&self.http, &self.base_url, &token, message_id, message).await
     }
 
-    /// PATCH /me/messages/{id} — replace only the given recipient lists.
+    /// PATCH /me/messages/{id}: replace only the given recipient lists.
     pub async fn update_draft_recipients(
         &self,
         account: &str,
@@ -523,14 +523,14 @@ impl GraphClient {
             .await
     }
 
-    /// DELETE /me/messages/{id} — moves to Deleted Items. Works for both
+    /// DELETE /me/messages/{id}: moves to Deleted Items. Works for both
     /// drafts and inbox messages.
     pub async fn delete_message(&self, account: &str, message_id: &str) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         mail::delete_message(&self.http, &self.base_url, &token, message_id).await
     }
 
-    /// POST /me/messages/{id}/attachments — attach a file (simple upload).
+    /// POST /me/messages/{id}/attachments: attach a file (simple upload).
     pub async fn add_attachment(
         &self,
         account: &str,
@@ -601,7 +601,7 @@ impl GraphClient {
     }
 
     /// POST a `List-Unsubscribe=One-Click` form body (RFC 8058) to a
-    /// third-party unsubscribe URL. No bearer token — the URL belongs to
+    /// third-party unsubscribe URL. No bearer token; the URL belongs to
     /// the sender, not Microsoft.
     ///
     /// Only https to a public host; see [`mail::unsubscribe_one_click`].
@@ -610,7 +610,7 @@ impl GraphClient {
         mail::post_one_click(url, self.one_click).await
     }
 
-    /// GET /me/people?$top={top}&$select=displayName,scoredEmailAddresses —
+    /// GET /me/people?$top={top}&$select=displayName,scoredEmailAddresses:
     /// Outlook's ranked "people I interact with" list.
     pub async fn list_people(
         &self,
@@ -710,7 +710,7 @@ impl GraphClient {
         events::create_event(&self.http, &self.base_url, &token, calendar_id, new_event).await
     }
 
-    /// PATCH /me/events/{id} — overwrite editable fields.
+    /// PATCH /me/events/{id}: overwrite editable fields.
     pub async fn update_event(
         &self,
         account: &str,
@@ -721,7 +721,7 @@ impl GraphClient {
         events::update_event(&self.http, &self.base_url, &token, event_id, new_event).await
     }
 
-    /// PATCH /me/events/{id} — change only start + end.
+    /// PATCH /me/events/{id}: change only start + end.
     pub async fn move_time(
         &self,
         account: &str,
@@ -734,13 +734,13 @@ impl GraphClient {
         events::move_time(&self.http, &self.base_url, &token, event_id, start, end, tz).await
     }
 
-    /// DELETE /me/events/{id} — silent removal.
+    /// DELETE /me/events/{id}: silent removal.
     pub async fn delete_event(&self, account: &str, event_id: &str) -> Result<(), ClientError> {
         let token = self.auth.get_valid_token(account).await?;
         events::delete_event(&self.http, &self.base_url, &token, event_id).await
     }
 
-    /// POST /me/events/{id}/cancel — organizer-only.
+    /// POST /me/events/{id}/cancel: organizer-only.
     pub async fn cancel_event(
         &self,
         account: &str,
@@ -779,7 +779,7 @@ impl GraphClient {
         .await
     }
 
-    /// PATCH /me/events/{id} with `calendar@odata.bind` — move between calendars.
+    /// PATCH /me/events/{id} with `calendar@odata.bind`: move between calendars.
     pub async fn move_event_to_calendar(
         &self,
         account: &str,

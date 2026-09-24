@@ -11,7 +11,7 @@ use tracing_subscriber::fmt::MakeWriter;
 use crate::secrets::{SecretStore, SharedSecrets};
 
 /// Fails every call with an error that names the secret and spells out the
-/// address it was derived from — the worst case for log leakage.
+/// address it was derived from, the worst case for log leakage.
 pub struct FailingSecrets;
 
 #[async_trait]

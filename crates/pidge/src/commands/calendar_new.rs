@@ -1,4 +1,4 @@
-//! `pidge calendar new` — create a calendar event.
+//! `pidge calendar new`: create a calendar event.
 
 use anyhow::{Result, anyhow};
 use chrono::{Duration, Utc};

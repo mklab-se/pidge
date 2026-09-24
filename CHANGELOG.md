@@ -13,6 +13,14 @@ All notable changes to this project will be documented in this file.
   descriptions and keywords say the same thing, and `docs/mcp.md` notes that the reference server
   is invite-only.
 
+- **No more em-dashes.** Help text, error messages, the emitted skill and every document use
+  commas, colons or parentheses instead.
+
+### Fixed
+
+- **The emitted SKILL.md frontmatter is valid YAML again.** The `description:` value contained
+  `: `, which strict YAML parsers reject; it is now quoted.
+
 ## [1.4.2] - 2026-09-23
 
 ### Changed
@@ -77,7 +85,7 @@ has the report: what was checked, what was found, what was fixed, what to consid
 - Multi-select batch delete and move for mail: `mail delete` and `mail move` now accept several
   hash fragments at once (space-separated) to act on an exact hand-picked set of messages in one
   call via Microsoft Graph `$batch`, instead of one fragment at a time. Requires `-y` when more
-  than one fragment is given — there's no per-message prompt for a batch this size. Unresolvable
+  than one fragment is given, since there's no per-message prompt for a batch this size. Unresolvable
   fragments are reported and skipped rather than aborting the whole run. Existing single-fragment
   and bulk (`--from`/`--older-than`) modes are unchanged.
 
@@ -86,7 +94,7 @@ has the report: what was checked, what was found, what was fixed, what to consid
 ### Changed
 
 - `reqwest` upgraded 0.12 → 0.13 (feature `rustls-tls-native-roots` renamed `rustls`; ailloy bumped
-  to 2.2 in lockstep so only one TLS stack — rustls + aws-lc-rs — gets compiled in). `form` and
+  to 2.2 in lockstep so only one TLS stack (rustls + aws-lc-rs) gets compiled in). `form` and
   `query` are no longer bundled by default in 0.13, so both are now enabled explicitly (pidge-client's
   OAuth token requests use `.form()`, its Graph calls use `.query()`). Building from source on
   Windows now needs NASM and CMake on `PATH`; `release.yml`'s Windows build installs NASM via
@@ -185,7 +193,7 @@ token-efficiency instead of hoping agents behave.
   (mail + calendar) on an interval, auto-re-bootstraps expired delta
   streams, and resumes from `--state-file`.
 - **Guardrails**: per-action-class policy (`guardrails.send|delete|cancel|
-  rsvp|bulk|unsubscribe` = allow|confirm|deny) enforced by pidge itself —
+  rsvp|bulk|unsubscribe` = allow|confirm|deny) enforced by pidge itself:
   `confirm` requires an interactive human even with `-y`. Global
   `--dry-run` prints what would happen (with the guardrail verdict).
 - **Threads**: `pidge mail thread <hash>` (whole conversation, oldest
@@ -221,23 +229,23 @@ token-efficiency instead of hoping agents behave.
 
 ### Fixed
 
-- **Calendar events were stored two hours off (timezone double-conversion).** `calendar new` formatted the event's UTC clock but labelled it with the local zone (e.g. `Europe/Stockholm`), so Microsoft Graph re-interpreted the time as local and shifted it again — a 10:00 Stockholm booking was stored as `06:00Z` (08:00 local) instead of `08:00Z` (10:00 local). The outgoing `start`/`end` payload now labels its UTC clock as `"UTC"`. `calendar edit` and `move-time` were unaffected in practice (they reuse the event's stored `"UTC"` zone) but are covered by the same hardening. Guarded by a regression test.
+- **Calendar events were stored two hours off (timezone double-conversion).** `calendar new` formatted the event's UTC clock but labelled it with the local zone (e.g. `Europe/Stockholm`), so Microsoft Graph re-interpreted the time as local and shifted it again. A 10:00 Stockholm booking was stored as `06:00Z` (08:00 local) instead of `08:00Z` (10:00 local). The outgoing `start`/`end` payload now labels its UTC clock as `"UTC"`. `calendar edit` and `move-time` were unaffected in practice (they reuse the event's stored `"UTC"` zone) but are covered by the same hardening. Guarded by a regression test.
 
 ## [0.4.8] - 2026-06-15
 
 ### Added
 
-- **AI e-mail classification.** `pidge ai classify` labels e-mail(s) using the configured AI provider (via ailloy) against a user-defined prompt — a single message by hash, arbitrary `--text` (handy for testing a prompt), or a batch selected with `--from`/`--older-than`/`--folder`/`-n` and run `--parallel N` at a time. Classification is multi-label aware (a message can be both `receipt` and `ticket`); `--labels a,b,c` validates the answer against an allowed set (out-of-set → `unknown`); `--set-category` writes the result to the message's native Outlook categories. Results are cached by message-id + prompt hash (`--no-cache` to bypass). The primary use case is an AI agent reading the label off stdout (`--json` for structured output) and then acting on it.
-- **`pidge categorize`** — manage a message's native Outlook categories directly: `show` / `set` / `add` / `clear`.
-- **`pidge config`** — git-style get/set/unset/show for pidge's own settings, with `classify.prompt`, `classify.parallel`, `classify.cache`, and `classify.labels` as defaults for `ai classify`. Multi-line values (the prompt) accept `--file <path>` or `-` for stdin. Distinct from `pidge ai config`, which configures the AI provider.
+- **AI e-mail classification.** `pidge ai classify` labels e-mail(s) using the configured AI provider (via ailloy) against a user-defined prompt: a single message by hash, arbitrary `--text` (handy for testing a prompt), or a batch selected with `--from`/`--older-than`/`--folder`/`-n` and run `--parallel N` at a time. Classification is multi-label aware (a message can be both `receipt` and `ticket`); `--labels a,b,c` validates the answer against an allowed set (out-of-set → `unknown`); `--set-category` writes the result to the message's native Outlook categories. Results are cached by message-id + prompt hash (`--no-cache` to bypass). The primary use case is an AI agent reading the label off stdout (`--json` for structured output) and then acting on it.
+- **`pidge categorize`**: manage a message's native Outlook categories directly: `show` / `set` / `add` / `clear`.
+- **`pidge config`**: git-style get/set/unset/show for pidge's own settings, with `classify.prompt`, `classify.parallel`, `classify.cache`, and `classify.labels` as defaults for `ai classify`. Multi-line values (the prompt) accept `--file <path>` or `-` for stdin. Distinct from `pidge ai config`, which configures the AI provider.
 
 ## [0.4.7] - 2026-06-15
 
 ### Added
 
-- **Nested folders.** `mail move` and `mail mkdir` now accept a `/`-separated path — `mail move <hash> --to "Kvitton/MKLab"` files under the `MKLab` child of a top-level `Kvitton` folder, creating each missing level. Matching is case-insensitive per level. Backed by new Graph `childFolders` list/create endpoints.
+- **Nested folders.** `mail move` and `mail mkdir` now accept a `/`-separated path: `mail move <hash> --to "Kvitton/MKLab"` files under the `MKLab` child of a top-level `Kvitton` folder, creating each missing level. Matching is case-insensitive per level. Backed by new Graph `childFolders` list/create endpoints.
 - **`mail rmdir <path>`.** Delete a folder (its contents move to Deleted Items, so it's recoverable) in each account; supports nested paths and requires `-y`. Rounds out the folder surface (create / list / move / delete).
-- **`mail list --folder <path>`.** List the messages in any folder — including nested paths like `Kvitton/MKLab` — instead of the Inbox. Works with `--json`, `--compact`, `--table`, and `-n`, so you can audit or script over a custom folder's contents.
+- **`mail list --folder <path>`.** List the messages in any folder (including nested paths like `Kvitton/MKLab`) instead of the Inbox. Works with `--json`, `--compact`, `--table`, and `-n`, so you can audit or script over a custom folder's contents.
 - **Recursive folder listing.** `mail folders` now shows child folders indented under their parent, with per-folder total/unread counts at every level.
 
 ### Fixed
@@ -248,13 +256,13 @@ token-efficiency instead of hoping agents behave.
 
 ### Added
 
-- **Custom folders: move, list, and create.** New `pidge mail move <hash> --to <folder>` files a message into a folder, creating the folder at the top level if it doesn't exist (matched case-insensitively against existing folders). Bulk mode mirrors `mail archive`/`mail delete` — `--from <sender>` (sweeps every folder via Graph `$search`) and `--older-than <spec>` (walks the Inbox by date), both gated on `-y`, with the same 4-in-flight + exponential-backoff throttling. `pidge mail folders` lists every account's folders with total/unread counts (`--json` for scripting), and `pidge mail mkdir <name>` creates a folder per account idempotently — handy for setting up a consistent set of folders before sorting mail into them. Backed by new Graph endpoints (`GET`/`POST /me/mailFolders`) on the client.
+- **Custom folders: move, list, and create.** New `pidge mail move <hash> --to <folder>` files a message into a folder, creating the folder at the top level if it doesn't exist (matched case-insensitively against existing folders). Bulk mode mirrors `mail archive`/`mail delete`: `--from <sender>` (sweeps every folder via Graph `$search`) and `--older-than <spec>` (walks the Inbox by date), both gated on `-y`, with the same 4-in-flight + exponential-backoff throttling. `pidge mail folders` lists every account's folders with total/unread counts (`--json` for scripting), and `pidge mail mkdir <name>` creates a folder per account idempotently, handy for setting up a consistent set of folders before sorting mail into them. Backed by new Graph endpoints (`GET`/`POST /me/mailFolders`) on the client.
 
 ## [0.4.5] - 2026-06-03
 
 ### Added
 
-- **Download received attachments.** New `pidge mail attachments list <hash>` shows a message's file attachments (name, size, type) and `pidge mail attachments save <hash> [name]` writes them to disk. With no name every non-inline attachment is saved; a case-insensitive filename substring grabs one (ambiguous or no match errors with the candidates listed). `-o <path>` chooses the destination — a directory keeps original names, a file path renames a single attachment — defaulting to the user's Downloads folder. `--include-inline` also pulls embedded images; `-f`/`--force` overwrites existing files (otherwise an existing target is refused). The emitted AI skill documents the new surface.
+- **Download received attachments.** New `pidge mail attachments list <hash>` shows a message's file attachments (name, size, type) and `pidge mail attachments save <hash> [name]` writes them to disk. With no name every non-inline attachment is saved; a case-insensitive filename substring grabs one (ambiguous or no match errors with the candidates listed). `-o <path>` chooses the destination: a directory keeps original names, a file path renames a single attachment, defaulting to the user's Downloads folder. `--include-inline` also pulls embedded images; `-f`/`--force` overwrites existing files (otherwise an existing target is refused). The emitted AI skill documents the new surface.
 
 ## [0.4.4] - 2026-05-24
 
@@ -271,7 +279,7 @@ token-efficiency instead of hoping agents behave.
 ### Added
 
 - **Contact name resolution.** New `pidge contacts refresh` builds a local name → e-mail index from recent inbox senders and calendar organizer/attendees (default ±365 day window, per-account). `pidge contacts find <query>` searches it (case-insensitive substring on name, e-mail, or local-part; exact e-mail match wins).
-- **Inline `@name` syntax.** Tokens in `--invite`, `--invite-optional`, `--to`, `--cc`, and `--bcc` that start with `@` resolve against the index; bare e-mails without `@` prefix are passed through unchanged (fully non-breaking). Multi-match resolution errors with every candidate listed (most recently seen first, capped at 8) rather than prompting — agent-friendly deterministic failure.
+- **Inline `@name` syntax.** Tokens in `--invite`, `--invite-optional`, `--to`, `--cc`, and `--bcc` that start with `@` resolve against the index; bare e-mails without `@` prefix are passed through unchanged (fully non-breaking). Multi-match resolution errors with every candidate listed (most recently seen first, capped at 8) rather than prompting, for agent-friendly deterministic failure.
 - AI skill emit documents the contacts surface and the inline-resolution convention.
 
 ## [0.4.2] - 2026-05-21
@@ -283,7 +291,7 @@ token-efficiency instead of hoping agents behave.
 
 ### Fixed
 
-- `pidge calendar search` no longer crashes with `Microsoft Graph: 501 SearchEvents — The parameter $search is not currently supported on the Events resource.` Graph's `$search` parameter is not implemented for the Events resource; pidge now fetches the calendar view over the configured window and applies a case-insensitive substring filter client-side across subject, body preview, location, organizer, and attendees. The `--limit` flag now caps post-filter matches; per-account fetch capacity is 500 events per window.
+- `pidge calendar search` no longer crashes with `Microsoft Graph: 501 SearchEvents: The parameter $search is not currently supported on the Events resource.` Graph's `$search` parameter is not implemented for the Events resource; pidge now fetches the calendar view over the configured window and applies a case-insensitive substring filter client-side across subject, body preview, location, organizer, and attendees. The `--limit` flag now caps post-filter matches; per-account fetch capacity is 500 events per window.
 
 ## [0.4.1] - 2026-05-21
 
@@ -295,17 +303,17 @@ token-efficiency instead of hoping agents behave.
 
 ### Added
 
-- **`pidge calendar` surface** — full calendar management against Microsoft Graph:
+- **`pidge calendar` surface**: full calendar management against Microsoft Graph:
   - `pidge calendar list` (default: today + next 7 days; `--today` / `--tomorrow` / `--week` / `--month` / `--from`/`--to` for arbitrary windows)
-  - `pidge calendar show <hash>` — full details including attendees, organizer, RSVP states, recurrence, and online meeting URL
-  - `pidge calendar search <query>` — KQL `$search` across events
-  - `pidge calendar new` — title/start/end, optional location/body, required + optional attendees (Graph auto-sends invitations), recurrence presets (`--repeat daily|weekly|monthly|yearly` with `--on`, `--until`, `--count`, `--interval`), and `--online` to attach a Microsoft Teams meeting
+  - `pidge calendar show <hash>`: full details including attendees, organizer, RSVP states, recurrence, and online meeting URL
+  - `pidge calendar search <query>`: KQL `$search` across events
+  - `pidge calendar new`: title/start/end, optional location/body, required + optional attendees (Graph auto-sends invitations), recurrence presets (`--repeat daily|weekly|monthly|yearly` with `--on`, `--until`, `--count`, `--interval`), and `--online` to attach a Microsoft Teams meeting
   - `pidge calendar edit <hash>` and `pidge calendar move-time <hash>` (`--series` for recurring events)
-  - `pidge calendar duplicate <hash>` — use an existing event as a template
+  - `pidge calendar duplicate <hash>`: use an existing event as a template
   - `pidge calendar delete <hash>` (silent) and `pidge calendar cancel <hash>` (organizer-only; sends notices)
-  - `pidge calendar move <hash> --to <calendar>` — move between calendars on the same account
+  - `pidge calendar move <hash> --to <calendar>`: move between calendars on the same account
   - `pidge calendar rsvp <hash> --accept|--tentative|--decline` (`--no-notify` skips the response email)
-  - `pidge calendar calendars` — enumerate calendars on each account
+  - `pidge calendar calendars`: enumerate calendars on each account
 - **Local-TZ display**: events stored as UTC + their original IANA zone; output formatted in the system's local time zone, with `--tz` to override.
 - **`pidge calendar <hash>` shortcut**: bare-word fragments route to `calendar show`, mirroring the mail surface's ergonomics.
 - **Core types**: `Event`, `Calendar`, `Attendee`, `RecurrencePattern`, `EventCache` (parallel to `MessageCache`).
@@ -314,13 +322,13 @@ token-efficiency instead of hoping agents behave.
 ### Notes
 
 - `Calendars.ReadWrite` was already in the requested OAuth scopes, so no re-auth is needed on existing accounts.
-- The compose-form TUI wizard for `calendar new` is a stub — pass `--title`, `--start`, etc. directly; the wizard lands in a follow-up.
+- The compose-form TUI wizard for `calendar new` is a stub. Pass `--title`, `--start`, etc. directly; the wizard lands in a follow-up.
 
 ## [0.3.1] - 2026-05-19
 
 ### Added
 
-- **`pidge mail unsubscribe <hash>`** — opt out of a sender via the message's `List-Unsubscribe` header. Picks the best method per RFC 2369 + RFC 8058: HTTPS one-click POST when offered, otherwise a `mailto:` send from the receiving account, otherwise prints the URL for a manual click. Confirmation prompts by default; pass `-y` to skip.
+- **`pidge mail unsubscribe <hash>`**: opt out of a sender via the message's `List-Unsubscribe` header. Picks the best method per RFC 2369 + RFC 8058: HTTPS one-click POST when offered, otherwise a `mailto:` send from the receiving account, otherwise prints the URL for a manual click. Confirmation prompts by default; pass `-y` to skip.
 - **Graph helper** `GraphClient::fetch_message_headers` exposes a message's `internetMessageHeaders` for any consumer that needs the raw RFC 5322 headers.
 
 ### Notes
@@ -342,7 +350,7 @@ token-efficiency instead of hoping agents behave.
 - **Pagination** on `pidge mail` via `-p`/`--page`
 - **Full-text search** across all signed-in accounts via `pidge mail search`
 - **`pidge ai skill --from-source`** mode emits a SKILL.md whose invocation prefix runs pidge via `cargo run` from the current working directory
-- **AI-first repositioning** of README.md and CLAUDE.md — pidge is designed to be operated by AI coding agents on the user's behalf
+- **AI-first repositioning** of README.md and CLAUDE.md: pidge is designed to be operated by AI coding agents on the user's behalf
 
 ### Changed
 
@@ -364,7 +372,7 @@ token-efficiency instead of hoping agents behave.
 
 ### Removed
 
-- `crates/pidge/doc/ai-reference.md` — made obsolete by the new skill design (the SKILL.md now teaches discovery instead of bundling a static reference)
+- `crates/pidge/doc/ai-reference.md`, made obsolete by the new skill design (the SKILL.md now teaches discovery instead of bundling a static reference)
 - `pidge ai skill --reference` flag (see above)
 
 ## [0.2.0] - 2026-05-14
@@ -385,17 +393,17 @@ token-efficiency instead of hoping agents behave.
 - OAuth 2.0 device code sign-in for Microsoft 365 and personal Microsoft accounts (`pidge auth login`)
 - Multi-account support: `pidge auth list`, `pidge auth status`, `pidge auth logout`, `pidge auth default --send/--calendar`
 - Tokens stored in OS keychain (macOS Keychain, Windows Credential Manager, Linux libsecret)
-- `pidge inbox list` — list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, with both rich (default) and `-c`/`--compact` text rendering plus global `--json` output
+- `pidge inbox list`: list messages across all signed-in accounts, filterable by `--account`, `--unread`, `-n <limit>`, with both rich (default) and `-c`/`--compact` text rendering plus global `--json` output
 - One-time setup script `scripts/register-pidge-app.sh` for registering the pidge app in Entra
 - Global `--json` flag honored by `pidge inbox list`, `pidge auth list`, `pidge auth status`
 - `pidge inbox list` shows a stable 8-char short hash ID per message; cached at `~/.cache/pidge/messages.json` for substring lookup by future `pidge inbox show`
 - `pidge inbox list` rich layout: subject + 2-line preview, bold+magenta for unread, cyan for read; `--compact`/`-c` for the one-row-per-message style
 - URLs in subject and preview text are OSC 8 hyperlinks (clickable in modern terminals)
-- Cleaner table style — horizontal line under header only, no vertical borders
-- `pidge inbox show <fragment>` — substring-lookup a message by its 8-char short hash and display headers, body (HTML rendered via `html2text`), and attachment list
+- Cleaner table style: horizontal line under header only, no vertical borders
+- `pidge inbox show <fragment>`: substring-lookup a message by its 8-char short hash and display headers, body (HTML rendered via `html2text`), and attachment list
 - `pidge inbox show --mark-read` / `-r` to mark the message as read on the server after rendering
 - `pidge inbox show --show-images` to force inline image rendering for one invocation regardless of trust list
-- `pidge trust list/add/remove` — manage the trusted-senders list; inline images auto-render for trusted senders in image-capable terminals (Ghostty, Kitty, iTerm2) via the `viuer` crate
+- `pidge trust list/add/remove`: manage the trusted-senders list; inline images auto-render for trusted senders in image-capable terminals (Ghostty, Kitty, iTerm2) via the `viuer` crate
 - Trusted senders stored at `trusted_senders:` in `~/.config/pidge/config.yaml` (case-insensitive matching)
 - HTML body rendering rewritten on top of `html2text` rich + `raw_mode`: layout tables flatten to paragraphs, every `<a href>` span is wrapped inline with an OSC 8 hyperlink, `<img>` alt-text and tracking-pixel zero-width chars are suppressed, blank-line runs collapse to at most two
 - Link text inside the OSC 8 wrap is now styled with ANSI underline + cyan so it's identifiable at a glance without hovering (respects `--no-color` / `NO_COLOR`)

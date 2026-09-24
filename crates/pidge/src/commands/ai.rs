@@ -1,10 +1,10 @@
 //! AI feature management
 //!
-//! `pidge ai`         — show status
-//! `pidge ai test`    — test AI connection
-//! `pidge ai enable`  — enable AI for pidge
-//! `pidge ai disable` — disable AI for pidge
-//! `pidge ai config`  — interactive AI node configuration
+//! `pidge ai`:         show status
+//! `pidge ai test`:    test AI connection
+//! `pidge ai enable`:  enable AI for pidge
+//! `pidge ai disable`: disable AI for pidge
+//! `pidge ai config`:  interactive AI node configuration
 
 use anyhow::Result;
 

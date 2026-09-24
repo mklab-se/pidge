@@ -559,7 +559,7 @@ fn preview(account: &str, draft: &FullMessage, unconfirmed: &[String]) -> String
             .iter()
             .any(|a| a.eq_ignore_ascii_case(&r.address))
         {
-            s.push_str(" (matched from a recent sender, not your contacts — confirm the address)");
+            s.push_str(" (matched from a recent sender, not your contacts; confirm the address)");
         }
         s
     };
@@ -1185,7 +1185,7 @@ mod tests {
         assert!(
             out.contains(
                 "to: Bob Builder <bob@example.com>, Carol Sender <carol@example.com> \
-                 (matched from a recent sender, not your contacts — confirm the address)\n"
+                 (matched from a recent sender, not your contacts; confirm the address)\n"
             ),
             "{out}"
         );

@@ -1,8 +1,8 @@
-//! `pidge calendar search <query>` — substring search across calendar events.
+//! `pidge calendar search <query>`: substring search across calendar events.
 //!
 //! Microsoft Graph's `$search` parameter returns 501 on the `/me/events`
 //! resource, so we fetch the `calendarView` over a date window and filter
-//! client-side. Default window: 1 year back, 1 year forward — override with
+//! client-side. Default window: 1 year back, 1 year forward; override with
 //! `--from` / `--to` for narrower or wider searches.
 
 use anyhow::Result;
@@ -18,7 +18,7 @@ use crate::output::resolve_tz;
 
 /// Per-account fetch ceiling fed to `calendarView`. Searches operate over
 /// the resulting list client-side, so this caps how much history/lookahead
-/// any single account contributes — 500 events per ±1y window covers most
+/// any single account contributes: 500 events per ±1y window covers most
 /// personal calendars without ballooning latency.
 const PER_ACCOUNT_FETCH_CAP: usize = 500;
 

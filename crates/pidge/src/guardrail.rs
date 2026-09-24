@@ -1,7 +1,7 @@
 //! Guardrails: user-enforced policy over agent-initiated actions.
 //!
 //! The user sets, per action class, whether pidge should `allow` it (default),
-//! require interactive human confirmation (`confirm` — overrides `-y`), or
+//! require interactive human confirmation (`confirm`, overrides `-y`), or
 //! refuse outright (`deny`). Configured via
 //! `pidge config set guardrails.<class> <mode>`.
 
@@ -85,10 +85,10 @@ pub enum Gate {
 }
 
 /// The one call every mutating command makes before acting:
-/// evaluates guardrails (unless this is a dry run — dry-run reveals policy
+/// evaluates guardrails (unless this is a dry run: dry-run reveals policy
 /// instead of failing on it) and reports the dry-run decision.
 ///
-/// On `Gate::DryRun` the caller prints nothing else and returns — this
+/// On `Gate::DryRun` the caller prints nothing else and returns; this
 /// helper already printed the "would ..." report (human or JSON).
 pub fn gate(action: GuardrailAction, description: &str) -> anyhow::Result<Gate> {
     // Fail closed: an unreadable config must not turn `deny` into `allow`.
@@ -144,7 +144,7 @@ pub fn enforce(
                 });
             }
             let approved = inquire::Confirm::new(&format!(
-                "guardrail [{}]: {} — proceed?",
+                "guardrail [{}]: {}, proceed?",
                 action.key(),
                 description
             ))

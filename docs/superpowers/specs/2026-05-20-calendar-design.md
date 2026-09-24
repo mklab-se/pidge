@@ -1,4 +1,4 @@
-# `pidge calendar` — design
+# `pidge calendar`: design
 
 ## Goal
 
@@ -6,7 +6,7 @@ Give the user a full calendar surface in pidge: create, read, update,
 delete events; send and cancel invitations; reschedule; duplicate;
 move between calendars; create recurring events. Like the rest of
 pidge, the primary operator is an AI coding agent on the user's
-behalf — humans can run it directly, but the surface is shaped for
+behalf. Humans can run it directly, but the surface is shaped for
 flag-driven agent invocation.
 
 The driver is conversational scheduling: "schedule a meeting with X
@@ -25,7 +25,7 @@ leaving the terminal.
 | Time zones | **Local everywhere.** Display in the system's local TZ; inputs accept ISO with TZ, local ISO, date-only, time-only ("today, local"), and relative forms (`tomorrow 3pm`, `+2h`). `--tz <iana>` overrides for input and display. |
 | `calendar list` default window | **Today + next 7 days.** Explicit flags (`--today`, `--tomorrow`, `--week`, `--month`, `--from`/`--to`) override. |
 | Multi-calendar | **Default calendar implicit, `--calendar` overrides.** `calendar calendars` enumerates. `calendar move <hash> --to <name-or-id>` moves between. |
-| Namespace | **`pidge calendar`** — no `cal` alias in v1 to avoid two-ways-to-do-one-thing. |
+| Namespace | **`pidge calendar`**, no `cal` alias in v1 to avoid two-ways-to-do-one-thing. |
 
 ## Surface
 
@@ -167,11 +167,11 @@ that takes a `<hash>`.
 
 | pidge command | Graph endpoint |
 |---|---|
-| `calendar list` | `GET /me/calendarView?startDateTime=..&endDateTime=..` — expands recurrence instances within the window. |
+| `calendar list` | `GET /me/calendarView?startDateTime=..&endDateTime=..`: expands recurrence instances within the window. |
 | `calendar list --calendar X` | Same under `/me/calendars/{id}/calendarView`. |
 | `calendar show <hash>` | `GET /me/events/{id}?$expand=attendees`. |
 | `calendar search <q>` | `GET /me/events?$search="<q>"`. Returns relevance-ranked results, not date-ordered. |
-| `calendar new` | `POST /me/calendar/events` (or `/me/calendars/{id}/events`). Attendees + recurrence in same payload — Graph auto-sends invitations when attendees are present. |
+| `calendar new` | `POST /me/calendar/events` (or `/me/calendars/{id}/events`). Attendees + recurrence in same payload; Graph auto-sends invitations when attendees are present. |
 | `calendar edit` | `PATCH /me/events/{id}`. Use `sendUpdates` semantics: when `--no-notify`, set `responseRequested: false` and omit attendee changes that would trigger notification. |
 | `calendar move-time` | `PATCH /me/events/{id}` with `start` + `end` only. |
 | `calendar duplicate` | `GET /me/events/{id}` → strip ID + occurrence-specific fields → `POST /me/calendar/events`. Drops attendee response statuses (new event = fresh invites). |
@@ -181,37 +181,37 @@ that takes a `<hash>`.
 | `calendar rsvp` | `POST /me/events/{id}/accept` | `/tentativelyAccept` | `/decline` with `comment` and `sendResponse: bool`. |
 | `calendar calendars` | `GET /me/calendars`. |
 
-Auth: add `Calendars.ReadWrite` to the scope list. No new auth flow —
+Auth: add `Calendars.ReadWrite` to the scope list. No new auth flow:
 the existing device-code path picks up the new scope on next sign-in;
 existing tokens get a fresh refresh on first calendar command.
 
 Headers: every events request sends `Prefer: outlook.timezone="UTC"`
 so Graph returns timestamps in UTC regardless of the mailbox's
-preferred TZ — we own the display formatting, so a stable internal
+preferred TZ. We own the display formatting, so a stable internal
 zone is simpler than juggling Graph's per-account preference.
 
 ## Code layout
 
 ```
 crates/pidge-core/src/
-  event.rs                       (new) — types listed above
-  cache.rs                       (extend) — events table
+  event.rs                       (new): types listed above
+  cache.rs                       (extend): events table
   lib.rs                         (re-export)
 
 crates/pidge-client/src/
   graph/
-    events.rs                    (new) — list/get/create/update/delete/cancel/move/rsvp/search
-    calendars.rs                 (new) — list_calendars, calendar lookup by name
+    events.rs                    (new): list/get/create/update/delete/cancel/move/rsvp/search
+    calendars.rs                 (new): list_calendars, calendar lookup by name
     mod.rs                       (extend)
   auth/                          (extend scopes list)
 
 crates/pidge/src/
-  cli.rs                         (extend) — Calendar { command: CalendarCommands }
+  cli.rs                         (extend): Calendar { command: CalendarCommands }
                                             CalendarCommands enum
                                             CALENDAR_SUBCOMMAND_NAMES
   commands/
     mod.rs                       (register new modules)
-    calendar.rs                  (new) — dispatch
+    calendar.rs                  (new): dispatch
     calendar_list.rs
     calendar_show.rs
     calendar_search.rs
@@ -224,9 +224,9 @@ crates/pidge/src/
     calendar_move.rs
     calendar_rsvp.rs
     calendar_calendars.rs
-    calendar_fragment.rs         (new) — short-hash resolver
-    calendar_compose_form.rs     (new) — TUI wizard for new/edit
-    time.rs                      (new) — parse_when, format_when, DST tests
+    calendar_fragment.rs         (new): short-hash resolver
+    calendar_compose_form.rs     (new): TUI wizard for new/edit
+    time.rs                      (new): parse_when, format_when, DST tests
   main.rs                        (extend arg-preprocessor for calendar)
 ```
 
@@ -271,26 +271,26 @@ Microsoft Graph's default behaviour:
 pidge surfaces this with `--notify` / `--no-notify` on `edit`,
 `move-time`, and `rsvp`. Defaults: `--notify` when the event has
 attendees other than the organizer; otherwise no notification is sent
-either way. `cancel` always sends a notice (that's its whole point) —
+either way. `cancel` always sends a notice (that's its whole point);
 the equivalent silent action is `delete`.
 
 ## Error handling
 
 Concrete, actionable errors:
 
-- **Hash not found / ambiguous** — same UX as mail (`No event found for
-  fragment 'X'` / `Multiple events match 'X' — try a longer fragment`).
-- **Not the organizer** on `cancel` / `edit` — refuse with:
+- **Hash not found / ambiguous**: same UX as mail (`No event found for
+  fragment 'X'` / `Multiple events match 'X', try a longer fragment`).
+- **Not the organizer** on `cancel` / `edit`: refuse with:
   `You're not the organizer of "<title>". Use 'rsvp --decline' to remove
   yourself, or 'delete' to drop the event from your calendar without
   notifying anyone.`
-- **Recurrence on an occurrence-targeted mutating call** — prompt
+- **Recurrence on an occurrence-targeted mutating call**: prompt
   (interactive) or default to *occurrence* with `-y`, `--series` to opt
   in.
-- **No write permission on calendar** — `Calendar "<name>" is read-only
+- **No write permission on calendar**: `Calendar "<name>" is read-only
   on this account. Try --calendar to pick a different one.`
-- **Time parse failure** — show the parser's hint plus accepted forms.
-- **Graph errors** — bubble status + truncated body, like every other
+- **Time parse failure**: show the parser's hint plus accepted forms.
+- **Graph errors**: bubble status + truncated body, like every other
   command.
 
 ## AI skill (`pidge ai skill --emit`)
@@ -302,7 +302,7 @@ The emitted `SKILL.md` gets a new `## Calendar` section teaching the agent:
 - **Two-step pattern** for "what time is my X meeting": run
   `calendar search` or `calendar list --json --week`, then
   `calendar show <hash>` for details. Same pattern as mail.
-- **Disambiguate attendees** before invoking pidge — if the user said
+- **Disambiguate attendees** before invoking pidge: if the user said
   "John", confirm John's e-mail with the user; do not invent one.
   pidge does not look up names.
 - **Cancel vs delete**: `cancel` for events with attendees (sends a
@@ -319,7 +319,7 @@ The emitted `SKILL.md` gets a new `## Calendar` section teaching the agent:
 
 **Unit / parser tests** (in `pidge-client` and `pidge-core`):
 
-- `parse_when` — every time-string form (ISO, date-only, time-only,
+- `parse_when`: every time-string form (ISO, date-only, time-only,
   relative, weekday names) including DST-boundary days.
 - `RecurrencePattern` ↔ Graph `recurrence` JSON serialization
   round-trips for daily/weekly/monthly/yearly with each `range` variant.
@@ -345,7 +345,7 @@ The emitted `SKILL.md` gets a new `## Calendar` section teaching the agent:
   meeting with Teams URL.
 
 **JSON-output tests:** `calendar list --json`, `calendar show --json`,
-`calendar calendars --json` produce stable shapes for AI agents —
+`calendar calendars --json` produce stable shapes for AI agents;
 assert structure, not content.
 
 **Manual tests:** New `MANUAL_TESTS.md` section covering: schedule a
@@ -355,17 +355,17 @@ calendars.
 
 ## Out of scope for v1
 
-- **Reminders** (`reminderMinutesBeforeStart`) — easy follow-up.
-- **Free/busy queries across users** (Graph `findMeetingTimes`) —
+- **Reminders** (`reminderMinutesBeforeStart`): easy follow-up.
+- **Free/busy queries across users** (Graph `findMeetingTimes`):
   separate spec; would unlock AI-driven slot-finding.
-- **Recurrence exceptions beyond occurrence-vs-series** — adding skip
+- **Recurrence exceptions beyond occurrence-vs-series**: adding skip
   days or modifying multiple instances at once.
 - **Categories / colour assignment.**
 - **Importance / sensitivity / privacy flags.**
-- **Bulk operations** (`calendar delete --older-than 6m`) — add-on later.
-- **Tasks / To Do** — different Graph surface, separate feature.
+- **Bulk operations** (`calendar delete --older-than 6m`): add-on later.
+- **Tasks / To Do**: different Graph surface, separate feature.
 - **Outlook calendar sharing / publishing.**
-- **Address-book / contacts surface** — explicitly deferred; AI passes
+- **Address-book / contacts surface**: explicitly deferred; AI passes
   e-mails.
 
 ## Open questions

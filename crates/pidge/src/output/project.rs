@@ -30,7 +30,7 @@ pub fn emit_json(mut value: Value) -> anyhow::Result<()> {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("unknown field '{field}' — valid fields: {valid}")]
+#[error("unknown field '{field}'; valid fields: {valid}")]
 pub struct UnknownField {
     pub field: String,
     pub valid: String,

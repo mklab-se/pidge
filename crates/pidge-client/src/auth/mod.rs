@@ -116,7 +116,7 @@ impl AuthClient {
     }
 
     /// Redeem an authorization code delivered to `redirect_uri` for tokens.
-    /// Nothing is stored — call [`Self::store_tokens`] once the caller has
+    /// Nothing is stored; call [`Self::store_tokens`] once the caller has
     /// decided which account the tokens belong to.
     pub async fn exchange_code(
         &self,
@@ -135,7 +135,7 @@ impl AuthClient {
         .await
     }
 
-    /// Construct an AuthClient against a specific authority — for tests with wiremock.
+    /// Construct an AuthClient against a specific authority, for tests with wiremock.
     pub fn for_test(client_id: impl Into<String>, authority_base: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -150,7 +150,7 @@ impl AuthClient {
     /// one-shot localhost HTTP server for the redirect callback.
     ///
     /// `on_authorize_url_ready` receives the constructed `/authorize` URL
-    /// once the local listener is bound and the URL is built — the caller
+    /// once the local listener is bound and the URL is built. The caller
     /// is responsible for printing it to the user and (best-effort) opening
     /// the browser.
     ///
@@ -176,7 +176,7 @@ impl AuthClient {
     }
 
     /// Get a valid (un-expired) access token for an email, refreshing if necessary.
-    /// Returns `ClientError::SessionExpired` if the refresh fails — caller should
+    /// Returns `ClientError::SessionExpired` if the refresh fails; the caller should
     /// prompt the user to `pidge auth login` again for that account.
     ///
     /// Tokens come from the configured [`TokenBackend`]. The default,

@@ -1,4 +1,4 @@
-# pidge foundation — repository scaffold
+# pidge foundation: repository scaffold
 
 **Status:** Approved 2026-05-13
 **Goal:** Establish the initial `pidge` repository with the same shape, AI integration, and release pipeline as the sibling MKLab CLIs (`ailloy`, `rigg`, `mdeck`, `cosq`), shipping `0.1.0` to crates.io and Homebrew with **no email/calendar feature commands yet**.
@@ -140,7 +140,7 @@ pkg-fmt = "tgz"
 pkg-fmt = "zip"
 ```
 
-**Crate-name note:** User has confirmed `pidge` is available on crates.io. If reservation fails at publish time, project halts and is renamed — there is no fallback name in this design.
+**Crate-name note:** User has confirmed `pidge` is available on crates.io. If reservation fails at publish time, project halts and is renamed; there is no fallback name in this design.
 
 ## CLI surface (foundation)
 
@@ -166,7 +166,7 @@ pidge version
 ## Module responsibilities
 
 ### `main.rs`
-- `clap_complete::CompleteEnv::with_factory(Cli::command).complete()` first — handles `COMPLETE=<shell> pidge` dynamic completions.
+- `clap_complete::CompleteEnv::with_factory(Cli::command).complete()` first, which handles `COMPLETE=<shell> pidge` dynamic completions.
 - Parse `Cli` with `clap`.
 - Initialize `tracing_subscriber` with filter derived from `verbose`/`quiet`: `pidge=info` (default), `pidge=debug` (-v), `pidge=trace` (-vv), `error` (--quiet).
 - Disable colors if `--no-color` is set: `colored::control::set_override(false)`.
@@ -197,7 +197,7 @@ pidge version
 - `doc/ai-reference.md` ships a short stub with the same message plus a pointer to the repo README. The file must exist or compilation fails (`include_str!`).
 
 ### `banner.rs`
-- `const LOGO` is a 5-letter ASCII block "PIDGE" (same family as cosq's `COSQ` art — block-letter style with `█`/`╔╗╚╝═║` etc.).
+- `const LOGO` is a 5-letter ASCII block "PIDGE" (same family as cosq's `COSQ` art: block-letter style with `█`/`╔╗╚╝═║` etc.).
 - `print_banner()` prints the logo with `colored::Colorize::bold()`.
 - `print_banner_with_version()` adds the subtitle line "A fast CLI for e-mail and calendar v{CARGO_PKG_VERSION}" in `dimmed()`.
 - Unit tests assert the logo is non-empty and has 6 visible lines (mirrors cosq).
@@ -213,33 +213,33 @@ pidge version
 ## `.claude/skills/release/SKILL.md`
 
 Direct adaptation of cosq's release skill. The differences from cosq's version:
-- **Step 4 (Bump version numbers)** has only one bullet — update `version` in `[workspace.package]`. No internal-crate dependency bumps because the workspace has a single member.
-- **Step 5 (Update documentation)** lists `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `INSTALL.md` and explicitly notes that the README's installation snippet (brew/cargo) doesn't need version edits — only the changelog gains a dated entry.
+- **Step 4 (Bump version numbers)** has only one bullet: update `version` in `[workspace.package]`. No internal-crate dependency bumps because the workspace has a single member.
+- **Step 5 (Update documentation)** lists `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `INSTALL.md` and explicitly notes that the README's installation snippet (brew/cargo) doesn't need version edits; only the changelog gains a dated entry.
 - Frontmatter, command name (`/release`), argument-hint (`<major|minor|patch>`), and all other steps are identical to cosq's.
 
 ## GitHub workflows
 
 ### `.github/workflows/ci.yml`
 Direct copy of cosq's `ci.yml`. Four jobs on `push: [main]` and `pull_request: [main]`:
-1. `check` — `cargo check --workspace`
-2. `test` — `cargo test --workspace`
-3. `clippy` — `cargo clippy --workspace -- -D warnings`
-4. `format` — `cargo fmt --all -- --check`
+1. `check`: `cargo check --workspace`
+2. `test`: `cargo test --workspace`
+3. `clippy`: `cargo clippy --workspace -- -D warnings`
+4. `format`: `cargo fmt --all -- --check`
 
 All use `actions/checkout@v5`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`.
 
 ### `.github/workflows/release.yml`
 Direct copy of cosq's `release.yml`, with the following adjustments:
 1. Every `cosq` literal → `pidge` (archive names, binary names, formula class name, formula filename in homebrew-tap).
-2. The `crates-io` job has a **single** publish step — `cargo publish -p pidge` — with no inter-crate `sleep`s. The `cosq-core` and `cosq-client` pre-steps are removed entirely.
+2. The `crates-io` job has a **single** publish step (`cargo publish -p pidge`) with no inter-crate `sleep`s. The `cosq-core` and `cosq-client` pre-steps are removed entirely.
 3. The `homebrew` job retains the "create-if-missing" branch (cosq's workflow already has this) so the first `v*` tag automatically creates `homebrew-tap/Formula/pidge.rb`.
 
 Jobs (in order, after the trigger `push: tags: ["v*"]`):
-- `ci` — same four checks as `ci.yml`.
-- `build` — matrix over `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`. Produces `pidge-v{TAG}-{TARGET}.{tar.gz|zip}` artifacts.
-- `github-release` — `softprops/action-gh-release@v2` with `generate_release_notes: true`.
-- `homebrew` — needs `github-release`. Downloads the three Unix tarballs, computes SHA256, generates `Formula/pidge.rb`, PUTs it to `mklab-se/homebrew-tap` via `gh api` (using `HOMEBREW_TAP_TOKEN`).
-- `crates-io` — needs `ci`. Runs `cargo publish -p pidge` with `CARGO_REGISTRY_TOKEN` from the `crates-io` environment.
+- `ci`: same four checks as `ci.yml`.
+- `build`: matrix over `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`. Produces `pidge-v{TAG}-{TARGET}.{tar.gz|zip}` artifacts.
+- `github-release`: `softprops/action-gh-release@v2` with `generate_release_notes: true`.
+- `homebrew`: needs `github-release`. Downloads the three Unix tarballs, computes SHA256, generates `Formula/pidge.rb`, PUTs it to `mklab-se/homebrew-tap` via `gh api` (using `HOMEBREW_TAP_TOKEN`).
+- `crates-io`: needs `ci`. Runs `cargo publish -p pidge` with `CARGO_REGISTRY_TOKEN` from the `crates-io` environment.
 
 ### Required repository secrets / environments
 - **Secret `HOMEBREW_TAP_TOKEN`** (repo-level, `pidge` repo): PAT with `repo` scope for `mklab-se/homebrew-tap`. Reuse the token already provisioned for cosq/rigg/mdeck.
@@ -277,7 +277,7 @@ Direct copy of cosq's, with name swap.
 Direct copy of cosq's, with name swap and any Cosmos-specific examples removed.
 
 ### `.gitignore`
-Extend the existing rust-template `.gitignore` with the editor/OS lines from cosq: `.idea/`, `.vscode/`, `*.swp`, `*.swo`, `*~`, `.DS_Store`, `Thumbs.db`, `*.log`, `coverage/`. Do **not** add a `pidge.yaml` ignore — there is no project config file yet.
+Extend the existing rust-template `.gitignore` with the editor/OS lines from cosq: `.idea/`, `.vscode/`, `*.swp`, `*.swo`, `*~`, `.DS_Store`, `Thumbs.db`, `*.log`, `coverage/`. Do **not** add a `pidge.yaml` ignore; there is no project config file yet.
 
 ## Versioning & release sequencing
 

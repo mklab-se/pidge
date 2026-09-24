@@ -1,4 +1,4 @@
-//! Minimal JWT decoder — extracts the `tid` (tenant_id) and `oid` (object id)
+//! Minimal JWT decoder: extracts the `tid` (tenant_id) and `oid` (object id)
 //! claims from id_tokens.
 //!
 //! We don't verify the signature: we trust the token because we just received it

@@ -1,4 +1,4 @@
-//! `pidge mcp status [url]` — show the current hosted MCP session: which
+//! `pidge mcp status [url]`: show the current hosted MCP session: which
 //! server, when its access token expires, which backend it's stored under,
 //! then the live `accounts_list` text for that session.
 //!
@@ -28,7 +28,7 @@ pub async fn run(
 ) -> Result<()> {
     // `McpTokenStore::list` is only consulted when actually needed: to
     // resolve which server a url-less call means, or (when a url is given)
-    // to seed the `--store` preference from what the index already knows —
+    // to seed the `--store` preference from what the index already knows,
     // never for its own sake, and never twice for the same run.
     let (server_url, preferred) = match url {
         Some(u) => {
@@ -97,7 +97,7 @@ pub async fn run(
 
 /// Initialize the session and fetch `accounts_list`'s text. A `401` on
 /// either step (the locally-held token looked fresh, but the server had
-/// already revoked it — see [`RefreshingRpc::initialize`]) surfaces as
+/// already revoked it; see [`RefreshingRpc::initialize`]) surfaces as
 /// [`ClientError::SessionExpired`], which the caller remaps the same way as
 /// [`session_or_error`]'s `Expired` case.
 async fn accounts_list(rpc: &mut RefreshingRpc) -> Result<String> {
@@ -106,7 +106,7 @@ async fn accounts_list(rpc: &mut RefreshingRpc) -> Result<String> {
 }
 
 /// Turn a [`SessionLookup`] into `status`'s outcome: the found session, or a
-/// typed error for the other two cases — [`ClientError::SessionExpired`]
+/// typed error for the other two cases: [`ClientError::SessionExpired`]
 /// for `Expired` (so the shared `remap_session_expired` at the call site
 /// turns it into the `pidge mcp connect <url>` hint and exit code 3) and
 /// [`McpUsageError::NotConnected`] for `Absent` (exit code 4). Pure and
@@ -144,7 +144,7 @@ fn resolve_default_server(servers: &[StoredServer]) -> ServerResolution {
 }
 
 /// Build [`McpUsageError::AmbiguousServer`] for `list`, with `example` a
-/// complete, ready-to-run command using the first listed server — `command`
+/// complete, ready-to-run command using the first listed server; `command`
 /// is the caller's own name (`"pidge mcp status"`) rather than hard-coded,
 /// so the message stays correct if another url-less subcommand grows this
 /// same resolution later.
@@ -158,7 +158,7 @@ fn ambiguous_server_error(list: &[StoredServer], command: &str) -> anyhow::Error
     McpUsageError::AmbiguousServer { servers, example }.into()
 }
 
-/// "in 45m" for a future `target`, "3h ago" for a past one — used for token
+/// "in 45m" for a future `target`, "3h ago" for a past one; used for token
 /// expiry, which is usually future (the session was just validated/
 /// refreshed) but can be in the past for an already-expired stored token
 /// before that's discovered.

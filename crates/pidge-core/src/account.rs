@@ -1,4 +1,4 @@
-//! Account types — represents a single Microsoft account signed into pidge.
+//! Account types: represents a single Microsoft account signed into pidge.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Where pidge stores OAuth tokens for an account.
 ///
 /// `Keychain` is the OS-native credential store (macOS Keychain, Windows
-/// Credential Manager, Linux libsecret) — encrypted, OS-managed access control.
+/// Credential Manager, Linux libsecret): encrypted, OS-managed access control.
 /// `File` is a JSON file at `~/.config/pidge/tokens/<email>.json` with mode 0600
 /// (user-only read/write). The file backend is useful for headless or dev
 /// scenarios where the keychain prompts are friction, but it stores refresh
@@ -21,7 +21,7 @@ pub enum TokenStorage {
 
 /// A signed-in Microsoft account.
 ///
-/// This is metadata only — no tokens. Tokens live in the OS keychain
+/// This is metadata only, no tokens. Tokens live in the OS keychain
 /// or in a per-account file at `~/.config/pidge/tokens/<email>.json`,
 /// keyed by `email`. The `storage` field tells pidge which backend to look in.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ impl Account {
         self.tenant_id == Self::PERSONAL_MSA_TENANT
     }
 
-    /// A short human label for the tenant — "personal MSA" for MSA, GUID prefix
+    /// A short human label for the tenant: "personal MSA" for MSA, GUID prefix
     /// otherwise. Returns "(unknown)" when the tenant_id is empty (e.g. an
     /// account added before pidge requested the `openid` scope; gets
     /// auto-backfilled on the next Graph call).
@@ -71,7 +71,7 @@ impl Account {
         }
     }
 
-    /// Machine-readable provider identifier — used in `--json` output and any
+    /// Machine-readable provider identifier, used in `--json` output and any
     /// future config-file lookups. Stays stable as labels change.
     pub fn provider_id(&self) -> &'static str {
         if self.is_personal() {

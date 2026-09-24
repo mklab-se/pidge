@@ -149,7 +149,7 @@ pub struct EventsPage {
     pub next_link: Option<String>,
 }
 
-/// What the caller is sending — pre-Graph-serialization shape for create/update.
+/// What the caller is sending: pre-Graph-serialization shape for create/update.
 #[derive(Debug, Clone)]
 pub struct NewEvent {
     pub subject: String,
@@ -198,7 +198,7 @@ impl NewEvent {
         // `format_graph_dt` emits the *UTC* clock for `start`/`end`, so the
         // accompanying `timeZone` MUST be "UTC". Labelling a UTC clock with a
         // local zone (e.g. self.tz = "Europe/Stockholm") makes Graph
-        // re-interpret it as local time and shift it again — a double
+        // re-interpret it as local time and shift it again, a double
         // conversion that stored events hours off. `self.tz` records the
         // zone the event was scheduled in but must not relabel the clock.
         let mut v = serde_json::json!({
@@ -512,7 +512,7 @@ pub async fn create_event(
         })
 }
 
-/// PATCH /me/events/{id} — overwrite editable fields.
+/// PATCH /me/events/{id}: overwrite editable fields.
 pub async fn update_event(
     http: &reqwest::Client,
     base_url: &str,
@@ -530,7 +530,7 @@ pub async fn update_event(
     bubble_no_body(resp).await
 }
 
-/// PATCH /me/events/{id} — change only start + end.
+/// PATCH /me/events/{id}: change only start + end.
 pub async fn move_time(
     http: &reqwest::Client,
     base_url: &str,
@@ -550,7 +550,7 @@ pub async fn move_time(
     bubble_no_body(resp).await
 }
 
-/// DELETE /me/events/{id} — silent removal (no attendee notification).
+/// DELETE /me/events/{id}: silent removal (no attendee notification).
 pub async fn delete_event(
     http: &reqwest::Client,
     base_url: &str,
@@ -562,7 +562,7 @@ pub async fn delete_event(
     bubble_no_body(resp).await
 }
 
-/// POST /me/events/{id}/cancel — organizer-only; sends cancellation notices.
+/// POST /me/events/{id}/cancel: organizer-only; sends cancellation notices.
 pub async fn cancel_event(
     http: &reqwest::Client,
     base_url: &str,
@@ -612,7 +612,7 @@ pub async fn rsvp_event(
     bubble_no_body(resp).await
 }
 
-/// PATCH /me/events/{id} — move event to a different calendar by binding
+/// PATCH /me/events/{id}: move event to a different calendar by binding
 /// the navigation property to the destination calendar's URL.
 pub async fn move_event_to_calendar(
     http: &reqwest::Client,
@@ -902,7 +902,7 @@ mod tests {
         // Regression: a 10:00 Europe/Stockholm booking parses to 08:00Z.
         // `format_graph_dt` emits the UTC clock ("08:00:00"), so the payload
         // MUST label it "UTC". Labelling it "Europe/Stockholm" makes Graph
-        // re-interpret 08:00 as local time = 06:00Z — a double conversion
+        // re-interpret 08:00 as local time = 06:00Z, a double conversion
         // that stored the Fotografiska course two hours early.
         let v = sample_event("Europe/Stockholm").to_graph_json();
         assert_eq!(v["start"]["dateTime"], "2026-07-01T08:00:00");

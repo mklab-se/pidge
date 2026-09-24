@@ -2,14 +2,14 @@
 //!
 //! Two paths through each command:
 //!
-//! 1. **Wizard** (default) — `inquire` prompts walk the user through To, Cc,
+//! 1. **Wizard** (default): `inquire` prompts walk the user through To, Cc,
 //!    Bcc, Subject, and body, then show a summary and a final yes/no Confirm.
-//! 2. **Power-user / scripting** — pass every value as a flag; with `-y` the
+//! 2. **Power-user / scripting**: pass every value as a flag; with `-y` the
 //!    confirmation is skipped too.
 //!
 //! Bodies are plain text (HTML composition is out of scope until drafts in
 //! Phase 4). Reply and forward send a "comment" that Graph prepends to its
-//! auto-generated quote of the original — i.e. we never compose the quoted
+//! auto-generated quote of the original, i.e. we never compose the quoted
 //! text ourselves; Graph owns that.
 //!
 //! Safety:
@@ -46,7 +46,7 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
     // Non-interactive scripting path: if every required field is on the
     // command line and `--confirm` wasn't requested, send straight through
     // without launching the TUI. This is the common path for scripts and
-    // one-liners — the user already spelled out the whole message, no
+    // one-liners; the user already spelled out the whole message, no
     // need for a review step they didn't ask for.
     let fully_specified = !args.to.is_empty()
         && args.subject.is_some()
@@ -96,7 +96,7 @@ pub async fn send(args: ComposeArgs) -> Result<()> {
     }
 }
 
-/// Push a fully-specified compose through Graph — either send-and-go or
+/// Push a fully-specified compose through Graph, either send-and-go or
 /// create-draft (then either send or stop). Shared by the non-interactive
 /// path and the TUI's `Send` / `Draft` outcomes.
 async fn send_or_draft(from: &str, c: compose_form::Compose, save_as_draft: bool) -> Result<()> {
@@ -226,7 +226,7 @@ pub async fn reply(fragment: String, args: ReplyArgs, reply_all: bool) -> Result
     );
     println!("{} {}", "From:".bold(), from);
     if body.trim().is_empty() {
-        println!("{} (none — only Graph's auto-quote)", "Comment:".bold());
+        println!("{} (none; only Graph's auto-quote)", "Comment:".bold());
     } else {
         let preview: String = body.lines().take(3).collect::<Vec<_>>().join("\n");
         println!("{}\n{}", "Comment:".bold(), preview);
@@ -325,7 +325,7 @@ pub async fn forward(fragment: String, args: ForwardArgs) -> Result<()> {
     println!("{} {}", "From:".bold(), from);
     println!("{} {}", "To:".bold(), to.join(", "));
     if body.trim().is_empty() {
-        println!("{} (none — only Graph's auto-quote)", "Comment:".bold());
+        println!("{} (none; only Graph's auto-quote)", "Comment:".bold());
     } else {
         let preview: String = body.lines().take(3).collect::<Vec<_>>().join("\n");
         println!("{}\n{}", "Comment:".bold(), preview);
@@ -412,7 +412,7 @@ fn collect_addresses(label: &str, provided: Vec<String>, required: bool) -> Resu
         let help = if required {
             "Comma-separated e-mail addresses"
         } else {
-            "Comma-separated e-mail addresses. Optional — leave empty to skip"
+            "Comma-separated e-mail addresses. Optional; leave empty to skip"
         };
         Text::new(&format!("{label}:"))
             .with_help_message(help)
@@ -448,7 +448,7 @@ fn collect_addresses(label: &str, provided: Vec<String>, required: bool) -> Resu
 /// Resolve the body text. Precedence (highest first):
 /// 1. `--body "text"`
 /// 2. `--body-file path` (or `-` for stdin)
-/// 3. Interactive — open the in-pidge multi-line editor; user can press
+/// 3. Interactive: open the in-pidge multi-line editor; user can press
 ///    Ctrl-X from inside it to hand off to `$EDITOR` (nano, vim, code …).
 fn resolve_body(
     inline: Option<String>,

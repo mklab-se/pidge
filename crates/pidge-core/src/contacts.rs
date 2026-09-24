@@ -12,13 +12,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
 
-/// One person known to pidge — collapsed from one or more mail / calendar
+/// One person known to pidge, collapsed from one or more mail / calendar
 /// observations of the same lowercase email address.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Contact {
     /// Canonical lowercase address. Used as the cache key.
     pub email: String,
-    /// Display name as last observed. Empty until we see one — once set,
+    /// Display name as last observed. Empty until we see one; once set,
     /// it is only replaced by another non-empty observation.
     #[serde(default)]
     pub display_name: String,
@@ -132,7 +132,7 @@ impl ContactsCache {
     /// Resolve a token the way the MCP surface does: names don't need the
     /// CLI's `@` prefix convention. A token containing `@` followed by a
     /// `.` in the domain part is treated as a literal address; anything
-    /// else — with or without a leading `@` — is looked up as a name.
+    /// else (with or without a leading `@`) is looked up as a name.
     pub fn resolve_any(&self, token: &str) -> ResolveOutcome {
         let t = token.trim();
         let looks_like_address = t.split_once('@').is_some_and(|(_, d)| d.contains('.'));
@@ -171,7 +171,7 @@ pub enum ResolveOutcome {
 ///   substring match runs over the email, its local-part, and the display
 ///   name.
 ///
-/// Multi-match resolution **errors** rather than prompting — the agent-first
+/// Multi-match resolution **errors** rather than prompting; the agent-first
 /// CLI design prefers deterministic failure with the candidate list over
 /// interactive picking that breaks scripting.
 pub fn resolve_one(token: &str, cache: &ContactsCache) -> ResolveOutcome {

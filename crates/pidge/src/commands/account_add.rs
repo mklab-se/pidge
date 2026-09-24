@@ -1,4 +1,4 @@
-//! `pidge account add` — sign in to a new Microsoft account via OAuth
+//! `pidge account add`: sign in to a new Microsoft account via OAuth
 //! authorization-code + PKCE with a one-shot localhost HTTP server.
 
 use anyhow::{Context, Result};
@@ -42,7 +42,7 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
         .await
         .context("browser sign-in failed")?;
 
-    // Tenant from id_token (when present — Microsoft only returns id_token
+    // Tenant from id_token (when present; Microsoft only returns id_token
     // if the `openid` scope was requested or as part of certain flows).
     let tenant_id = success
         .id_token
@@ -50,7 +50,7 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
         .and_then(extract_tenant_id)
         .unwrap_or_default();
 
-    // Identity from Graph /me — same as before; this is what teaches us the
+    // Identity from Graph /me, same as before; this is what teaches us the
     // user's actual e-mail address so we can key the cached tokens by it.
     let graph = pidge_client::GraphClient::new(auth)?;
     let me = graph

@@ -71,7 +71,7 @@ git commit -m "Add html2text, viuer, image, humansize deps for inbox show"
 
 ---
 
-## Task 2: `pidge-core::message` — `FullMessage` + `Attachment` types
+## Task 2: `pidge-core::message`: `FullMessage` + `Attachment` types
 
 **Files:**
 - Modify: `crates/pidge-core/src/message.rs`
@@ -110,7 +110,7 @@ pub enum BodyContentType {
     Html,
 }
 
-/// An attachment listed on a message. Bytes are NOT included — fetch separately
+/// An attachment listed on a message. Bytes are NOT included; fetch separately
 /// via `GraphClient::get_attachment_bytes(account, message_id, attachment.id)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attachment {
@@ -208,7 +208,7 @@ git commit -m "Add pidge-core FullMessage and Attachment types"
 
 ---
 
-## Task 3: `pidge-core::config` — trusted_senders field + methods
+## Task 3: `pidge-core::config`: trusted_senders field + methods
 
 **Files:**
 - Modify: `crates/pidge-core/src/config.rs`
@@ -345,7 +345,7 @@ git commit -m "Add trusted_senders field and case-insensitive helpers to Config"
 
 ---
 
-## Task 4: `pidge-client::graph::mail` — `get_message` function
+## Task 4: `pidge-client::graph::mail`: `get_message` function
 
 **Files:**
 - Modify: `crates/pidge-client/src/graph/mail.rs`
@@ -390,7 +390,7 @@ struct GraphBody {
 Append to `mail.rs` after the existing `list_inbox` function:
 
 ```rust
-/// GET /me/messages/{id} — fetch a single message with full body.
+/// GET /me/messages/{id}: fetch a single message with full body.
 pub async fn get_message(
     http: &reqwest::Client,
     base_url: &str,
@@ -514,7 +514,7 @@ git commit -m "Add Graph get_message returning FullMessage"
 
 ---
 
-## Task 5: `pidge-client::graph::mail` — `list_attachments`, `get_attachment_bytes`, `mark_read`
+## Task 5: `pidge-client::graph::mail`: `list_attachments`, `get_attachment_bytes`, `mark_read`
 
 **Files:**
 - Modify: `crates/pidge-client/src/graph/mail.rs`
@@ -558,8 +558,8 @@ struct GraphAttachment {
 Append to `mail.rs`:
 
 ```rust
-/// GET /me/messages/{id}/attachments — list attachments without fetching bytes.
-/// Filters to file attachments only (item attachments — emails-with-emails-attached — are
+/// GET /me/messages/{id}/attachments: list attachments without fetching bytes.
+/// Filters to file attachments only (item attachments, emails-with-emails-attached, are
 /// rare and not supported here).
 pub async fn list_attachments(
     http: &reqwest::Client,
@@ -607,7 +607,7 @@ pub async fn list_attachments(
 Append to `mail.rs`:
 
 ```rust
-/// GET /me/messages/{id}/attachments/{attachment_id} — fetch a single attachment
+/// GET /me/messages/{id}/attachments/{attachment_id}: fetch a single attachment
 /// with its base64 contentBytes. Returns the decoded bytes.
 pub async fn get_attachment_bytes(
     http: &reqwest::Client,
@@ -646,7 +646,7 @@ pub async fn get_attachment_bytes(
 Append to `mail.rs`:
 
 ```rust
-/// PATCH /me/messages/{id} — mark the message as read.
+/// PATCH /me/messages/{id}: mark the message as read.
 pub async fn mark_read(
     http: &reqwest::Client,
     base_url: &str,
@@ -761,7 +761,7 @@ git commit -m "Add Graph list_attachments, get_attachment_bytes, and mark_read"
 
 ---
 
-## Task 6: `pidge-client::GraphClient` — wrapper methods
+## Task 6: `pidge-client::GraphClient`: wrapper methods
 
 **Files:**
 - Modify: `crates/pidge-client/src/graph/mod.rs`
@@ -830,7 +830,7 @@ git commit -m "Add GraphClient wrapper methods for get_message, list_attachments
 
 ---
 
-## Task 7: CLI definitions — `Show` and `Trust`
+## Task 7: CLI definitions: `Show` and `Trust`
 
 **Files:**
 - Modify: `crates/pidge/src/cli.rs`
@@ -899,7 +899,7 @@ Still in `cli.rs`, find the `match self.command { … }` block in `impl Cli`. Ad
             }
 ```
 
-The existing `Inbox` arm already calls `crate::commands::inbox::run(command, self.json).await` — no change needed there. The inbox.rs dispatcher will handle the new `Show` variant in Task 8.
+The existing `Inbox` arm already calls `crate::commands::inbox::run(command, self.json).await`; no change needed there. The inbox.rs dispatcher will handle the new `Show` variant in Task 8.
 
 - [ ] **Step 4: Declare new modules in `commands/mod.rs`**
 
@@ -927,7 +927,7 @@ pub mod trust;
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/inbox_show.rs`:
 
 ```rust
-//! `pidge inbox show` — display a single message.
+//! `pidge inbox show`: display a single message.
 
 use anyhow::Result;
 
@@ -947,7 +947,7 @@ pub async fn run(
 Create `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/trust.rs`:
 
 ```rust
-//! `pidge trust ...` — manage the trusted-senders list.
+//! `pidge trust ...`: manage the trusted-senders list.
 
 use anyhow::Result;
 
@@ -996,9 +996,9 @@ Run: `cargo run -q -- trust --help`
 Expected: lists `list`, `add`, `remove` subcommands.
 
 Run: `cargo run -q -- trust list 2>&1`
-Expected: panic with the `unimplemented!()` message — that's intentional. The implementations land in Tasks 9 and 10. Don't worry about this output yet.
+Expected: panic with the `unimplemented!()` message; that's intentional. The implementations land in Tasks 9 and 10. Don't worry about this output yet.
 
-Actually skip running `trust list` — clippy with `-D warnings` may not let `unimplemented!()` slide through dead-code checks in certain configurations. Verify build only.
+Actually skip running `trust list`: clippy with `-D warnings` may not let `unimplemented!()` slide through dead-code checks in certain configurations. Verify build only.
 
 - [ ] **Step 9: Commit**
 
@@ -1019,7 +1019,7 @@ git commit -m "Add pidge inbox show + trust CLI definitions with placeholder mod
 Overwrite `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/trust.rs` with:
 
 ```rust
-//! `pidge trust ...` — manage the trusted-senders list.
+//! `pidge trust ...`: manage the trusted-senders list.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -1120,7 +1120,7 @@ git commit -m "Implement pidge trust list/add/remove"
 
 ---
 
-## Task 9: `inbox_show.rs` implementation — first pass (text/json without images)
+## Task 9: `inbox_show.rs` implementation: first pass (text/json without images)
 
 **Files:**
 - Modify: `crates/pidge/Cargo.toml`
@@ -1142,7 +1142,7 @@ humansize.workspace = true
 Overwrite `/Users/kristofer/repos/mklab-se/pidge/crates/pidge/src/commands/inbox_show.rs` with:
 
 ```rust
-//! `pidge inbox show <fragment>` — display a single message with full body.
+//! `pidge inbox show <fragment>`: display a single message with full body.
 
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Local, Utc};
@@ -1518,7 +1518,7 @@ Replace the `render_text` call site in `run` with:
     }
 ```
 
-Wait — the existing `render_text` already prints the attachment list at the bottom. We want the inline images block to appear BEFORE the regular attachments list. Restructure: split `render_text` into `render_header_and_body` and `render_attachments`, and call them with the inline-images block in between.
+Wait, the existing `render_text` already prints the attachment list at the bottom. We want the inline images block to appear BEFORE the regular attachments list. Restructure: split `render_text` into `render_header_and_body` and `render_attachments`, and call them with the inline-images block in between.
 
 Update `render_text` and add new functions. Replace the existing `render_text` function with these:
 
@@ -1601,7 +1601,7 @@ async fn render_inline_images_block(
                 }
             }
             Err(e) => {
-                eprintln!("  [image: {} — fetch failed: {e}]", att.name);
+                eprintln!("  [image: {}, fetch failed: {e}]", att.name);
             }
         }
     }
@@ -1639,7 +1639,7 @@ Then in `run`, replace the `render_text(&full, &attachments)?;` line with:
         render_attachments_block(&attachments)?;
 ```
 
-The existing standalone `render_text` function is no longer needed — DELETE IT.
+The existing standalone `render_text` function is no longer needed; DELETE IT.
 
 - [ ] **Step 3: Add unit test for `is_image_content_type`**
 
@@ -1725,10 +1725,10 @@ git commit -m "Render inline images for trusted senders via viuer"
 Open `/Users/kristofer/repos/mklab-se/pidge/CHANGELOG.md`. Under `## [Unreleased]` `### Added`, append:
 
 ```markdown
-- `pidge inbox show <fragment>` — substring-lookup a message by its 8-char short hash and display headers, body, and attachment list
+- `pidge inbox show <fragment>`: substring-lookup a message by its 8-char short hash and display headers, body, and attachment list
 - `pidge inbox show --mark-read` / `-r` to mark the message as read on the server after rendering
 - `pidge inbox show --show-images` to force inline image rendering for one invocation
-- `pidge trust list/add/remove` — manage the trusted-senders list; inline images auto-render for trusted senders in image-capable terminals (Ghostty, Kitty, iTerm2)
+- `pidge trust list/add/remove`: manage the trusted-senders list; inline images auto-render for trusted senders in image-capable terminals (Ghostty, Kitty, iTerm2)
 - Trusted senders stored at `trusted_senders:` in `~/.config/pidge/config.yaml` (case-insensitive matching)
 ```
 
@@ -1809,7 +1809,7 @@ Summarize for the user:
 | GraphClient wrapper methods | Task 6 |
 | InboxCommands::Show + Commands::Trust + TrustCommands | Task 7 |
 | pidge trust list/add/remove implementation | Task 8 |
-| pidge inbox show — cache lookup, Graph fetch, header/body/attachments rendering, JSON output | Task 9 |
+| pidge inbox show: cache lookup, Graph fetch, header/body/attachments rendering, JSON output | Task 9 |
 | Inline image rendering for trusted senders / --show-images | Task 10 |
 | Cache invalidation on 404 | Task 9 (`purge_from_cache`) |
 | --mark-read flag | Task 9 (mark_read call after rendering) |
@@ -1819,14 +1819,14 @@ Summarize for the user:
 **Placeholder scan:** No "TBD", "TODO", "implement later" placeholders. Every code block is complete. The intentional placeholders in `inbox_show.rs` (Task 7) are `unimplemented!()` macros that get replaced in Task 9; this is consistent with the foundation pattern.
 
 **Type consistency:**
-- `FullMessage`, `Attachment`, `BodyContentType` — defined in Task 2 (pidge-core), used in Task 4 (mail.rs mapper), Task 6 (GraphClient methods), Task 9 (inbox_show).
-- `Config::{add_trusted_sender, remove_trusted_sender, is_sender_trusted}` — defined Task 3, used in Task 8 (trust.rs) and Task 10 (inbox_show.rs trust check).
-- `CacheLookup` — pre-existing pidge-core type, used in Task 9.
-- `GraphClient::{get_message, list_attachments, get_attachment_bytes, mark_read}` — defined Task 6, used in Task 9 and Task 10.
-- `MessageFrom` — pre-existing pidge-core type, used throughout for sender/recipient rendering.
-- `TrustCommands::{List, Add, Remove}` — defined Task 7, dispatched Task 8.
-- `InboxCommands::Show { fragment, mark_read, show_images }` — defined Task 7, destructured in Task 7 (inbox.rs dispatch) and Task 9 (inbox_show::run signature).
-- `ShowOut<'a>`, `BodyOut<'a>` — local to inbox_show.rs, defined Task 9, lifetime-borrowed for zero-clone JSON serialization.
+- `FullMessage`, `Attachment`, `BodyContentType`: defined in Task 2 (pidge-core), used in Task 4 (mail.rs mapper), Task 6 (GraphClient methods), Task 9 (inbox_show).
+- `Config::{add_trusted_sender, remove_trusted_sender, is_sender_trusted}`: defined Task 3, used in Task 8 (trust.rs) and Task 10 (inbox_show.rs trust check).
+- `CacheLookup`: pre-existing pidge-core type, used in Task 9.
+- `GraphClient::{get_message, list_attachments, get_attachment_bytes, mark_read}`: defined Task 6, used in Task 9 and Task 10.
+- `MessageFrom`: pre-existing pidge-core type, used throughout for sender/recipient rendering.
+- `TrustCommands::{List, Add, Remove}`: defined Task 7, dispatched Task 8.
+- `InboxCommands::Show { fragment, mark_read, show_images }`: defined Task 7, destructured in Task 7 (inbox.rs dispatch) and Task 9 (inbox_show::run signature).
+- `ShowOut<'a>`, `BodyOut<'a>`: local to inbox_show.rs, defined Task 9, lifetime-borrowed for zero-clone JSON serialization.
 
 **Notable risks:**
 - `html2text 0.12` API signature: `html2text::from_read(reader, width) -> Result<String, _>`. If the actual API differs, the Task 9 step that calls it will need adjustment. Verified against html2text 0.12.6 docs.

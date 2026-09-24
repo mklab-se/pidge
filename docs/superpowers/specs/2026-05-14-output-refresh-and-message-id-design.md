@@ -1,13 +1,13 @@
-# Output refresh + message-ID UX — design
+# Output refresh + message-ID UX: design
 
 **Status:** Approved 2026-05-14
 **Goal:** Refresh `pidge inbox list` with a clean Scandinavian terminal layout that shows more context per message (subject + preview), introduce a global `--json` flag for machine output across all data commands, give every message a stable human-typable short-hash ID that future `pidge inbox show` can target via substring matching, and lay down a small output utility module for OSC 8 hyperlinks.
 
 ## Non-goals
 
-- `pidge inbox show <fragment>` — its own follow-up feature; uses the cache built here.
-- Markdown rendering (`termimad`) — deferred until the first command that displays a body needs it.
-- Subject→Outlook webLink wrapping — deferred. (User noted real URL value is in body content, displayed by `inbox show`.)
+- `pidge inbox show <fragment>`: its own follow-up feature; uses the cache built here.
+- Markdown rendering (`termimad`): deferred until the first command that displays a body needs it.
+- Subject→Outlook webLink wrapping: deferred. (User noted real URL value is in body content, displayed by `inbox show`.)
 - Adding folders, search, send, draft, calendar, or any other inbox/calendar feature.
 
 ## What changes for the user
@@ -70,7 +70,7 @@ f2a8d1c0  GitHub       [GitHub] Claude requesting permissions   3h ago
 
 - `pidge auth list --json` → array of accounts: `[{ "email", "tenant_id", "home_account_id", "added_at", "is_default_send", "is_default_calendar" }, …]`
 - `pidge auth status --json` → `{ "accounts": N, "defaults": { "send": "…", "calendar": "…" }}`
-- Other commands (`auth login`, `auth logout`, `auth default`, `auth status` interactive parts) are not changed — they have side effects, not data output. `--json` is silently ignored on those.
+- Other commands (`auth login`, `auth logout`, `auth default`, `auth status` interactive parts) are not changed; they have side effects, not data output. `--json` is silently ignored on those.
 
 ## Architecture
 
@@ -78,7 +78,7 @@ f2a8d1c0  GitHub       [GitHub] Claude requesting permissions   3h ago
 
 | Crate | Change |
 |---|---|
-| `comfy-table` (workspace) | Extend entry to `{ version = "7", features = ["custom_styling"] }`. The `custom_styling` feature uses the `console` crate to compute visible width of strings containing ANSI escape codes — fixes the column-alignment bug for free and enables mixed-styled multi-line cells. |
+| `comfy-table` (workspace) | Extend entry to `{ version = "7", features = ["custom_styling"] }`. The `custom_styling` feature uses the `console` crate to compute visible width of strings containing ANSI escape codes, which fixes the column-alignment bug for free and enables mixed-styled multi-line cells. |
 | `linkify` (workspace) | New: `linkify = "0.10"`. URL detection inside arbitrary text. |
 | `sha2` (workspace) | New: `sha2 = "0.10"`. Hashing Graph IDs to produce the 8-char short ID. |
 
@@ -86,12 +86,12 @@ No new top-level Rust crates need to be created. The new code lives in two new m
 
 ```
 crates/pidge-core/src/
-└── cache.rs              # NEW — MessageCache, CachedMessageRef, CacheLookup
+└── cache.rs              # NEW: MessageCache, CachedMessageRef, CacheLookup
 
 crates/pidge/src/output/
-├── mod.rs                # NEW — re-exports
-├── hyperlink.rs          # NEW — OSC 8 sequence helper
-└── linkify.rs            # NEW — wrap URLs in arbitrary text with OSC 8
+├── mod.rs                # NEW: re-exports
+├── hyperlink.rs          # NEW: OSC 8 sequence helper
+└── linkify.rs            # NEW: wrap URLs in arbitrary text with OSC 8
 ```
 
 ### `pidge-core::cache::MessageCache`
@@ -149,9 +149,9 @@ impl MessageCache {
     }
 
     /// Find a message by a fragment of its short hash. Returns:
-    ///   NotFound — zero matches
-    ///   One — exactly one match
-    ///   Ambiguous — 2+ matches (return up to 10 with their hashes)
+    ///   NotFound: zero matches
+    ///   One: exactly one match
+    ///   Ambiguous: 2+ matches (return up to 10 with their hashes)
     pub fn find_by_fragment(&self, fragment: &str) -> CacheLookup {
         let matches: Vec<_> = self
             .entries
@@ -171,7 +171,7 @@ impl MessageCache {
 }
 ```
 
-Path: `${XDG_CACHE_HOME:-~/.cache}/pidge/messages.json` (via `dirs::cache_dir()`). File format is JSON for easy debuggability — not security-sensitive, just an index.
+Path: `${XDG_CACHE_HOME:-~/.cache}/pidge/messages.json` (via `dirs::cache_dir()`). File format is JSON for easy debuggability; it is not security-sensitive, just an index.
 
 Tests:
 - short_hash is deterministic and stable
@@ -234,7 +234,7 @@ Tests:
 - Plain text returns unchanged
 - One URL gets wrapped
 - Multiple URLs each get wrapped
-- Email addresses (`mailto:`) are NOT wrapped (only URLs) — `LinkFinder::default()` finds both kinds; we filter to `LinkKind::Url`
+- Email addresses (`mailto:`) are NOT wrapped (only URLs): `LinkFinder::default()` finds both kinds; we filter to `LinkKind::Url`
 
 `mod.rs`:
 
@@ -258,7 +258,7 @@ Wire into `crates/pidge/src/main.rs`: `mod output;` (alongside the existing `mod
 #[arg(long, global = true)]
 pub json: bool,
 
-// InboxCommands::List — remove `output: OutputFormat`, add `compact: bool`:
+// InboxCommands::List: remove `output: OutputFormat`, add `compact: bool`:
 List {
     #[arg(long)]
     account: Vec<String>,
@@ -352,7 +352,7 @@ fn render_text_rich(messages: &[MessageRow], hide_account: bool) -> Result<()> {
 let subject_cell = subject_styled; // no "\n{preview}"
 ```
 
-`MessageRow` is a small local struct that pairs `pidge_core::Message` with the computed `short_hash`. The `pidge_core::Message` struct does NOT gain a hash field — the hash lives only in the cache and in the rendered output.
+`MessageRow` is a small local struct that pairs `pidge_core::Message` with the computed `short_hash`. The `pidge_core::Message` struct does NOT gain a hash field; the hash lives only in the cache and in the rendered output.
 
 URLs in the subject: also pass `subject` through `linkify_text` before styling. The OSC 8 escape sequences are part of the cell content; `custom_styling` measures visible width correctly.
 
@@ -403,7 +403,7 @@ For `auth_status`, JSON shape:
   - One URL gets wrapped
   - Multiple URLs each get wrapped
   - Email addresses are not wrapped
-- **`pidge::commands::inbox`** (existing) — keep the two `compute_per_account_fetch` tests. Render functions are hard to snapshot meaningfully because of ANSI codes; we rely on visual smoke-testing for `text` output and structural assertions for JSON.
+- **`pidge::commands::inbox`** (existing): keep the two `compute_per_account_fetch` tests. Render functions are hard to snapshot meaningfully because of ANSI codes; we rely on visual smoke-testing for `text` output and structural assertions for JSON.
 
 ## CHANGELOG entry
 
@@ -413,21 +413,21 @@ Under `[Unreleased] ### Added`:
 - `pidge inbox list` shows a stable 8-char short hash ID per message; cached at `~/.cache/pidge/messages.json` for substring lookup by future `pidge inbox show`
 - `pidge inbox list` rich layout: subject + 2-line preview, bold+magenta for unread, cyan for read; `--compact`/`-c` for the one-row-per-message style
 - URLs in subject and preview text are OSC 8 hyperlinks (clickable in modern terminals)
-- Cleaner table style — horizontal line under header only, no vertical borders
+- Cleaner table style: horizontal line under header only, no vertical borders
 
 ## Risks / open considerations
 
 - **`custom_styling` feature interactions:** Enabling `comfy-table`'s `custom_styling` feature pulls in the `console` crate transitively. This adds compile time and a non-trivial dependency, but it's the correct fix for ANSI-in-cell width measurement. The trade-off is accepted.
 - **Hash collision probability:** 8 hex chars = 32 bits of state. For a mailbox of ~10,000 messages, birthday-paradox collision probability is ~10⁻³. Acceptable for the cache-fragment-lookup use case; on collision, `find_by_fragment` returns `Ambiguous` and asks the user to provide more characters. We don't try to extend the hash for collided messages (rare enough).
 - **Linkify finds URLs greedily:** Some characters that look like URLs (`example.com.` with trailing period) get edge-cased by `linkify`. We accept its behavior; pidge doesn't try to post-process.
-- **OSC 8 in non-supporting terminals:** Terminals that don't understand OSC 8 typically strip the escape sequences entirely on rendering, showing only the visible text. No corruption expected. A few legacy terminals might display literal `]8;;URL\` text — acceptable.
+- **OSC 8 in non-supporting terminals:** Terminals that don't understand OSC 8 typically strip the escape sequences entirely on rendering, showing only the visible text. No corruption expected. A few legacy terminals might display literal `]8;;URL\` text, which is acceptable.
 - **Cache file growth:** 1000 entries × ~300 bytes per entry = ~300KB max. Negligible.
 - **Future `pidge inbox show` interaction:** Will read the cache, find by fragment, GET `/me/messages/{graph_id}` for full body. The cache is the bridge. Not in scope for this spec.
 
 ## Deferred to next features
 
-- `pidge inbox show <fragment>` — uses cache from this spec
-- `termimad` + markdown rendering — added when `inbox show` lands and the body needs rich rendering
-- Subject→Outlook webLink wrapping — deferred
-- `auth login` / `auth logout` / `auth default` JSON output — these are interactive commands without data output; `--json` is silently ignored on them
+- `pidge inbox show <fragment>`: uses cache from this spec
+- `termimad` + markdown rendering: added when `inbox show` lands and the body needs rich rendering
+- Subject→Outlook webLink wrapping: deferred
+- `auth login` / `auth logout` / `auth default` JSON output: these are interactive commands without data output; `--json` is silently ignored on them
 - `pidge inbox search` and folder navigation

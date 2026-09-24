@@ -21,7 +21,7 @@ pub fn resolve_addresses(tokens: &[String], cache: &ContactsCache) -> Result<Vec
         match resolve_one(token, cache) {
             ResolveOutcome::Literal(s) | ResolveOutcome::One(s) => resolved.push(s),
             ResolveOutcome::Unknown(t) => problems.push(format!(
-                "  {t} — unknown (run `pidge contacts refresh` to update the index)"
+                "  {t}: unknown (run `pidge contacts refresh` to update the index)"
             )),
             ResolveOutcome::Ambiguous { token, candidates } => {
                 let names: Vec<String> = candidates
@@ -34,7 +34,7 @@ pub fn resolve_addresses(tokens: &[String], cache: &ContactsCache) -> Result<Vec
                         }
                     })
                     .collect();
-                problems.push(format!("  {token} — ambiguous: {}", names.join(", ")));
+                problems.push(format!("  {token}: ambiguous: {}", names.join(", ")));
             }
         }
     }
@@ -83,7 +83,7 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("Could not resolve 2"));
-        assert!(err.contains("@john — ambiguous"));
-        assert!(err.contains("@nope — unknown"));
+        assert!(err.contains("@john: ambiguous"));
+        assert!(err.contains("@nope: unknown"));
     }
 }

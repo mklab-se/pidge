@@ -1,7 +1,7 @@
-//! `pidge mail search <query>` — full-text search using Graph's `$search` KQL.
+//! `pidge mail search <query>`: full-text search using Graph's `$search` KQL.
 //!
 //! Results come back in Graph's relevance order (not date), and search is
-//! across all mail folders, not just Inbox — which is generally what users
+//! across all mail folders, not just Inbox, which is generally what users
 //! mean by "search e-mail".
 
 use anyhow::{Result, anyhow};
@@ -24,7 +24,7 @@ pub async fn run(
     json: bool,
     cursor: Option<String>,
 ) -> Result<()> {
-    // Search continuation is plain nextLink paging — same flow as mail list.
+    // Search continuation is plain nextLink paging, same flow as mail list.
     if let Some(token) = cursor {
         let cursor = pidge_client::Cursor::decode(&token, "mail")?;
         return super::mail::list_at_cursor(cursor, compact, table, full, json).await;

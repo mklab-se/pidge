@@ -1,4 +1,4 @@
-//! `pidge-mcp` — the remote MCP server for pidge.
+//! `pidge-mcp`: the remote MCP server for pidge.
 //!
 //! One binary: an OAuth 2.1 authorization server that delegates sign-in to
 //! Microsoft (`oauth`), a bearer-guarded streamable-HTTP MCP endpoint at

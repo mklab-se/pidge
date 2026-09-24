@@ -1,4 +1,4 @@
-//! `pidge mail move` — move a message (or a bulk selection) into a folder,
+//! `pidge mail move`: move a message (or a bulk selection) into a folder,
 //! creating the folder on first use. Single mode takes a fragment; bulk mode
 //! mirrors `mail archive`/`mail delete` (`--from` / `--older-than`, gated on
 //! `-y`). The destination folder is resolved case-insensitively against the
@@ -208,7 +208,7 @@ async fn move_bulk(
 
     if !yes {
         return Err(anyhow!(
-            "Bulk move requires explicit `-y` confirmation — there is no \
+            "Bulk move requires explicit `-y` confirmation; there is no \
              interactive prompt. Re-run with `-y` if you really mean it."
         ));
     }

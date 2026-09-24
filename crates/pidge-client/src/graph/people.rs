@@ -1,4 +1,4 @@
-//! GET /me/people — Outlook's ranked "people I interact with" list, used to
+//! GET /me/people: Outlook's ranked "people I interact with" list, used to
 //! resolve a display name or partial address to a full e-mail address.
 
 use serde::Deserialize;

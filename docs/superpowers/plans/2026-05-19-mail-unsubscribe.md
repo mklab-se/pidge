@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `pidge mail unsubscribe <hash>` — parses RFC 2369 `List-Unsubscribe` + RFC 8058 `List-Unsubscribe-Post` and actions the opt-out via one-click POST, mailto, or graceful bail.
+**Goal:** Add `pidge mail unsubscribe <hash>`: parses RFC 2369 `List-Unsubscribe` + RFC 8058 `List-Unsubscribe-Post` and actions the opt-out via one-click POST, mailto, or graceful bail.
 
 **Architecture:** A pure parser in `pidge-client` returns an `UnsubscribeMethod` enum. A thin command module in `pidge` fetches the message's Graph headers, runs the parser, prompts for confirmation, and dispatches (HTTPS POST via `reqwest`, mailto via the existing `GraphClient::send_mail`).
 
@@ -31,7 +31,7 @@
 - Create: `crates/pidge-client/src/unsubscribe.rs`
 - Modify: `crates/pidge-client/src/lib.rs`
 
-The parser is pure — no I/O, no `tokio`, no `reqwest`. That lets us cover every weird header shape with fast unit tests.
+The parser is pure: no I/O, no `tokio`, no `reqwest`. That lets us cover every weird header shape with fast unit tests.
 
 - [ ] **Step 1: Write the parser module with tests first.**
 
@@ -39,7 +39,7 @@ Create `crates/pidge-client/src/unsubscribe.rs`:
 
 ```rust
 //! Parsing of RFC 2369 `List-Unsubscribe` and RFC 8058
-//! `List-Unsubscribe-Post` headers — no I/O.
+//! `List-Unsubscribe-Post` headers, no I/O.
 //!
 //! See:
 //! - <https://www.rfc-editor.org/rfc/rfc2369> (List-Unsubscribe)
@@ -57,7 +57,7 @@ pub enum UnsubscribeMethod {
     /// interaction needed.
     OneClickPost(String),
 
-    /// RFC 2369 `mailto:` — send an e-mail to this address. Per RFC 6068
+    /// RFC 2369 `mailto:`: send an e-mail to this address. Per RFC 6068
     /// the URL may carry `?subject=` / `?body=` that override our defaults.
     Mailto {
         address: String,
@@ -314,7 +314,7 @@ mod tests {
 
 - [ ] **Step 2: Wire the new module into `lib.rs`.**
 
-Modify `crates/pidge-client/src/lib.rs` — add the module and re-export:
+Modify `crates/pidge-client/src/lib.rs`: add the module and re-export:
 
 ```rust
 //! Microsoft 365 client and OAuth flows for the pidge CLI.
@@ -346,7 +346,7 @@ git commit -m "$(cat <<'EOF'
 Add `List-Unsubscribe` header parser
 
 Pure parsing of RFC 2369 + RFC 8058 unsubscribe headers, with a
-preference picker (one-click POST > mailto > https-only). No I/O —
+preference picker (one-click POST > mailto > https-only). No I/O,
 fully unit-tested.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
@@ -399,14 +399,14 @@ Add to the `tests` module at the bottom of `crates/pidge-client/src/graph/mail.r
 - [ ] **Step 2: Run the test to confirm it fails.**
 
 Run: `cargo test -p pidge-client fetch_message_headers_parses_array`
-Expected: FAIL — `fetch_message_headers` is not defined.
+Expected: FAIL: `fetch_message_headers` is not defined.
 
 - [ ] **Step 3: Implement `fetch_message_headers`.**
 
 Add the function near the other GET helpers in `crates/pidge-client/src/graph/mail.rs` (right after `get_message`'s closing brace at line 379 is a natural spot):
 
 ```rust
-/// GET /me/messages/{id}?$select=internetMessageHeaders — fetch just the
+/// GET /me/messages/{id}?$select=internetMessageHeaders: fetch just the
 /// raw RFC 5322 headers for a message. Used by `pidge mail unsubscribe`
 /// to locate `List-Unsubscribe` / `List-Unsubscribe-Post`.
 pub async fn fetch_message_headers(
@@ -449,7 +449,7 @@ struct GraphHeader {
 
 - [ ] **Step 4: Re-export and add the `GraphClient` wrapper.**
 
-Modify `crates/pidge-client/src/graph/mod.rs` — add `fetch_message_headers` to the `pub use mail::{...}` list:
+Modify `crates/pidge-client/src/graph/mod.rs`: add `fetch_message_headers` to the `pub use mail::{...}` list:
 
 ```rust
 pub use mail::{
@@ -504,7 +504,7 @@ EOF
 **Files:**
 - Modify: `crates/pidge/src/cli.rs` (add enum variant + add to preprocess list)
 
-This is just clap wiring — no real logic yet. The next task implements the command.
+This is just clap wiring; no real logic yet. The next task implements the command.
 
 - [ ] **Step 1: Add the `Unsubscribe` variant to `MailCommands`.**
 
@@ -526,7 +526,7 @@ In `crates/pidge/src/cli.rs`, find the `MailCommands` enum (starts around line 1
 
 - [ ] **Step 2: Add `"unsubscribe"` to `MAIL_SUBCOMMAND_NAMES`.**
 
-In the same file, the `MAIL_SUBCOMMAND_NAMES` constant (around line 465). Insert `"unsubscribe"` so the array stays roughly alphabetised within the existing groupings — between `"delete"` and `"help"` works:
+In the same file, the `MAIL_SUBCOMMAND_NAMES` constant (around line 465). Insert `"unsubscribe"` so the array stays roughly alphabetised within the existing groupings; between `"delete"` and `"help"` works:
 
 ```rust
 pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
@@ -548,10 +548,10 @@ pub const MAIL_SUBCOMMAND_NAMES: &[&str] = &[
 ];
 ```
 
-- [ ] **Step 3: Build to confirm the enum compiles (the match in `commands/mail.rs` will fail — that's expected and the next task fixes it).**
+- [ ] **Step 3: Build to confirm the enum compiles (the match in `commands/mail.rs` will fail; that's expected and the next task fixes it).**
 
 Run: `cargo build -p pidge`
-Expected: FAIL with non-exhaustive match in `commands/mail.rs::run` — Task 4 closes that.
+Expected: FAIL with non-exhaustive match in `commands/mail.rs::run`; Task 4 closes that.
 
 (No commit here; Task 4 picks up immediately and we commit the two together at the end of Task 4.)
 
@@ -575,7 +575,7 @@ The command resolves the fragment, fetches headers, runs the parser, prompts for
 Create `crates/pidge/src/commands/mail_unsubscribe.rs`:
 
 ```rust
-//! `pidge mail unsubscribe` — opt out of a sender using the message's
+//! `pidge mail unsubscribe`: opt out of a sender using the message's
 //! `List-Unsubscribe` / `List-Unsubscribe-Post` headers.
 //!
 //! Preference order: RFC 8058 one-click POST → RFC 2369 mailto → bail with
@@ -602,7 +602,7 @@ pub async fn run(fragment: String, yes: bool) -> Result<()> {
 
     match method {
         UnsubscribeMethod::None => Err(anyhow!(
-            "Message {short} has no `List-Unsubscribe` header — there is no \
+            "Message {short} has no `List-Unsubscribe` header; there is no \
              standard way to unsubscribe from this sender. Look for an \
              unsubscribe link in the body or contact the sender directly."
         )),
@@ -679,7 +679,7 @@ fn confirm(yes_flag: bool, prompt: &str) -> Result<bool> {
 /// POST `List-Unsubscribe=One-Click` to the given URL per RFC 8058. The
 /// body is form-urlencoded (the RFC says so explicitly).
 ///
-/// We use a fresh `reqwest::Client` rather than the Graph client's — this
+/// We use a fresh `reqwest::Client` rather than the Graph client's; this
 /// request goes to an arbitrary third-party host, not Microsoft, so it
 /// must not carry the Graph bearer token.
 async fn one_click_post(url: &str) -> Result<()> {
@@ -709,7 +709,7 @@ async fn one_click_post(url: &str) -> Result<()> {
 
 - [ ] **Step 2: Declare the module.**
 
-Modify `crates/pidge/src/commands/mod.rs` — add the declaration in alphabetical order with the other `mail_*` modules:
+Modify `crates/pidge/src/commands/mod.rs`: add the declaration in alphabetical order with the other `mail_*` modules:
 
 ```rust
 //! CLI command implementations
@@ -739,7 +739,7 @@ pub mod trust;
 
 - [ ] **Step 3: Route the new subcommand.**
 
-Modify `crates/pidge/src/commands/mail.rs` — add an arm to the `match command { ... }` inside `pub async fn run`. Put it after the `Delete { ... }` arm, just before the closing brace of the match:
+Modify `crates/pidge/src/commands/mail.rs`: add an arm to the `match command { ... }` inside `pub async fn run`. Put it after the `Delete { ... }` arm, just before the closing brace of the match:
 
 ```rust
         MailCommands::Unsubscribe { fragment, yes } => {
@@ -750,7 +750,7 @@ Modify `crates/pidge/src/commands/mail.rs` — add an arm to the `match command 
 - [ ] **Step 4: Build the workspace.**
 
 Run: `cargo build --workspace`
-Expected: clean build (warnings count as failures only under clippy — that comes later).
+Expected: clean build (warnings count as failures only under clippy; that comes later).
 
 - [ ] **Step 5: Run the full test suite.**
 
@@ -836,9 +836,9 @@ When prompted, answer `n` first to see which method the parser chose for this se
 cargo run --quiet -- mail unsubscribe <hash> -y
 ```
 
-If the picked method is `HttpsOnly`, that's the bail path — note the URL and we can open it manually (or via Chrome automation as a separate follow-up).
+If the picked method is `HttpsOnly`, that's the bail path: note the URL and we can open it manually (or via Chrome automation as a separate follow-up).
 
-- [ ] **Step 5: Final sweep — make sure everything is still green.**
+- [ ] **Step 5: Final sweep: make sure everything is still green.**
 
 Run: `cargo test --workspace && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`
 Expected: all three commands succeed without output that breaks the gate.
@@ -849,17 +849,17 @@ Expected: all three commands succeed without output that breaks the gate.
 
 Run this checklist before declaring the plan done:
 
-**Spec coverage** — each spec section maps to:
+**Spec coverage**: each spec section maps to:
 - *RFC explanation* → Task 1 (the parser module + its docs codify the RFCs)
-- *Surface (`pidge mail unsubscribe <hash> [-y] [--json]`)* — `--json` is **not** in the plan. **Drop it from the spec**, or add a step here. Re-reading the spec it's listed under "Surface" but never elaborated; the spec is over-promising. Plan keeps the v1 small; if the user wants `--json` we add it as a follow-up after seeing the live thing work.
+- *Surface (`pidge mail unsubscribe <hash> [-y] [--json]`)*: `--json` is **not** in the plan. **Drop it from the spec**, or add a step here. Re-reading the spec it's listed under "Surface" but never elaborated; the spec is over-promising. Plan keeps the v1 small; if the user wants `--json` we add it as a follow-up after seeing the live thing work.
 - *Method selection (one-click → mailto → bail)* → Task 1 parser + Task 4 dispatch
 - *Confirmation* → Task 4 step 1 (`confirm` helper)
 - *Code layout table* → matches Tasks 1–4 file map exactly
-- *Error handling cases* → Task 4 covers Graph fetch failure (`context`), POST non-2xx (`anyhow!`), mailto send failure (`context`), missing header (`anyhow!`). Header parse failure: in practice the parser returns `None` for unparseable input, which is treated as "no unsubscribe header" — acceptable, since the alternative is to fail noisily on a class of senders that includes some legitimate but quirky bulk lists.
-- *Tests* → Task 1 has the parser table; Task 2 has the wiremock for `fetch_message_headers`. There is intentionally no picker test separate from the parser tests — the picker IS the parser's job in this design, and the parser's tests cover every branch.
+- *Error handling cases* → Task 4 covers Graph fetch failure (`context`), POST non-2xx (`anyhow!`), mailto send failure (`context`), missing header (`anyhow!`). Header parse failure: in practice the parser returns `None` for unparseable input, which is treated as "no unsubscribe header", acceptable, since the alternative is to fail noisily on a class of senders that includes some legitimate but quirky bulk lists.
+- *Tests* → Task 1 has the parser table; Task 2 has the wiremock for `fetch_message_headers`. There is intentionally no picker test separate from the parser tests: the picker IS the parser's job in this design, and the parser's tests cover every branch.
 
-**Placeholder scan** — no TBDs, no "implement appropriate", no "similar to". Every step shows real code or a real shell command.
+**Placeholder scan**: no TBDs, no "implement appropriate", no "similar to". Every step shows real code or a real shell command.
 
-**Type consistency** — `UnsubscribeMethod` variant names match between the parser tests, the lib re-export, and the dispatch match in `commands/mail_unsubscribe.rs`. `fetch_message_headers` signature matches between the free fn, the wiremock test, and the `GraphClient` wrapper.
+**Type consistency**: `UnsubscribeMethod` variant names match between the parser tests, the lib re-export, and the dispatch match in `commands/mail_unsubscribe.rs`. `fetch_message_headers` signature matches between the free fn, the wiremock test, and the `GraphClient` wrapper.
 
-**Scope check** — single feature, ~250 LOC across four files, single plan.
+**Scope check**: single feature, ~250 LOC across four files, single plan.

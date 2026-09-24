@@ -91,7 +91,7 @@ struct BatchEnvelope {
 
 /// Execute all `requests` (chunked ≤20), re-batching per-item 429s up to
 /// [`MAX_ROUNDS`] times. Returns one response per request id (order not
-/// guaranteed — correlate by id). Items still throttled after the final
+/// guaranteed; correlate by id). Items still throttled after the final
 /// round are returned with their last 429 response.
 pub async fn batch_all(
     http: &reqwest::Client,

@@ -103,7 +103,7 @@ pub struct Signer {
     issuer: String,
     audience: String,
     /// Origins whose access tokens keep verifying during a domain cutover,
-    /// alongside `issuer`/`audience`. Never used to *issue* tokens — new
+    /// alongside `issuer`/`audience`. Never used to *issue* tokens; new
     /// access tokens always carry the current issuer and audience. See
     /// [`Self::with_legacy_issuers`].
     legacy_issuers: Vec<String>,
