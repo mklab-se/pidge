@@ -8,7 +8,7 @@ any mutating command to see what it would do.
 ## Account setup
 
 ```bash
-# Add an account (opens your browser — auth code + PKCE)
+# Add an account (opens your browser, auth code + PKCE)
 pidge account add
 
 # List signed-in accounts and which one is default for e-mail / calendar
@@ -121,8 +121,8 @@ pidge calendar --json --week | jq '.[] | .subject'
 
 ## Guardrails
 
-Every mutating action belongs to a class — `send`, `delete`, `cancel`, `rsvp`, `bulk`,
-`unsubscribe` — and each class can be set to `allow` (the default), `confirm` or `deny`:
+Every mutating action belongs to a class (`send`, `delete`, `cancel`, `rsvp`, `bulk`,
+`unsubscribe`), and each class can be set to `allow` (the default), `confirm` or `deny`:
 
 ```bash
 pidge config set guardrails.send confirm

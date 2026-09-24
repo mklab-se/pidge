@@ -1,6 +1,6 @@
 [package]
 name = "pidge-mcp"
-description = "Remote MCP server for pidge — e-mail and calendar for AI agents, hosted"
+description = "Remote MCP server for pidge: e-mail and calendar for AI agents, hosted"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

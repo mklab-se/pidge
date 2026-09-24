@@ -35,7 +35,7 @@ Any client needs the server's MCP URL: `https://<your-server>/mcp`. The
 reference deployment at `https://pidge.mklab.se/mcp` is invite-only for now;
 everyone else can [self-host](#self-hosting-on-azure) (or
 [run the container anywhere](#run-the-container-anywhere)) and use their own
-host instead — or skip MCP and use the `pidge` CLI with an agent skill
+host instead, or skip MCP and use the `pidge` CLI with an agent skill
 (see the [README](../README.md#get-started)).
 
 ### Claude.ai, Cowork, mobile

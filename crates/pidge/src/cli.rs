@@ -9,7 +9,7 @@ use clap::Parser;
 #[command(author, version, about)]
 #[command(long_about = "The e-mail and calendar client for your AI agent.\n\n\
     Read, search, triage and send e-mail and manage calendars across one or more \
-    accounts — built to be driven by AI agents (see `pidge ai skill`), pleasant to \
+    accounts, built to be driven by AI agents (see `pidge ai skill`), pleasant to \
     use by hand. Add --json for machine-readable output.")]
 #[command(propagate_version = true)]
 pub struct Cli {

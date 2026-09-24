@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>The e-mail and calendar client for your AI agent.</strong><br>
-  Let Claude Code, Codex, Copilot, Claude.ai or ChatGPT work your real inbox and calendar — safely.
+  Let Claude Code, Codex, Copilot, Claude.ai or ChatGPT work your real inbox and calendar, safely.
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 ---
 
 Your AI agent already writes your code. pidge lets it handle the rest of your day too:
-triage the inbox, draft replies, find a free slot, book the meeting and answer the invite —
+triage the inbox, draft replies, find a free slot, book the meeting and answer the invite,
 across every mailbox you have, from one tool.
 
 ```text
@@ -40,7 +40,7 @@ Agent:  $ pidge mail list --unread --json
         $ pidge calendar --week --json
         $ pidge mail reply 4d8e --draft --body-file -
         Archived 2 newsletters. Drafted a reply to Bob proposing Tue 14:00 or
-        Thu 10:00 — want me to send it?
+        Thu 10:00. Want me to send it?
 ```
 
 ## Why pidge
@@ -50,7 +50,7 @@ Agent:  $ pidge mail list --unread --json
   long-running agents follow changes instead of re-reading everything.
 - **You stay in control.** Sends ask before they go, and agents can save drafts for you to
   approve. Lock things down further with per-action guardrails
-  (`pidge config set guardrails.send confirm` — also `delete`, `cancel`, `rsvp`, `bulk`,
+  (`pidge config set guardrails.send confirm`, also `delete`, `cancel`, `rsvp`, `bulk`,
   `unsubscribe`; each `allow` / `confirm` / `deny`) or preview anything with `--dry-run`.
   The MCP server goes further: sends only from an approved draft, a per-user send cap, and
   third-party mail content marked as untrusted so your agent summarises it instead of obeying it.
@@ -62,25 +62,25 @@ Agent:  $ pidge mail list --unread --json
 
 ## Get started
 
-### Option 1 — CLI + agent skill (Claude Code, Codex, Copilot, …)
+### Option 1: CLI + agent skill (Claude Code, Codex, Copilot, …)
 
 ```bash
-brew install mklab-se/tap/pidge        # or: cargo install pidge — see INSTALL.md
+brew install mklab-se/tap/pidge        # or: cargo install pidge (see INSTALL.md)
 pidge account add                      # sign in (opens your browser)
 pidge ai skill --emit > ~/.claude/skills/pidge/SKILL.md
 ```
 
-That's it — ask your agent about your mail. The emitted skill is deliberately small: it teaches
+That's it, ask your agent about your mail. The emitted skill is deliberately small: it teaches
 the agent the patterns (JSON output, confirmation gates, account context) and points it at
 `pidge --help` for everything else, so it keeps working as pidge grows.
 
-### Option 2 — Remote MCP server (Claude.ai, ChatGPT, Cowork, …)
+### Option 2: Remote MCP server (Claude.ai, ChatGPT, Cowork, …)
 
 For harnesses that speak [MCP](https://modelcontextprotocol.io) rather than run shell commands,
 `pidge-mcp` exposes the same mail and calendar tools over HTTP. Each user signs in with their
 own account and only ever sees their own mailboxes.
 
-- **Self-host it** — a ready-made image is published at `ghcr.io/mklab-se/pidge-mcp`, with
+- **Self-host it:** a ready-made image is published at `ghcr.io/mklab-se/pidge-mcp`, with
   Bicep templates for Azure Container Apps.
 - **The reference server** at `https://pidge.mklab.se/mcp` is currently invite-only.
 
@@ -114,4 +114,4 @@ in [CHANGELOG.md](CHANGELOG.md), newest first.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

@@ -87,4 +87,4 @@ Configure these once on the GitHub repository (the same secrets are used by the 
 | `CARGO_REGISTRY_TOKEN` | Environment **`crates-io`** | Publish to crates.io | [crates.io/settings/tokens](https://crates.io/settings/tokens) → new token with publish scope |
 | `HOMEBREW_TAP_TOKEN` | Repository secret | Push the formula to the tap | A GitHub PAT with `repo` scope for `mklab-se/homebrew-tap` |
 
-If `HOMEBREW_TAP_TOKEN` is missing, the release still succeeds — the Homebrew step just logs a warning.
+If `HOMEBREW_TAP_TOKEN` is missing, the release still succeeds, the Homebrew step just logs a warning.
