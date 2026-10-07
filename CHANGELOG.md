@@ -16,6 +16,17 @@ All notable changes to this project will be documented in this file.
 - **No more em-dashes.** Help text, error messages, the emitted skill and every document use
   commas, colons or parentheses instead.
 
+- **Dependencies refreshed: ailloy 3.0.** pidge now builds on ailloy 3.0 (which adds the `eval`
+  capability and the `typesafe` provider) and rmcp 3.5, plus a `cargo update` of everything else.
+  pidge's AI features still use only the `chat` capability, so `pidge ai` status and config are
+  unchanged. Note for mixed setups: once an ailloy 3.0 tool writes an `eval` capability or a
+  `typesafe` node into the shared `~/.config/ailloy/config.yaml`, tools still built on ailloy 2.x
+  can no longer read that file, so upgrade them together. MSRV stays at Rust 1.88.
+- **CI: Node 24 actions throughout the release workflow.** The MCP image and deploy jobs move to
+  `docker/setup-buildx-action@v4`, `docker/login-action@v4`, `docker/metadata-action@v6`,
+  `docker/build-push-action@v7` and `azure/login` v3.1.0 (SHA-pinned). Release binaries remain
+  built with `cargo auditable`, with a CycloneDX SBOM per target attached to each GitHub Release.
+
 ### Fixed
 
 - **The emitted SKILL.md frontmatter is valid YAML again.** The `description:` value contained

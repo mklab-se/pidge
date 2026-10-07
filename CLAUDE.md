@@ -97,7 +97,7 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
 
 ## Code Style
 
-- Edition 2024, MSRV 1.88 (floor set by Ailloy 2.2 / ratatui 0.30 / keyring 4)
+- Edition 2024, MSRV 1.88 (floor set by Ailloy 3.0 / ratatui 0.30 / keyring 4)
 - `cargo clippy` with `-D warnings` (zero warnings policy)
 - `cargo fmt` enforced in CI
 - Building from source on Windows needs NASM and CMake on `PATH`: `aws-lc-rs` (reqwest's TLS crypto
