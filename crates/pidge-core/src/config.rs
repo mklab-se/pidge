@@ -314,6 +314,82 @@ mod tests {
         assert_eq!(c, c2);
     }
 
+    /// Pins the exact bytes `save_to` writes, so a YAML library change can
+    /// never silently alter users' config files.
+    fn golden_config() -> Config {
+        let mut c = Config::default();
+        c.add_account(make_account("a@b.com"));
+        let mut file_acct = make_account("personal@outlook.com");
+        file_acct.tenant_id = Account::PERSONAL_MSA_TENANT.into();
+        file_acct.storage = crate::TokenStorage::File;
+        c.add_account(file_acct);
+        c.set_default_calendar("personal@outlook.com").unwrap();
+        c.trusted_senders = vec!["maria@mklab.se".into(), "yes".into(), "".into()];
+        c.classify.prompt = Some("Classify: invoice or receipt?\nAnswer with one word.\n".into());
+        c.classify.parallel = Some(8);
+        c.classify.cache = Some(false);
+        c.classify.labels = vec!["invoice".into(), "null".into(), "1.0".into()];
+        c.guardrails.insert("send".into(), "confirm".into());
+        c.guardrails.insert("delete".into(), "deny".into());
+        c
+    }
+
+    #[test]
+    fn config_yaml_output_is_byte_stable() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("config.yaml");
+        golden_config().save_to(&path).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, GOLDEN_YAML);
+        assert_eq!(Config::load_from(&path).unwrap(), golden_config());
+        let empty = serde_yaml::to_string(&Config::default()).unwrap();
+        assert_eq!(empty, GOLDEN_EMPTY_YAML);
+    }
+
+    const GOLDEN_YAML: &str = r"accounts:
+- email: a@b.com
+  tenant_id: tid
+  home_account_id: home
+  added_at: 2026-05-13T22:00:00Z
+  storage: keychain
+- email: personal@outlook.com
+  tenant_id: 9188040d-6c67-4c5b-b112-36a304b66dad
+  home_account_id: home
+  added_at: 2026-05-13T22:00:00Z
+  storage: file
+defaults:
+  send: a@b.com
+  calendar: personal@outlook.com
+trusted_senders:
+- maria@mklab.se
+- yes
+- ''
+classify:
+  prompt: |
+    Classify: invoice or receipt?
+    Answer with one word.
+  parallel: 8
+  cache: false
+  labels:
+  - invoice
+  - 'null'
+  - '1.0'
+guardrails:
+  delete: deny
+  send: confirm
+";
+    const GOLDEN_EMPTY_YAML: &str = r"accounts: []
+defaults:
+  send: null
+  calendar: null
+trusted_senders: []
+classify:
+  prompt: null
+  parallel: null
+  cache: null
+  labels: []
+";
+
     #[test]
     fn first_added_account_becomes_both_defaults() {
         let mut c = Config::default();
