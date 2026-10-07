@@ -105,6 +105,13 @@ Use the `/release` skill (see `.claude/skills/release/SKILL.md`):
   The release workflow's Windows leg installs NASM via `ilammy/setup-nasm@v1`; CMake and MSVC are
   already on the `windows-latest` image.
 
+## Writing style
+
+- No em-dashes (U+2014) anywhere: docs, comments, help text, error messages, test strings, commit
+  messages. Use a comma; otherwise a colon, parentheses or a new sentence. In Rust code that truly
+  needs the character at runtime, write the escape `\u{2014}`. CI enforces this (the
+  "No em-dashes" step in `ci.yml`).
+
 ## Dependency Policy
 
 We keep this tool's dependencies at their latest compatible versions, not just the versions that
