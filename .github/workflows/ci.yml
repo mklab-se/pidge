@@ -16,6 +16,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: No em-dashes
+        run: |
+          if git grep -nIP '\x{2014}'; then
+            echo "::error::Em-dash (U+2014) found. Use a comma, colon, parentheses or a new sentence; in Rust code that needs the character, write \\u{2014}."
+            exit 1
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
