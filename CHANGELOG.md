@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-10-07
+
+### Changed
+
+- **YAML library: `serde_yaml` is replaced by `serde_norway` 0.9**, the maintained drop-in fork of
+  the deprecated `serde_yaml`, now used across all MKLab tools. `config.yaml` is read and written
+  exactly as before (a new test pins the written bytes), so there is no format change and no
+  migration.
+- **Dependencies: ailloy 3.0.1**, which moves ailloy to `serde_norway` too, so only one YAML stack
+  is built. Plus a `cargo update` of everything else. MSRV stays at Rust 1.88.
+- **CI guards against em-dashes.** Docs, help text and error messages are em-dash free, and the CI
+  check job now fails on any em-dash (U+2014) in the repository. CLAUDE.md gains a Writing style
+  section saying so.
+
 ## [1.5.0] - 2026-10-07
 
 ### Changed
