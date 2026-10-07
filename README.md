@@ -17,9 +17,16 @@
   <a href="https://github.com/mklab-se/pidge/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/pidge.svg" alt="License"></a>
 </p>
 
+<!-- "What's new" callout: keep it right after the badges and refresh it on every minor/major
+     release (version and a one-line summary of the headline changes). Only link CHANGELOG.md. -->
 <p align="center">
-  <a href="CHANGELOG.md"><strong>What's new →</strong></a>
-  &nbsp;·&nbsp; <a href="INSTALL.md">Install</a>
+  <strong>pidge 1.5</strong> is here: the e-mail and calendar client for your AI agent, with a
+  rewritten README and usage guide, and ailloy 3.0 under the hood.<br>
+  <a href="CHANGELOG.md"><strong>What's new</strong></a>
+</p>
+
+<p align="center">
+  <a href="INSTALL.md">Install</a>
   &nbsp;·&nbsp; <a href="docs/usage.md">Usage</a>
   &nbsp;·&nbsp; <a href="docs/mcp.md">MCP server</a>
 </p>
