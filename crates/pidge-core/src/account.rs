@@ -123,7 +123,7 @@ tenant_id: tid
 home_account_id: hid
 added_at: "2026-05-13T22:00:00Z"
 "#;
-        let a: Account = serde_yaml::from_str(yaml).unwrap();
+        let a: Account = serde_norway::from_str(yaml).unwrap();
         assert!(matches!(a.storage, TokenStorage::Keychain));
     }
 

@@ -68,7 +68,8 @@ base64 = "0.23"
 rand = "0.10"
 
 # YAML for config files
-serde_yaml = "0.9"
+# serde_norway: maintained drop-in fork of the deprecated serde_yaml, chosen fleet-wide 2026-10-07
+serde_norway = "0.9"
 
 # Test-only HTTP mock
 wiremock = "0.6"

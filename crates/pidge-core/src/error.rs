@@ -8,7 +8,7 @@ pub enum CoreError {
     Io(#[from] std::io::Error),
 
     #[error("config parse: {0}")]
-    Parse(#[from] serde_yaml::Error),
+    Parse(#[from] serde_norway::Error),
 
     #[error("unknown account: {email}")]
     UnknownAccount { email: String },

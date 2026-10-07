@@ -67,7 +67,7 @@ impl Config {
             return Ok(Self::default());
         }
         let text = std::fs::read_to_string(path)?;
-        Ok(serde_yaml::from_str(&text)?)
+        Ok(serde_norway::from_str(&text)?)
     }
 
     /// Save the config to the default path.
@@ -78,7 +78,7 @@ impl Config {
 
     /// Save to a specific path. Useful for tests.
     pub fn save_to(&self, path: &Path) -> Result<(), CoreError> {
-        let text = serde_yaml::to_string(self)?;
+        let text = serde_norway::to_string(self)?;
         // Written whole or not at all: a crash mid-write must not leave a
         // half file that later fails to parse (guardrails then fail closed).
         let tmp = path.with_extension("yaml.tmp");
@@ -309,8 +309,8 @@ mod tests {
     #[test]
     fn empty_config_serializes_and_deserializes() {
         let c = Config::default();
-        let yaml = serde_yaml::to_string(&c).unwrap();
-        let c2: Config = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_norway::to_string(&c).unwrap();
+        let c2: Config = serde_norway::from_str(&yaml).unwrap();
         assert_eq!(c, c2);
     }
 
@@ -342,7 +342,7 @@ mod tests {
         let written = std::fs::read_to_string(&path).unwrap();
         assert_eq!(written, GOLDEN_YAML);
         assert_eq!(Config::load_from(&path).unwrap(), golden_config());
-        let empty = serde_yaml::to_string(&Config::default()).unwrap();
+        let empty = serde_norway::to_string(&Config::default()).unwrap();
         assert_eq!(empty, GOLDEN_EMPTY_YAML);
     }
 
@@ -493,7 +493,7 @@ classify:
     #[test]
     fn config_with_missing_trusted_senders_loads_as_empty() {
         let yaml = "accounts: []\ndefaults: {}\n";
-        let c: Config = serde_yaml::from_str(yaml).unwrap();
+        let c: Config = serde_norway::from_str(yaml).unwrap();
         assert!(c.trusted_senders.is_empty());
     }
 
@@ -513,8 +513,8 @@ classify:
         c.classify.parallel = Some(8);
         c.classify.cache = Some(true);
         c.classify.labels = vec!["invoice".into(), "receipt".into()];
-        let yaml = serde_yaml::to_string(&c).unwrap();
-        let back: Config = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_norway::to_string(&c).unwrap();
+        let back: Config = serde_norway::from_str(&yaml).unwrap();
         assert_eq!(back.classify.prompt.as_deref(), Some("Classify it"));
         assert_eq!(back.classify.parallel, Some(8));
         assert_eq!(back.classify.labels, vec!["invoice", "receipt"]);
