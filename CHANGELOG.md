@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Config and cache directories follow the XDG layout on macOS too**, the same as Ailloy and
+  every MKLab tool. On Linux and macOS, config (`config.yaml`, file-stored tokens in `tokens/`,
+  MCP sessions in `mcp/`) lives in `$XDG_CONFIG_HOME/pidge` (default `~/.config/pidge`) and caches
+  (messages, events, contacts, classify, update check) in `$XDG_CACHE_HOME/pidge` (default
+  `~/.cache/pidge`). XDG variables count only when they are absolute paths. Windows keeps
+  `%APPDATA%\pidge` and `%LOCALAPPDATA%\pidge`. Linux is unchanged. A new `pidge_core::paths`
+  module is the single place that decides.
+- **Breaking on macOS, no migration**: pidge no longer reads `~/Library/Application Support/pidge`
+  or `~/Library/Caches/pidge`. Move your config (accounts, file-stored tokens, MCP sessions) or
+  sign in again; tokens in the OS keychain are unaffected. The cache can simply be deleted, or
+  moved:
+
+  ```sh
+  mkdir -p ~/.config ~/.cache
+  mv ~/Library/Application\ Support/pidge ~/.config/pidge
+  mv ~/Library/Caches/pidge ~/.cache/pidge
+  ```
+
+  (If you set `XDG_CONFIG_HOME` or `XDG_CACHE_HOME`, move into `$XDG_CONFIG_HOME/pidge` and
+  `$XDG_CACHE_HOME/pidge` instead.)
+
 ## [1.5.1] - 2026-10-07
 
 ### Changed

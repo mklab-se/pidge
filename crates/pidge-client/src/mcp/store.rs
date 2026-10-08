@@ -192,7 +192,7 @@ impl McpTokenStore {
     /// consulting it. Write paths that need the directory to actually
     /// exist use [`Self::ensure_dir`] instead.
     fn dir() -> Result<PathBuf, ClientError> {
-        Ok(crate::base_config_dir()?.join("pidge").join("mcp"))
+        Ok(crate::config_dir()?.join("mcp"))
     }
 
     /// [`Self::dir`], creating it (and tightening it to 0700 on Unix) if it

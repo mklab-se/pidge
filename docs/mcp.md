@@ -138,8 +138,8 @@ final result to stdout (plain text, or JSON with `--json`), so they compose
 in scripts the same way the rest of the CLI does. The session itself is
 stored per-server:
 
-- macOS: `~/Library/Application Support/pidge/mcp/`
-- Linux: `~/.config/pidge/mcp/`
+- Linux and macOS: `${XDG_CONFIG_HOME:-~/.config}/pidge/mcp/`
+- Windows: `%APPDATA%\pidge\mcp\`
 
 ## Tools and prompts
 

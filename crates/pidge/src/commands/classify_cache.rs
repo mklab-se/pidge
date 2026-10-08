@@ -55,12 +55,20 @@ impl ClassifyCache {
 }
 
 fn default_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("pidge").join("classify-cache.json"))
+    pidge_core::paths::cache_dir().map(|d| d.join("classify-cache.json"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_path_is_in_the_xdg_cache_dir() {
+        assert_eq!(
+            default_path(),
+            pidge_core::paths::cache_dir().map(|d| d.join("classify-cache.json"))
+        );
+    }
 
     #[test]
     fn key_is_stable_and_distinct() {

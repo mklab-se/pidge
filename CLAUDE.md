@@ -25,7 +25,7 @@ crates/
       banner.rs         # ASCII logo
       update.rs         # Crates.io update checker
       commands/         # `pidge ai`, `pidge account`, `pidge mail`, `pidge completion`, etc.
-  pidge-core/           # Provider-agnostic types: Account, Config, Message
+  pidge-core/           # Provider-agnostic types: Account, Config, Message; `paths.rs` decides where files live
   pidge-client/         # Microsoft Graph client, OAuth flows, keychain token storage
     src/
       auth/             # Browser auth-code+PKCE flow, refresh, JWT, keychain; `TokenBackend` seam
@@ -81,7 +81,13 @@ deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Contai
 - Every Graph call goes through `send_with_retry` (429/503/504 with Retry-After); bulk ops use `$batch`; agents page with opaque `--cursor` tokens and track changes with `mail/calendar delta` + `pidge watch`
 - Guardrails: user policy per action class in config (`guardrails.send: confirm` etc.), enforced by `guardrail::gate()` in mutating handlers; global `--dry-run`
 - AI integration: delegates entirely to `ailloy::config_tui` with tool name `"pidge"` and capability slice `&["chat"]`. Config lives at `~/.config/ailloy/config.yaml`, shared with `rigg`, `mdeck`, `cosq`.
-- Update checker: background task, cached at `~/.cache/pidge/`, skip with `PIDGE_NO_UPDATE_CHECK=1`
+- Update checker: background task, cached in the cache dir, skip with `PIDGE_NO_UPDATE_CHECK=1`
+- File locations: `pidge_core::paths` is the only place that decides. Linux and macOS share the XDG
+  layout, same as Ailloy: config (`config.yaml`, file-stored `tokens/`, MCP `mcp/`) in
+  `${XDG_CONFIG_HOME:-~/.config}/pidge`, caches (messages, events, contacts, classify, update
+  check) in `${XDG_CACHE_HOME:-~/.cache}/pidge`; XDG variables count only when absolute. Windows
+  uses `%APPDATA%\pidge` and `%LOCALAPPDATA%\pidge`. Never call `dirs::config_dir()` or
+  `dirs::cache_dir()` directly (on macOS they are `~/Library/...`)
 
 ## Releasing
 
@@ -125,7 +131,7 @@ mdeck + pidge + rigg + rusty-tmpl).
 
 ## Token storage
 
-- Tokens default to the OS keychain (`Keychain` variant; `keyring` 4 in `v1` mode: macOS Keychain, Windows Credential Manager, Secret Service on Linux). New sign-ins can opt into a plaintext file at `~/.config/pidge/tokens/<email>.json` (mode 0600 on Unix) with `pidge account add --store=file`. Useful when keychain prompts are friction during development.
+- Tokens default to the OS keychain (`Keychain` variant; `keyring` 4 in `v1` mode: macOS Keychain, Windows Credential Manager, Secret Service on Linux). New sign-ins can opt into a plaintext file at `${XDG_CONFIG_HOME:-~/.config}/pidge/tokens/<email>.json` (mode 0600 on Unix) with `pidge account add --store=file`. Useful when keychain prompts are friction during development.
 - `pidge account migrate-storage <email> --to <keychain|file>` moves an existing account's tokens between backends without forcing a re-login.
 - The chosen backend is recorded on the account in `config.yaml` (`storage:` field); `AuthClient::get_valid_token` reads it on every call so callers don't need to know which backend was used.
 - **Never commit token files.** `.gitignore` has belt-and-suspenders entries for `**/tokens/*.json` and `crates/pidge/tests/fixtures/raw/`.

@@ -18,7 +18,7 @@ pub struct FileStore;
 
 impl FileStore {
     fn dir() -> Result<PathBuf, ClientError> {
-        let dir = crate::base_config_dir()?.join("pidge").join("tokens");
+        let dir = crate::config_dir()?.join("tokens");
         std::fs::create_dir_all(&dir)?;
         // The files inside are 0600; the directory listing (one file per
         // signed-in address) is private too.
@@ -126,6 +126,14 @@ mod tests {
             refresh_token: "RT".into(),
             expires_at: Utc::now() + Duration::seconds(3600),
         }
+    }
+
+    #[test]
+    fn tokens_live_in_the_tokens_folder_of_the_config_dir() {
+        with_temp_config_dir(|base| {
+            let path = FileStore::path_for("me@example.com").unwrap();
+            assert_eq!(path, base.join("tokens").join("me@example.com.json"));
+        });
     }
 
     #[test]

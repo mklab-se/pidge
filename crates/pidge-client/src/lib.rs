@@ -20,8 +20,10 @@ pub mod cursor;
 
 pub use cursor::{Cursor, CursorError};
 
-/// Resolve the base directory pidge's config-dir-rooted stores (Microsoft
-/// tokens in `auth::file_store`, MCP tokens in `mcp::store`) live under.
+/// Resolve pidge's config directory, which the config-dir-rooted stores
+/// (Microsoft tokens in `auth::file_store`, MCP tokens in `mcp::store`)
+/// live under: `${XDG_CONFIG_HOME:-~/.config}/pidge` on Linux and macOS,
+/// `%APPDATA%\pidge` on Windows (see `pidge_core::paths`).
 ///
 /// In tests, honors a thread-local override set via
 /// [`test_support::with_base_dir`] so tests never mutate process-wide
@@ -31,11 +33,24 @@ pub use cursor::{Cursor, CursorError};
 /// entirely: it's invisible to every thread but the one that set it, so
 /// parallel `#[test]` functions never interfere and no lock is needed.
 ///
-/// In production this is always `dirs::config_dir()`.
-pub(crate) fn base_config_dir() -> Result<std::path::PathBuf, ClientError> {
+/// In production this is always `pidge_core::paths::config_dir()`.
+pub(crate) fn config_dir() -> Result<std::path::PathBuf, ClientError> {
     #[cfg(test)]
     if let Some(base) = test_support::base_dir_override() {
         return Ok(base);
     }
-    dirs::config_dir().ok_or(ClientError::NoConfigDir)
+    pidge_core::paths::config_dir().ok_or(ClientError::NoConfigDir)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn config_dir_is_pidge_core_paths_config_dir() {
+        // No thread-local override on this thread: production resolution.
+        assert_eq!(
+            super::config_dir().ok(),
+            pidge_core::paths::config_dir(),
+            "client stores must share the one XDG-style config dir"
+        );
+    }
 }

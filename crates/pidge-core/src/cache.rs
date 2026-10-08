@@ -72,9 +72,7 @@ pub struct MessageCache {
 impl MessageCache {
     /// Default path: `${XDG_CACHE_HOME:-~/.cache}/pidge/messages.json`.
     pub fn default_path() -> Result<PathBuf, CoreError> {
-        let dir = dirs::cache_dir()
-            .ok_or(CoreError::NoConfigDir)?
-            .join("pidge");
+        let dir = crate::paths::cache_dir().ok_or(CoreError::NoConfigDir)?;
         std::fs::create_dir_all(&dir)?;
         Ok(dir.join("messages.json"))
     }
@@ -198,9 +196,7 @@ pub struct EventCache {
 impl EventCache {
     /// Default path: `${XDG_CACHE_HOME:-~/.cache}/pidge/events.json`.
     pub fn default_path() -> Result<PathBuf, CoreError> {
-        let dir = dirs::cache_dir()
-            .ok_or(CoreError::NoConfigDir)?
-            .join("pidge");
+        let dir = crate::paths::cache_dir().ok_or(CoreError::NoConfigDir)?;
         std::fs::create_dir_all(&dir)?;
         Ok(dir.join("events.json"))
     }

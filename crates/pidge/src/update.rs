@@ -31,7 +31,7 @@ struct CrateInfo {
 }
 
 fn cache_path() -> Option<PathBuf> {
-    dirs::cache_dir().map(|d| d.join("pidge").join("update-check.json"))
+    pidge_core::paths::cache_dir().map(|d| d.join("update-check.json"))
 }
 
 fn read_cache() -> Option<UpdateCache> {
@@ -148,5 +148,16 @@ pub async fn check_for_updates() {
         print_update_notification(&current, &latest);
     } else {
         debug!(current = %current, latest = %latest, "pidge is up to date");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn update_check_lives_in_the_xdg_cache_dir() {
+        assert_eq!(
+            super::cache_path(),
+            pidge_core::paths::cache_dir().map(|d| d.join("update-check.json"))
+        );
     }
 }

@@ -53,9 +53,7 @@ pub enum ContactSource {
 impl ContactsCache {
     /// `${XDG_CACHE_HOME:-~/.cache}/pidge/contacts.json`.
     pub fn default_path() -> Result<PathBuf, CoreError> {
-        let dir = dirs::cache_dir()
-            .ok_or(CoreError::NoConfigDir)?
-            .join("pidge");
+        let dir = crate::paths::cache_dir().ok_or(CoreError::NoConfigDir)?;
         std::fs::create_dir_all(&dir)?;
         Ok(dir.join("contacts.json"))
     }

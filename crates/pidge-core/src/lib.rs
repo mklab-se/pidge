@@ -12,6 +12,7 @@ mod error;
 mod event;
 pub mod flags;
 mod message;
+pub mod paths;
 pub mod render;
 pub mod timerange;
 
