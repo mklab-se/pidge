@@ -680,7 +680,7 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
     assert_eq!(resp.status(), StatusCode::OK);
     let page = body_text(resp).await;
     assert!(
-        page.contains("Mailbox connected to jane@example.com"),
+        page.contains("is connected to the pidge account jane@example.com"),
         "{page}"
     );
     let rec = UserStore::new(h.secrets.clone())
@@ -1817,7 +1817,7 @@ async fn connect_accepts_the_named_mailbox_regardless_of_case() {
     assert_eq!(resp.status(), StatusCode::OK);
     let page = body_text(resp).await;
     assert!(
-        page.contains("Mailbox connected to jane@example.com"),
+        page.contains("is connected to the pidge account jane@example.com"),
         "{page}"
     );
 }
@@ -2073,7 +2073,7 @@ async fn consent_and_error_pages_carry_the_security_headers() {
         let headers = resp.headers();
         assert_eq!(
             headers[header::CONTENT_SECURITY_POLICY],
-            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
+            "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'; form-action 'self'; frame-ancestors 'none'"
         );
         assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
         assert_eq!(headers[header::CACHE_CONTROL], "no-store");

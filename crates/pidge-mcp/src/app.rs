@@ -50,6 +50,7 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
         )
         // The signed link is its own credential: outside the bearer layer.
         .route(DOWNLOAD_ROUTE, get(download::download))
+        .route("/art/{file}", get(crate::oauth::art::serve))
         .merge(oauth::router())
         .merge(crate::ai_page::router())
         .merge(mcp_routes)

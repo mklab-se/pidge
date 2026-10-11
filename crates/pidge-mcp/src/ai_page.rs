@@ -226,10 +226,13 @@ async fn submit(
     state.cache.invalidate_user(&link.owner);
     state.review.ai_links.take(&form.state);
     tracing::info!(user = %user_hash(&link.owner), provider = ?secret.provider, "ai key saved");
-    pages::done(&format!(
-        "AI sorting is set up with {label} for the pidge account {}. You can close this page and tell your assistant.",
-        link.owner
-    ))
+    pages::done(
+        &link.owner,
+        &format!(
+            "AI sorting is set up with {label} for the pidge account {}. You can close this page and tell your assistant.",
+            link.owner
+        ),
+    )
 }
 
 /// One tiny request (a single yes/no on a one-line text) to check the key.

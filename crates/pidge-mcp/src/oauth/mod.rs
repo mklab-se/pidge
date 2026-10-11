@@ -31,6 +31,7 @@
 //! ([`crate::config::Config::redirect_uri_allowed`]), and nothing redirects
 //! to the client before the user has seen the consent page.
 
+pub(crate) mod art;
 pub mod bearer;
 #[cfg(test)]
 mod flow_tests;
@@ -853,9 +854,10 @@ async fn connect_complete(
         mailbox = %user_hash(mailbox),
         "mailbox connected"
     );
-    pages::done(&format!(
-        "Mailbox connected to {owner}. You can close this tab."
-    ))
+    pages::done(
+        owner,
+        &format!("{mailbox} is connected to the pidge account {owner}. You can close this tab."),
+    )
 }
 
 // ---------------------------------------------------------------------------
