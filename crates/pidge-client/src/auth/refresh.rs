@@ -11,6 +11,9 @@ use crate::error::ClientError;
 /// Returns the new `TokenSet`. If Microsoft rotates the refresh token, it's
 /// included in the response and used. If not, the current refresh token is preserved.
 ///
+/// `scope` must ask for no more than `current` was granted (see
+/// [`crate::auth::config::refresh_scope_string`]): Microsoft refuses that.
+///
 /// Errors:
 /// - `ClientError::SessionExpired` if Microsoft returns `invalid_grant`
 /// - `ClientError::Graph` for other HTTP errors
@@ -63,6 +66,7 @@ pub async fn refresh(
         access_token: tr.access_token,
         refresh_token: new_refresh,
         expires_at: Utc::now() + chrono::Duration::seconds(expires as i64 - 60),
+        scope: tr.scope.or_else(|| current.scope.clone()),
     })
 }
 
@@ -78,6 +82,7 @@ mod tests {
             access_token: "OLD_AT".into(),
             refresh_token: "OLD_RT".into(),
             expires_at: Utc::now() - Duration::seconds(60),
+            scope: None,
         }
     }
 

@@ -297,6 +297,7 @@ pub(crate) mod tests {
             access_token: "AT".into(),
             refresh_token: "RT".into(),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            scope: None,
         }
     }
 

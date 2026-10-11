@@ -193,12 +193,15 @@ impl AuthClient {
                 })?;
 
         let access_token = if tokens.needs_refresh() {
+            // Never more than this token was granted: an account consented
+            // before a scope was added keeps refreshing without it.
+            let scope = config::refresh_scope_string(&self.scope, tokens.scope.as_deref());
             let new_tokens = refresh::refresh(
                 &self.http,
                 &self.authority_base,
                 &self.client_id,
                 &tokens,
-                &self.scope,
+                &scope,
                 email,
             )
             .await?;

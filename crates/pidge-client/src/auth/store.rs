@@ -61,6 +61,7 @@ mod tests {
             access_token: "abc".into(),
             refresh_token: "xyz".into(),
             expires_at: Utc::now() + Duration::seconds(3600),
+            scope: None,
         };
         let blob = serde_json::to_string(&t).unwrap();
         let t2: TokenSet = serde_json::from_str(&blob).unwrap();

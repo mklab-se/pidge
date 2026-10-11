@@ -9,6 +9,11 @@ pub struct TokenSet {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: DateTime<Utc>,
+    /// The scopes Microsoft granted (its token response's `scope`), so a
+    /// refresh asks for no more than that; `None` on tokens stored before
+    /// pidge recorded it. See [`crate::auth::config::refresh_scope_string`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 impl TokenSet {
@@ -28,6 +33,7 @@ impl std::fmt::Debug for TokenSet {
             .field("access_token", &"<redacted>")
             .field("refresh_token", &"<redacted>")
             .field("expires_at", &self.expires_at)
+            .field("scope", &self.scope)
             .finish()
     }
 }
@@ -42,6 +48,7 @@ mod tests {
             access_token: "a".into(),
             refresh_token: "r".into(),
             expires_at: Utc::now() + Duration::seconds(3600),
+            scope: None,
         };
         assert!(!t.needs_refresh());
     }
@@ -52,6 +59,7 @@ mod tests {
             access_token: "a".into(),
             refresh_token: "r".into(),
             expires_at: Utc::now() + Duration::seconds(30),
+            scope: None,
         };
         assert!(t.needs_refresh());
     }
@@ -62,6 +70,7 @@ mod tests {
             access_token: "a".into(),
             refresh_token: "r".into(),
             expires_at: Utc::now() - Duration::seconds(10),
+            scope: None,
         };
         assert!(t.needs_refresh());
     }
@@ -74,6 +83,7 @@ mod tests {
             expires_at: DateTime::parse_from_rfc3339("2026-05-13T23:00:00Z")
                 .unwrap()
                 .to_utc(),
+            scope: Some("openid Mail.ReadWrite".into()),
         };
         let json = serde_json::to_string(&t).unwrap();
         let t2: TokenSet = serde_json::from_str(&json).unwrap();
@@ -86,6 +96,7 @@ mod tests {
             access_token: "super-secret-access".into(),
             refresh_token: "super-secret-refresh".into(),
             expires_at: Utc::now(),
+            scope: None,
         };
 
         let debug = format!("{t:?}");

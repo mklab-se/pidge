@@ -359,6 +359,7 @@ mod tests {
             access_token: "a".into(),
             refresh_token: "r".into(),
             expires_at: chrono::Utc::now(),
+            scope: None,
         };
         let mut rec = MailboxRecord {
             owner: "jane@example.com".into(),
@@ -399,6 +400,7 @@ mod tests {
             access_token: "a".into(),
             refresh_token: "r".into(),
             expires_at: chrono::Utc::now(),
+            scope: None,
         })
         .unwrap();
         secrets
@@ -460,6 +462,7 @@ mod tests {
             access_token: "a".into(),
             refresh_token: "r".into(),
             expires_at: chrono::Utc::now(),
+            scope: None,
         };
         store
             .save_mailbox(
