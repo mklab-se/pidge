@@ -503,11 +503,7 @@ pub fn resolve_recipients(tokens: &[String], cache: &ContactsCache) -> Result<Ve
                     ));
                 }
             };
-            let unusable = address.is_empty()
-                || address
-                    .chars()
-                    .any(|c| c.is_whitespace() || c.is_control() || "<>,;\"".contains(c));
-            if unusable {
+            if unusable_address(&address) {
                 return Err(format!(
                     "\"{shown}\" is not a usable e-mail address; give a plain address like name@example.com"
                 ));
@@ -515,6 +511,16 @@ pub fn resolve_recipients(tokens: &[String], cache: &ContactsCache) -> Result<Ve
             Ok(address)
         })
         .collect()
+}
+
+/// Whether `address` can't go into a recipient field as one plain address:
+/// empty, or with whitespace, control characters or the characters that
+/// separate or quote addresses (`<>,;"`).
+pub(crate) fn unusable_address(address: &str) -> bool {
+    address.is_empty()
+        || address
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "<>,;\"".contains(c))
 }
 
 /// `existing` addresses (as Outlook filled them in) followed by the `added`

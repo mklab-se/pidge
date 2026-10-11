@@ -19,7 +19,7 @@ use super::mail_read::check_id;
 use crate::cache::ReadCache;
 use crate::context::{ToolContext, graph_error, tool_error};
 use crate::markitdown::{self, CONVERT_TIMEOUT, ConvertError, MAX_INPUT_BYTES};
-use crate::render::{cap, one_line, untrusted};
+use crate::render::{cap, inline_name, untrusted};
 use crate::users::user_hash;
 
 /// Pictures larger than this are offered as a link instead (spec §1.10).
@@ -98,7 +98,7 @@ impl PidgeMcp {
         if attachment.size_bytes > MAX_INPUT_BYTES {
             return Err(tool_error(format!(
                 "{} is {} bytes, over the 25 MB limit for attachments; open it in Outlook instead",
-                one_line(&attachment.name),
+                inline_name(&attachment.name),
                 attachment.size_bytes
             )));
         }
@@ -121,7 +121,7 @@ impl PidgeMcp {
                 // The name is the sender's text, so the line is marked untrusted.
                 Ok(text_result(untrusted(&format!(
                     "Download {} ({} bytes): {}/dl/{token}  (valid 15 minutes)",
-                    one_line(&attachment.name),
+                    inline_name(&attachment.name),
                     attachment.size_bytes,
                     self.state.config.base_url()
                 ))))
@@ -181,8 +181,8 @@ impl PidgeMcp {
         Ok(CallToolResult::success(vec![
             ContentBlock::text(format!(
                 "{}, {}, {} bytes",
-                one_line(&attachment.name),
-                one_line(&attachment.content_type),
+                inline_name(&attachment.name),
+                inline_name(&attachment.content_type),
                 attachment.size_bytes
             )),
             ContentBlock::image(STANDARD.encode(bytes), mime(attachment)),
@@ -260,8 +260,8 @@ fn render_document(message_id: &str, doc: &Converted, offset: usize) -> Result<S
     let more = total - offset > TEXT_CAP;
     let mut block = format!(
         "attachment: {}  type={}  size={} bytes\n",
-        one_line(&attachment.name),
-        one_line(&attachment.content_type),
+        inline_name(&attachment.name),
+        inline_name(&attachment.content_type),
         attachment.size_bytes
     );
     if offset > 0 || more {
@@ -279,7 +279,7 @@ fn render_document(message_id: &str, doc: &Converted, offset: usize) -> Result<S
     if rest.trim().is_empty() {
         out.push_str(&format!(
             "\nno text could be extracted from this {} ({} bytes); use mode=link to give the user a download link",
-            one_line(&attachment.content_type),
+            inline_name(&attachment.content_type),
             attachment.size_bytes
         ));
     }
@@ -308,8 +308,8 @@ async fn conversion_slot(
 fn image_too_large(attachment: &Attachment, size: u64) -> McpError {
     tool_error(format!(
         "{} ({}, {size} bytes) is over the 5 MB limit for pictures; use mode=link to give the user a download link",
-        one_line(&attachment.name),
-        one_line(&attachment.content_type),
+        inline_name(&attachment.name),
+        inline_name(&attachment.content_type),
     ))
 }
 
@@ -333,8 +333,8 @@ fn is_image(attachment: &Attachment) -> bool {
 fn conversion_error(attachment: &Attachment, e: &ConvertError) -> McpError {
     let what = format!(
         "{} ({}, {} bytes)",
-        one_line(&attachment.name),
-        one_line(&attachment.content_type),
+        inline_name(&attachment.name),
+        inline_name(&attachment.content_type),
         attachment.size_bytes
     );
     let why = match e {

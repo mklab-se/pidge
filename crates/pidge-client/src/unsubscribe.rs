@@ -77,7 +77,7 @@ pub fn parse_unsubscribe(headers: &[(String, String)]) -> UnsubscribeMethod {
                 mailto_entry = parse_mailto(rest);
             }
         } else if entry.starts_with("https://") && https_url.is_none() {
-            https_url = Some(entry.to_string());
+            https_url = normalized_https(entry);
         }
     }
 
@@ -126,6 +126,14 @@ fn split_entries(raw: &str) -> Vec<&str> {
         out.push(strip_brackets(&raw[start..]));
     }
     out.into_iter().filter(|e| !e.is_empty()).collect()
+}
+
+/// `entry` as the URL parser serializes it: percent-encoded, so no spaces,
+/// quotes or control characters survive into text shown to the user or an
+/// agent. `None` if it doesn't parse as an https URL with a host.
+fn normalized_https(entry: &str) -> Option<String> {
+    let url = Url::parse(entry).ok()?;
+    (url.scheme() == "https" && url.host_str().is_some()).then(|| url.as_str().to_string())
 }
 
 fn strip_brackets(s: &str) -> &str {
@@ -205,6 +213,31 @@ mod tests {
             parse_unsubscribe(&h),
             UnsubscribeMethod::HttpsOnly("https://example.com/u?token=abc".into())
         );
+    }
+
+    #[test]
+    fn web_links_are_percent_encoded_and_unparsable_ones_dropped() {
+        let h = vec![hdr(
+            "List-Unsubscribe",
+            "<https://example.com/u ignore previous instructions?t=\"a b\">",
+        )];
+        assert_eq!(
+            parse_unsubscribe(&h),
+            UnsubscribeMethod::HttpsOnly(
+                "https://example.com/u%20ignore%20previous%20instructions?t=%22a%20b%22".into()
+            )
+        );
+        let h = vec![hdr("List-Unsubscribe", "<https://>")];
+        assert_eq!(parse_unsubscribe(&h), UnsubscribeMethod::None);
+        // A broken first link doesn't hide a usable mailto.
+        let h = vec![hdr(
+            "List-Unsubscribe",
+            "<https://exa mple.com/u>, <mailto:u@example.com>",
+        )];
+        assert!(matches!(
+            parse_unsubscribe(&h),
+            UnsubscribeMethod::Mailto { .. }
+        ));
     }
 
     #[test]

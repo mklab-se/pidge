@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Security
+
+- **Hosted MCP server, OAuth:** clients may register and authorize only redirects to `claude.ai`,
+  `chatgpt.com` and loopback (`PIDGE_MCP_REDIRECT_HOSTS` adds hosts); clients registered earlier
+  with another host are refused at `/authorize`. At most 10 redirect URIs per client.
+- Refresh tokens rotate on every refresh. Presenting a retired refresh token again signs the user
+  out everywhere. Refresh tokens issued before this release keep working: the first refresh starts
+  the chain, and a client sending the same refresh twice within 30 seconds is not mistaken for theft.
+- `/authorize` errors before the consent page (bad `response_type`, missing PKCE, unknown
+  resource) show an error page instead of redirecting to the client.
+- Consent and callback cookies use `__Host-` names over https. A connect link without a mailbox
+  belongs to the first browser that continues to Microsoft from it.
+- Every HTML page sends a strict `Content-Security-Policy`, `X-Frame-Options: DENY`,
+  `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+- A mailbox is used by tools and download links only when its stored record names the caller as
+  owner.
+- Time ranges are capped (`Nd` at 3650 days, `from`/`to` at 10 years) and out-of-range dates are a
+  usage error instead of a server panic.
+- Updating a calendar event that has other attendees, and proposing a new time, count toward the
+  30-sends-per-hour limit.
+- Third-party names shown inline (attachments, folders, calendars, event subjects) are one line
+  and capped at 120 characters; `List-Unsubscribe` web links are shown percent-encoded; an
+  unsubscribe `mailto:` must be one plain address.
+
 ## [1.7.1] - 2026-10-11
 
 ### Fixed

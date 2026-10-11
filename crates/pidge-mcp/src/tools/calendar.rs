@@ -25,7 +25,7 @@ use super::PidgeMcp;
 use super::mail_read::{check_id, per_account};
 use crate::cache::ReadCache;
 use crate::context::{ToolContext, graph_error, tool_error};
-use crate::render::{cap_inline, event_line, local, one_line, untrusted};
+use crate::render::{event_line, inline_name, local, one_line, untrusted};
 use crate::state::SENDS_PER_HOUR;
 use crate::users::user_hash;
 
@@ -339,10 +339,11 @@ impl PidgeMcp {
             RsvpResponse::Tentative => (RsvpKind::Tentative, "Tentatively accepted"),
             RsvpResponse::Decline => (RsvpKind::Decline, "Declined"),
         };
-        // A note to the organizer is an e-mail the agent wrote: charged
-        // like a send. A bare accept/decline is Outlook's own notice.
+        // A note to the organizer is an e-mail the agent wrote, and a
+        // proposed new time is a message the organizer acts on: both are
+        // charged like a send. A bare accept/decline is Outlook's own notice.
         let message = args.message.as_deref().unwrap_or("");
-        let charged = send_response && !message.trim().is_empty();
+        let charged = send_response && (!message.trim().is_empty() || proposed.is_some());
         if charged && !self.state.reserve_send(&tc.user.email) {
             return Err(send_limit());
         }
@@ -529,8 +530,15 @@ impl PidgeMcp {
             reminder: Reminder::default(),
         };
         let graph = &self.state.graph;
-        // A new attendee list means invitations (and cancellations) go out.
-        let charged = args.attendees.as_ref().is_some_and(|a| !a.is_empty());
+        // Outlook mails every attendee the change (and a new attendee list
+        // means invitations and cancellations), so any update of an event
+        // with other people on it is charged like a send.
+        let charged = args.attendees.as_ref().is_some_and(|a| !a.is_empty())
+            || event.attendees.iter().any(|a| {
+                !tc.my_addresses()
+                    .iter()
+                    .any(|m| m.eq_ignore_ascii_case(&a.address))
+            });
         if charged && !self.state.reserve_send(&tc.user.email) {
             return Err(send_limit());
         }
@@ -655,7 +663,7 @@ impl PidgeMcp {
                 Ok(found) => events.extend(found),
                 Err(ClientError::Graph { status: 403, .. }) => notes.push(format!(
                     "note: calendar {} in {account} could not be read (Microsoft denied access)",
-                    cap_inline(&one_line(&calendar.name), 60)
+                    inline_name(&calendar.name)
                 )),
                 Err(e) => return Err(e),
             }
@@ -840,7 +848,7 @@ fn push_notes(out: &mut String, notes: &[String]) {
 
 /// The event's title on one line, as results quote it.
 fn title(e: &Event) -> String {
-    match one_line(&e.subject) {
+    match inline_name(&e.subject) {
         s if s.is_empty() => "(no title)".to_string(),
         s => s,
     }
@@ -2056,6 +2064,81 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.message.contains("Send limit reached"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn updating_an_event_with_other_attendees_is_charged_like_a_send() {
+        let h = ToolHarness::new(&[JANE]).await;
+        let mut shared = ev("E1", monday(9, 0), monday(10, 0), "organizer");
+        shared["attendees"] = json!([
+            { "emailAddress": { "name": "Jane", "address": JANE } },
+            { "emailAddress": { "name": "Bob", "address": "bob@example.com" } },
+        ]);
+        mount_event(&h, JANE, "E1", 200, shared).await;
+        // Only Jane herself on it: Outlook mails nobody.
+        mount_event(
+            &h,
+            JANE,
+            "E2",
+            200,
+            ev("E2", monday(9, 0), monday(10, 0), "organizer"),
+        )
+        .await;
+        Mock::given(method("PATCH"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(2)
+            .mount(&h.graph)
+            .await;
+        let retitle = |id: &str| EventArgs {
+            action: EventAction::Update,
+            id: Some(id.into()),
+            title: Some("Moved".into()),
+            ..Default::default()
+        };
+
+        event(&h, retitle("E2")).await.unwrap();
+        assert_eq!(sends_used(&h), 0, "no one else to notify");
+        event(&h, retitle("E1")).await.unwrap();
+        assert_eq!(sends_used(&h), 1, "Bob is mailed the change");
+
+        // At the cap, the update is refused before anything is changed.
+        for _ in 1..crate::state::SENDS_PER_HOUR {
+            assert!(h.state.reserve_send(JANE));
+        }
+        let err = event(&h, retitle("E1")).await.unwrap_err();
+        assert!(err.message.contains("Send limit reached"), "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn proposing_a_new_time_is_charged_even_without_a_message() {
+        let h = ToolHarness::new(&[JANE]).await;
+        mount_event(
+            &h,
+            JANE,
+            "E1",
+            200,
+            ev("E1", monday(9, 0), monday(10, 0), "notResponded"),
+        )
+        .await;
+        Mock::given(method("POST"))
+            .and(path("/v1.0/me/events/E1/tentativelyAccept"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(1)
+            .mount(&h.graph)
+            .await;
+        respond(
+            &h,
+            RespondArgs {
+                propose: Some(Proposal {
+                    start: "2030-01-10T14:00:00".into(),
+                    end: "2030-01-10T15:00:00".into(),
+                }),
+                ..respond_args("E1", RsvpResponse::Tentative)
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(sends_used(&h), 1);
     }
 
     #[tokio::test]

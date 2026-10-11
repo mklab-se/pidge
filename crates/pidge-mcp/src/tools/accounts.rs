@@ -72,7 +72,14 @@ impl PidgeMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tc = ToolContext::from_request(&self.state, &ctx).await?;
-        Ok(ok(self.render_accounts(&tc.record).await))
+        // The stored record, not `tc.record`: a mailbox left out of the
+        // latter for naming another owner is still listed, as needing
+        // reconnect (`mailbox_is_healthy` checks the owner).
+        let record = match self.state.users.load(&tc.record.signin).await {
+            Ok(Some(rec)) => rec,
+            _ => tc.record.clone(),
+        };
+        Ok(ok(self.render_accounts(&record).await))
     }
 
     #[tool(

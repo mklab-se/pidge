@@ -40,7 +40,10 @@ impl Default for WorkingHours {
 /// and subtracting merged `busy` intervals. Returns at most `max` slots.
 ///
 /// A working day whose start or end local time does not exist in `tz` (a DST
-/// gap) contributes no slots for that day, rather than panicking.
+/// gap) contributes no slots for that day, rather than panicking. The walk
+/// visits every day of `range`, so callers bound it (`parse_range` caps
+/// ranges at ten years); a range reaching the end of the calendar stops
+/// there instead of overflowing.
 pub fn free_slots(
     busy: &[Busy],
     range: (DateTime<Utc>, DateTime<Utc>),
@@ -67,7 +70,7 @@ pub fn free_slots(
             // Hour 24 is the next local midnight (`end_hour: 24`).
             let mk = |h: u32| -> Option<DateTime<Utc>> {
                 let (date, h) = if h >= 24 {
-                    (day + Duration::days(1), 0)
+                    (day.succ_opt()?, 0)
                 } else {
                     (day, h)
                 };
@@ -98,7 +101,11 @@ pub fn free_slots(
                 }
             }
         }
-        day += Duration::days(1);
+        // The last representable date ends the walk instead of overflowing.
+        let Some(next) = day.succ_opt() else {
+            break;
+        };
+        day = next;
     }
     out.truncate(max);
     out
@@ -220,6 +227,39 @@ mod tests {
             vec![Slot {
                 start: l(23, 20, 0),
                 end: l(24, 0, 0)
+            }]
+        );
+    }
+
+    #[test]
+    fn a_range_at_the_end_of_the_calendar_does_not_panic() {
+        let utc = chrono_tz::UTC;
+        let last = chrono::NaiveDate::MAX;
+        let at = |d: chrono::NaiveDate, h: u32| {
+            utc.from_utc_datetime(&d.and_hms_opt(h, 0, 0).unwrap())
+                .with_timezone(&Utc)
+        };
+        let hours = WorkingHours {
+            start_hour: 20,
+            end_hour: 24,
+            weekdays: [true; 7],
+        };
+        let start = last.pred_opt().unwrap();
+        let slots = free_slots(
+            &[],
+            (at(start, 0), at(last, 23)),
+            Duration::minutes(60),
+            &hours,
+            utc,
+            20,
+        );
+        // The day before the last one has its evening; the last one has no
+        // following midnight to end on.
+        assert_eq!(
+            slots,
+            vec![Slot {
+                start: at(start, 20),
+                end: at(last, 0)
             }]
         );
     }
