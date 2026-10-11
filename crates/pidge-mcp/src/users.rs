@@ -49,6 +49,60 @@ pub struct UserRecord {
         skip_serializing_if = "crate::review::ai::AiSettings::is_default"
     )]
     pub ai: crate::review::ai::AiSettings,
+    /// The current refresh token of each OAuth client the user signed in
+    /// with, at most [`MAX_REFRESH_CHAINS`]; see [`Self::refresh_check`].
+    /// Records from before rotation have none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refresh_chains: Vec<RefreshChain>,
+}
+
+/// Clients whose refresh chain a user record keeps; the least recently
+/// rotated is dropped beyond it, and its next refresh starts a new chain.
+pub const MAX_REFRESH_CHAINS: usize = 20;
+
+/// How long the refresh token just retired by a rotation is still answered,
+/// so a client that sent the same refresh twice at once isn't taken for a
+/// thief. See [`RefreshCheck::Grace`].
+pub const REFRESH_GRACE: chrono::Duration = chrono::Duration::seconds(30);
+
+/// One OAuth client's refresh-token chain: the id (`jti`) of the refresh
+/// token it holds now, and of the one it held before the last rotation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RefreshChain {
+    /// [`client_key`] of the client id (client ids are long signed tokens).
+    pub client: String,
+    pub current: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<String>,
+    pub rotated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// What a refresh token's `jti` is, against the client's stored chain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefreshCheck {
+    /// The client's current token: rotate.
+    Current,
+    /// No chain for this client: a token from before rotation (or from a
+    /// client whose chain was dropped). Accepted once; it starts the chain.
+    Unchained,
+    /// The token the last rotation retired, presented within
+    /// [`REFRESH_GRACE`]: the same refresh sent twice at once. Answered
+    /// with a token carrying the chain's current id (held here), so both
+    /// responses continue the one chain and neither copy becomes reuse.
+    Grace(String),
+    /// Anything else: a retired token presented again, so someone else
+    /// holds a copy of it.
+    Reused,
+}
+
+/// A short, stable key for an OAuth client id: the first 32 hex characters
+/// (128 bits) of its SHA-256. Case-sensitive, unlike [`user_hash`].
+pub fn client_key(client_id: &str) -> String {
+    Sha256::digest(client_id.as_bytes())
+        .iter()
+        .take(16)
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 impl UserRecord {
@@ -65,7 +119,50 @@ impl UserRecord {
             token_generation: 0,
             review: Default::default(),
             ai: Default::default(),
+            refresh_chains: Vec::new(),
         }
+    }
+
+    /// Classifies a refresh token `jti` issued to `client_id`, as of `now`.
+    pub fn refresh_check(
+        &self,
+        client_id: &str,
+        jti: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> RefreshCheck {
+        let key = client_key(client_id);
+        let Some(chain) = self.refresh_chains.iter().find(|c| c.client == key) else {
+            return RefreshCheck::Unchained;
+        };
+        if chain.current == jti {
+            RefreshCheck::Current
+        } else if chain.previous.as_deref() == Some(jti) && now - chain.rotated_at < REFRESH_GRACE {
+            RefreshCheck::Grace(chain.current.clone())
+        } else {
+            RefreshCheck::Reused
+        }
+    }
+
+    /// Makes `jti` `client_id`'s current refresh token as of `now`;
+    /// `previous` is the one it replaces (`None` for a fresh sign-in).
+    /// Keeps at most [`MAX_REFRESH_CHAINS`], dropping the least recently
+    /// rotated.
+    pub fn set_refresh(
+        &mut self,
+        client_id: &str,
+        jti: &str,
+        previous: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
+    ) {
+        let key = client_key(client_id);
+        self.refresh_chains.retain(|c| c.client != key);
+        self.refresh_chains.push(RefreshChain {
+            client: key,
+            current: jti.to_string(),
+            previous: previous.map(str::to_string),
+            rotated_at: now,
+        });
+        cap_chains(&mut self.refresh_chains);
     }
 
     /// Case-insensitive check of whether this user owns `mailbox`.
@@ -142,14 +239,20 @@ impl UserStore {
     /// Persist a user record, keyed by its (already lower-cased) `signin`.
     /// Returns the `token_generation` actually stored: never lower than the
     /// stored one, so saving a record loaded before a sign-out everywhere
-    /// can't resurrect the revoked tokens.
+    /// can't resurrect the revoked tokens. Refresh chains are merged the
+    /// same way, the more recently rotated entry per client winning, so a
+    /// tool saving a record it loaded before a refresh can't roll a
+    /// client's chain back (which would make its next refresh look like
+    /// reuse and sign the user out).
     pub async fn save(&self, rec: &UserRecord) -> Result<u32> {
-        let stored = self
-            .load(&rec.signin)
-            .await?
-            .map_or(0, |r| r.token_generation);
+        let stored = self.load(&rec.signin).await?;
+        let stored_generation = stored.as_ref().map_or(0, |r| r.token_generation);
         let rec = UserRecord {
-            token_generation: rec.token_generation.max(stored),
+            token_generation: rec.token_generation.max(stored_generation),
+            refresh_chains: merge_chains(
+                &rec.refresh_chains,
+                stored.map(|r| r.refresh_chains).unwrap_or_default(),
+            ),
             ..rec.clone()
         };
         let raw = serde_json::to_string(&rec)?;
@@ -233,6 +336,29 @@ impl UserStore {
             self.secrets.set(&legacy, "").await?;
         }
         Ok(())
+    }
+}
+
+/// `ours` plus every chain of `stored` that is newer than ours for its
+/// client (or absent from ours), capped like [`UserRecord::set_refresh`].
+fn merge_chains(ours: &[RefreshChain], stored: Vec<RefreshChain>) -> Vec<RefreshChain> {
+    let mut merged = ours.to_vec();
+    for theirs in stored {
+        match merged.iter_mut().find(|c| c.client == theirs.client) {
+            Some(mine) if theirs.rotated_at > mine.rotated_at => *mine = theirs,
+            Some(_) => {}
+            None => merged.push(theirs),
+        }
+    }
+    cap_chains(&mut merged);
+    merged
+}
+
+/// Drops the least recently rotated chains beyond [`MAX_REFRESH_CHAINS`].
+fn cap_chains(chains: &mut Vec<RefreshChain>) {
+    if chains.len() > MAX_REFRESH_CHAINS {
+        chains.sort_by_key(|c| std::cmp::Reverse(c.rotated_at));
+        chains.truncate(MAX_REFRESH_CHAINS);
     }
 }
 
@@ -340,6 +466,89 @@ mod tests {
         let rec = store.load("jane@example.com").await.unwrap().unwrap();
         assert_eq!(rec.token_generation, 2, "kept");
         assert_eq!(rec.timezone, "Europe/London", "the rest is saved");
+    }
+
+    #[test]
+    fn refresh_tokens_are_current_unchained_in_grace_or_reused() {
+        let t0 = chrono::Utc::now();
+        let mut rec = UserRecord::new("jane@example.com");
+        assert_eq!(rec.refresh_check("c1", "j1", t0), RefreshCheck::Unchained);
+        rec.set_refresh("c1", "j1", None, t0);
+        assert_eq!(rec.refresh_check("c1", "j1", t0), RefreshCheck::Current);
+        assert_eq!(rec.refresh_check("c1", "jx", t0), RefreshCheck::Reused);
+        assert_eq!(rec.refresh_check("c2", "j1", t0), RefreshCheck::Unchained);
+
+        rec.set_refresh("c1", "j2", Some("j1"), t0);
+        assert_eq!(rec.refresh_check("c1", "j2", t0), RefreshCheck::Current);
+        let soon = t0 + REFRESH_GRACE - chrono::Duration::seconds(1);
+        assert_eq!(
+            rec.refresh_check("c1", "j1", soon),
+            RefreshCheck::Grace("j2".into())
+        );
+        let late = t0 + REFRESH_GRACE;
+        assert_eq!(rec.refresh_check("c1", "j1", late), RefreshCheck::Reused);
+        // One rotation further, the first token is reuse even at once.
+        rec.set_refresh("c1", "j3", Some("j2"), t0);
+        assert_eq!(rec.refresh_check("c1", "j1", t0), RefreshCheck::Reused);
+        assert_eq!(rec.refresh_chains.len(), 1);
+    }
+
+    #[test]
+    fn refresh_chains_are_capped_by_dropping_the_least_recently_rotated() {
+        let t0 = chrono::Utc::now();
+        let mut rec = UserRecord::new("jane@example.com");
+        for i in 0..=MAX_REFRESH_CHAINS {
+            rec.set_refresh(
+                &format!("c{i}"),
+                "j",
+                None,
+                t0 + chrono::Duration::seconds(i as i64),
+            );
+        }
+        assert_eq!(rec.refresh_chains.len(), MAX_REFRESH_CHAINS);
+        assert_eq!(rec.refresh_check("c0", "j", t0), RefreshCheck::Unchained);
+        assert_eq!(rec.refresh_check("c1", "j", t0), RefreshCheck::Current);
+        // Client ids are stored only as a hash.
+        assert!(!serde_json::to_string(&rec).unwrap().contains("\"c1\""));
+    }
+
+    #[tokio::test]
+    async fn saving_a_stale_record_never_rolls_a_refresh_chain_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets: SharedSecrets = Arc::new(FileSecrets::new(dir.path()).unwrap());
+        let store = UserStore::new(secrets);
+        let t0 = chrono::Utc::now();
+        let mut rec = UserRecord::new("jane@example.com");
+        rec.set_refresh("c1", "j1", None, t0);
+        store.save(&rec).await.unwrap();
+        // A tool loads the record, a refresh rotates, the tool saves.
+        let stale = store.load("jane@example.com").await.unwrap().unwrap();
+        let mut fresh = stale.clone();
+        let t1 = t0 + chrono::Duration::seconds(5);
+        fresh.set_refresh("c1", "j2", Some("j1"), t1);
+        fresh.set_refresh("c2", "k1", None, t1);
+        store.save(&fresh).await.unwrap();
+        store
+            .save(&UserRecord {
+                timezone: "Europe/London".into(),
+                ..stale
+            })
+            .await
+            .unwrap();
+        let rec = store.load("jane@example.com").await.unwrap().unwrap();
+        assert_eq!(rec.timezone, "Europe/London");
+        assert_eq!(rec.refresh_check("c1", "j2", t1), RefreshCheck::Current);
+        assert_eq!(rec.refresh_check("c2", "k1", t1), RefreshCheck::Current);
+    }
+
+    #[test]
+    fn records_from_before_refresh_rotation_still_load() {
+        let user: UserRecord = serde_json::from_str(
+            r#"{"signin":"jane@example.com","mailboxes":["jane@example.com"],"default_sender":"jane@example.com","timezone":"Europe/Stockholm","token_generation":3}"#,
+        )
+        .unwrap();
+        assert!(user.refresh_chains.is_empty());
+        assert_eq!(user.token_generation, 3);
     }
 
     #[tokio::test]

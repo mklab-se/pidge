@@ -394,6 +394,7 @@ sent only by draft id, and the agent proposes before sending.
 | `PIDGE_MCP_ALT_HOSTS` | no | Comma-separated extra hostnames the server accepts requests for, besides the public URL host. Set by the deploy script during a custom-domain cutover. |
 | `PIDGE_MCP_LEGACY_ISSUERS` | no | Comma-separated issuer URLs whose previously issued tokens still validate. Set by the deploy script when cutting over to a new public URL. |
 | `PIDGE_MCP_LOG_FORMAT` | no | `json` or `text`, default `json`. The deploy script always sets `json`. |
+| `PIDGE_MCP_REDIRECT_HOSTS` | no | Comma-separated extra hosts an OAuth client may use as its https redirect target (exact host match, no scheme, port or wildcard). Always allowed: `claude.ai`, `chatgpt.com`, and loopback (`localhost`, `127.0.0.1`, `[::1]`, any port, http too). Checked at `/register` and `/authorize`. |
 | `RUST_LOG` | no | Log filter, default `info`. |
 
 ## markitdown
@@ -473,6 +474,15 @@ fails closed, but not identically:
   or `refresh_token`, `oauth/mod.rs`) returns 503
   `temporarily_unavailable` before the mismatch can even be checked, a
   signal to retry shortly, not to re-authenticate.
+
+Refresh tokens rotate: each refresh grant returns a new refresh token and
+retires the one presented. The user record keeps the current refresh
+token id per client (at most 20 clients). Presenting a retired refresh
+token is treated as theft: the user is signed out everywhere, exactly as
+above. One exception covers a client that sends the same refresh twice at
+once: the token retired in the last 30 seconds is still answered, with a
+refresh token that continues the current chain. A refresh token from
+before rotation existed is accepted once and starts the chain.
 
 ### Key Vault purge protection
 

@@ -76,7 +76,17 @@ pub struct Config {
     /// The tracing subscriber's output format. `PIDGE_MCP_LOG_FORMAT`,
     /// default `Json`.
     pub log_format: LogFormat,
+    /// Extra hosts an OAuth client may register as its redirect target
+    /// (over https), besides [`DEFAULT_REDIRECT_HOSTS`] and loopback
+    /// (`localhost`, `127.0.0.1`, `[::1]`, any port, http or https).
+    /// `PIDGE_MCP_REDIRECT_HOSTS`, comma-separated host names matched
+    /// exactly (no scheme, port, path or wildcard), default empty.
+    pub redirect_hosts: Vec<String>,
 }
+
+/// The hosts OAuth clients may redirect to over https with no
+/// configuration: Claude and ChatGPT. `PIDGE_MCP_REDIRECT_HOSTS` adds more.
+pub const DEFAULT_REDIRECT_HOSTS: &[&str] = &["claude.ai", "chatgpt.com"];
 
 /// `PIDGE_MCP_MARKITDOWN`, default `markitdown` (looked up on `PATH`).
 /// Separate from [`Config::from_env`] so `--convert-check` needs no other
@@ -178,6 +188,24 @@ impl Config {
 
         let log_format = parse_log_format(vars.get("PIDGE_MCP_LOG_FORMAT").map(String::as_str))?;
 
+        let redirect_hosts: Vec<String> = vars
+            .get("PIDGE_MCP_REDIRECT_HOSTS")
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_ascii_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if let Some(bad) = redirect_hosts
+            .iter()
+            .find(|h| h.contains(|c: char| matches!(c, '/' | ':' | '@' | '*') || c.is_whitespace()))
+        {
+            bail!(
+                "PIDGE_MCP_REDIRECT_HOSTS: {bad:?} must be a bare host name (no scheme, port, path or wildcard)"
+            );
+        }
+
         Ok(Self {
             markitdown,
             port,
@@ -187,6 +215,7 @@ impl Config {
             alt_hosts,
             legacy_issuers,
             log_format,
+            redirect_hosts,
         })
     }
 
@@ -221,6 +250,34 @@ impl Config {
 
     pub fn is_allowed(&self, email: &str) -> bool {
         self.allowed_emails.contains(&email.to_ascii_lowercase())
+    }
+
+    /// Whether an OAuth client may be sent to `uri` after sign-in: https to
+    /// one of [`DEFAULT_REDIRECT_HOSTS`] or [`Self::redirect_hosts`] (exact
+    /// host match), or http/https to loopback on any port, never with a
+    /// fragment. Checked at `/register` and again at `/authorize`, so a
+    /// client registered before the allowlist existed can't start a sign-in
+    /// towards another host.
+    pub fn redirect_uri_allowed(&self, uri: &str) -> bool {
+        let Ok(url) = Url::parse(uri) else {
+            return false;
+        };
+        if url.fragment().is_some() {
+            return false;
+        }
+        let Some(host) = url.host_str().map(str::to_ascii_lowercase) else {
+            return false;
+        };
+        let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]");
+        match url.scheme() {
+            "http" => loopback,
+            "https" => {
+                loopback
+                    || DEFAULT_REDIRECT_HOSTS.contains(&host.as_str())
+                    || self.redirect_hosts.contains(&host)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -322,6 +379,59 @@ mod tests {
         vars.insert("PIDGE_MCP_LOG_FORMAT".to_string(), "json".to_string());
         let config = Config::from_map(&vars).unwrap();
         assert_eq!(config.log_format, LogFormat::Json);
+    }
+
+    #[test]
+    fn redirect_uris_are_limited_to_the_allowlisted_hosts_and_loopback() {
+        let config = Config::from_map(&base_map()).unwrap();
+        assert!(config.redirect_hosts.is_empty());
+        for ok in [
+            "https://claude.ai/api/mcp/auth_callback",
+            "https://chatgpt.com/connector_platform_oauth_redirect",
+            "https://CLAUDE.AI/cb",
+            "http://localhost:6274/oauth/callback",
+            "http://127.0.0.1:8123/cb",
+            "http://[::1]:9000/cb",
+            "https://localhost/cb",
+        ] {
+            assert!(config.redirect_uri_allowed(ok), "{ok}");
+        }
+        for bad in [
+            "https://evil.example/cb",
+            "https://claude.ai.evil.example/cb",
+            "https://evil.claude.ai/cb",
+            "http://claude.ai/cb",
+            "http://evil.example/cb",
+            "https://claude.ai/cb#frag",
+            "myapp://callback",
+            "not a url",
+        ] {
+            assert!(!config.redirect_uri_allowed(bad), "{bad}");
+        }
+
+        let mut vars = base_map();
+        vars.insert(
+            "PIDGE_MCP_REDIRECT_HOSTS".to_string(),
+            " Inspector.Example.com ,, other.test".to_string(),
+        );
+        let config = Config::from_map(&vars).unwrap();
+        assert_eq!(
+            config.redirect_hosts,
+            vec![
+                "inspector.example.com".to_string(),
+                "other.test".to_string()
+            ]
+        );
+        assert!(config.redirect_uri_allowed("https://inspector.example.com/cb"));
+        assert!(!config.redirect_uri_allowed("http://inspector.example.com/cb"));
+        assert!(!config.redirect_uri_allowed("https://x.inspector.example.com/cb"));
+
+        for bad in ["https://x.test", "x.test:443", "*.x.test", "x.test/cb"] {
+            let mut vars = base_map();
+            vars.insert("PIDGE_MCP_REDIRECT_HOSTS".to_string(), bad.to_string());
+            let err = Config::from_map(&vars).unwrap_err();
+            assert!(err.to_string().contains(bad), "{err}");
+        }
     }
 
     #[test]

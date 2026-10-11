@@ -50,6 +50,7 @@ impl ToolContext {
             }
             Err(e) => return Err(store_error("loading user record", &user.email, e)),
         };
+        let record = usable_mailboxes(state, record).await?;
         let tz = record.tz();
         Ok(Self { user, record, tz })
     }
@@ -88,6 +89,40 @@ impl ToolContext {
                 ))
             })
     }
+}
+
+/// `record` with only the mailboxes the user may use: a mailbox whose stored
+/// record names someone else as its owner is left out, so no tool (and no
+/// code path reading `record.mailboxes` directly) reaches its tokens. A
+/// mailbox with nothing stored stays: Graph then reports it as needing
+/// reconnecting. A default sender that was left out falls back to the
+/// sign-in mailbox. If the store can't say who owns a mailbox, the call
+/// fails rather than guessing. A tool that saves this record drops the
+/// left-out mailboxes from it for good, which is right: they are no longer
+/// the user's.
+async fn usable_mailboxes(
+    state: &SharedState,
+    mut record: UserRecord,
+) -> Result<UserRecord, McpError> {
+    let mut usable = Vec::with_capacity(record.mailboxes.len());
+    for mailbox in std::mem::take(&mut record.mailboxes) {
+        match state.token_backend.owner_of(&mailbox).await {
+            Ok(Some(owner)) if !owner.eq_ignore_ascii_case(&record.signin) => {
+                tracing::warn!(
+                    user = %user_hash(&record.signin),
+                    mailbox = %user_hash(&mailbox),
+                    "mailbox left out: its stored record names another owner"
+                );
+            }
+            Ok(_) => usable.push(mailbox),
+            Err(e) => return Err(store_error("checking mailbox owner", &mailbox, e)),
+        }
+    }
+    record.mailboxes = usable;
+    if !record.owns(&record.default_sender) {
+        record.default_sender = record.signin.clone();
+    }
+    Ok(record)
 }
 
 /// Runs a read through the per-user cache: returns a live hit, otherwise
@@ -209,6 +244,40 @@ mod tests {
             "{logged}"
         );
         assert_no_address("logs", &logged);
+    }
+
+    #[tokio::test]
+    async fn a_mailbox_whose_record_names_another_owner_is_not_used() {
+        use crate::tools::tests::{ToolHarness, fresh_tokens};
+        use crate::users::{MailboxRecord, UserStore};
+
+        const JANE: &str = "jane@example.com";
+        const WORK: &str = "work@example.com";
+        let h = ToolHarness::new(&[JANE, WORK]).await;
+        let mut rec = h.record().await;
+        rec.default_sender = WORK.into();
+        h.state.users.save(&rec).await.unwrap();
+        // Jane's record lists WORK, but WORK's own record says Mallory's.
+        UserStore::new(h.secrets.clone())
+            .save_mailbox(
+                &MailboxRecord {
+                    owner: "mallory@example.com".into(),
+                    tokens: fresh_tokens(),
+                    identity: None,
+                },
+                WORK,
+            )
+            .await
+            .unwrap();
+        let tc = ToolContext::from_request(&h.state, &h.ctx()).await.unwrap();
+        assert_eq!(tc.accounts(None).unwrap(), vec![JANE]);
+        let err = tc.accounts(Some(WORK)).unwrap_err();
+        assert!(err.message.contains("not one of your mailboxes"), "{err:?}");
+        assert!(tc.sender(Some(WORK)).is_err());
+        assert_eq!(tc.sender(None).unwrap(), JANE, "default sender falls back");
+        assert_eq!(tc.my_addresses(), [JANE]);
+        // The stored record is untouched.
+        assert_eq!(h.record().await.mailboxes, vec![JANE, WORK]);
     }
 
     #[test]

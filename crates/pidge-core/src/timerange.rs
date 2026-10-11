@@ -5,7 +5,7 @@
 //! explicit `from`/`to` bounds are always resolved against the caller-supplied
 //! IANA timezone, then converted to UTC.
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Days, Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Tz;
 
 /// Whether a bare `Nd` range (e.g. `3d`) looks backward from `now` (mail) or
@@ -14,6 +14,23 @@ use chrono_tz::Tz;
 pub enum Direction {
     Past,
     Future,
+}
+
+/// Longest `Nd` range accepted: ten years of days.
+pub const MAX_RANGE_DAYS: u32 = 3650;
+/// Longest explicit `from`/`to` span accepted: ten years (with leap days).
+pub const MAX_SPAN_DAYS: i64 = 3653;
+
+fn out_of_range(s: &str) -> String {
+    format!("date {s:?} is out of range")
+}
+
+/// `t` moved by `days` (negative: back), or a usage error instead of the
+/// overflow panic `DateTime ± Duration` would raise.
+fn shift(t: DateTime<Utc>, days: i64) -> Result<DateTime<Utc>, String> {
+    Duration::try_days(days)
+        .and_then(|d| t.checked_add_signed(d))
+        .ok_or_else(|| "that range reaches past the supported dates".to_string())
 }
 
 fn local_midnight(tz: Tz, date: NaiveDate) -> Result<DateTime<Utc>, String> {
@@ -49,7 +66,7 @@ pub fn parse_point(s: &str, tz: Tz, end_of_day: bool) -> Result<DateTime<Utc>, S
     }
     if let Ok(date) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         let date = if end_of_day {
-            date + Duration::days(1)
+            date.succ_opt().ok_or_else(|| out_of_range(s))?
         } else {
             date
         };
@@ -66,10 +83,15 @@ pub fn parse_point(s: &str, tz: Tz, end_of_day: bool) -> Result<DateTime<Utc>, S
 /// - `today` / `tomorrow`: local midnight to the next local midnight.
 /// - `this_week` / `next_week`: Monday 00:00 local to the following Monday.
 /// - `next`: `now` to `now + 14 days` (callers take the first matching event).
-/// - `Nd` (e.g. `3d`): `now - N days` to `now` when `dir` is `Past` (mail), or
-///   `now` to `now + N days` when `dir` is `Future` (calendar).
+/// - `Nd` (e.g. `3d`, N at most [`MAX_RANGE_DAYS`]): `now - N days` to
+///   `now` when `dir` is `Past` (mail), or `now` to `now + N days` when
+///   `dir` is `Future` (calendar).
 /// - `from`/`to`: ISO 8601 date or datetime, naive values interpreted in `tz`;
-///   the end date is inclusive of its whole day.
+///   the end date is inclusive of its whole day. At most
+///   [`MAX_SPAN_DAYS`] apart.
+///
+/// Out-of-range input (huge `N`, dates at the edge of the calendar) is a
+/// usage error, never a panic.
 pub fn parse_range(
     range: Option<&str>,
     from: Option<&str>,
@@ -83,27 +105,35 @@ pub fn parse_range(
             .map(|s| parse_point(s, tz, false))
             .transpose()?
             .unwrap_or(now);
-        let b = to
-            .map(|s| parse_point(s, tz, true))
-            .transpose()?
-            .unwrap_or(a + Duration::days(7));
-        return if a < b {
-            Ok((a, b))
-        } else {
-            Err("from must be before to".into())
+        let b = match to {
+            Some(s) => parse_point(s, tz, true)?,
+            None => shift(a, 7)?,
         };
+        if a >= b {
+            return Err("from must be before to".into());
+        }
+        if b - a > Duration::days(MAX_SPAN_DAYS) {
+            return Err("from and to may be at most 10 years apart".into());
+        }
+        return Ok((a, b));
     }
     let today = now.with_timezone(&tz).date_naive();
-    let monday = today - Duration::days(today.weekday().num_days_from_monday() as i64);
-    let days = |d: NaiveDate, n: i64| local_midnight(tz, d + Duration::days(n));
+    let monday = today
+        .checked_sub_days(Days::new(today.weekday().num_days_from_monday().into()))
+        .ok_or_else(|| out_of_range(&today.to_string()))?;
+    let days = |d: NaiveDate, n: u64| {
+        d.checked_add_days(Days::new(n))
+            .ok_or_else(|| out_of_range(&d.to_string()))
+            .and_then(|d| local_midnight(tz, d))
+    };
     match range.unwrap_or("today") {
         "today" => Ok((days(today, 0)?, days(today, 1)?)),
         "tomorrow" => Ok((days(today, 1)?, days(today, 2)?)),
         "this_week" => Ok((days(monday, 0)?, days(monday, 7)?)),
         "next_week" => Ok((days(monday, 7)?, days(monday, 14)?)),
-        "next" => Ok((now, now + Duration::days(14))),
+        "next" => Ok((now, shift(now, 14)?)),
         other => {
-            let n: i64 = other
+            let n: u32 = other
                 .strip_suffix('d')
                 .and_then(|n| n.parse().ok())
                 .ok_or_else(|| {
@@ -111,9 +141,14 @@ pub fn parse_range(
                         "unknown range {other:?}; use today, tomorrow, this_week, next_week, next, Nd, or from/to"
                     )
                 })?;
+            if n > MAX_RANGE_DAYS {
+                return Err(format!(
+                    "range {other:?} is too long; use at most {MAX_RANGE_DAYS}d"
+                ));
+            }
             Ok(match dir {
-                Direction::Past => (now - Duration::days(n), now),
-                Direction::Future => (now, now + Duration::days(n)),
+                Direction::Past => (shift(now, -i64::from(n))?, now),
+                Direction::Future => (now, shift(now, n.into())?),
             })
         }
     }
@@ -188,6 +223,42 @@ mod tests {
         .unwrap();
         assert_eq!((a, b), (local(2026, 10, 1, 0), local(2026, 10, 3, 0)));
     }
+    #[test]
+    fn day_ranges_are_capped_at_ten_years_without_panicking() {
+        for dir in [Direction::Past, Direction::Future] {
+            assert!(parse_range(Some("3650d"), None, None, tz(), now(), dir).is_ok());
+            let err = parse_range(Some("3651d"), None, None, tz(), now(), dir).unwrap_err();
+            assert!(err.contains("at most 3650d"), "{err}");
+            for huge in [
+                "4294967295d",
+                "99999999999999999999d",
+                "9223372036854775807d",
+                "-3d",
+            ] {
+                assert!(
+                    parse_range(Some(huge), None, None, tz(), now(), dir).is_err(),
+                    "{huge}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_ranges_are_capped_and_calendar_edges_do_not_panic() {
+        let span = |from: Option<&str>, to: Option<&str>| {
+            parse_range(None, from, to, tz(), now(), Direction::Future)
+        };
+        assert!(span(Some("2026-01-01"), Some("2035-12-31")).is_ok());
+        let err = span(Some("2020-01-01"), Some("2031-01-01")).unwrap_err();
+        assert!(err.contains("10 years"), "{err}");
+        // The last date chrono knows has no following midnight; a `from`
+        // there has no "a week later". Both are errors, not panics.
+        assert!(span(Some("2026-01-01"), Some("+262143-12-31")).is_err());
+        assert!(span(Some("+262143-12-31T12:00:00Z"), None).is_err());
+        assert!(span(Some("-262144-01-01"), Some("2026-01-01")).is_err());
+        assert!(parse_point("+262143-12-31", tz(), true).is_err());
+    }
+
     #[test]
     fn unknown_range_is_an_error() {
         assert!(

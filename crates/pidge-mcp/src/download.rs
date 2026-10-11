@@ -59,6 +59,14 @@ pub async fn download(State(state): State<SharedState>, Path(token): Path<String
     let Some(account) = account else {
         return refuse("mailbox not owned");
     };
+    // The mailbox's own record must name the user too, as for every tool.
+    match state.token_backend.owner_of(&account).await {
+        Ok(Some(owner)) if !owner.eq_ignore_ascii_case(&signin) => {
+            return refuse("mailbox owned by another user");
+        }
+        Ok(_) => {}
+        Err(_) => return refuse("user store unavailable"),
+    }
     // The error is not logged: Graph failures can name the mailbox.
     let bytes = match state
         .graph
@@ -235,6 +243,34 @@ pub(crate) mod tests {
         let t = token(&h, JANE, WORK, "a.pdf");
         let (status, _, body) = get(&h, &format!("/dl/{t}")).await;
         assert_refused(status, &body);
+    }
+
+    #[tokio::test]
+    async fn a_link_to_a_listed_mailbox_whose_record_names_another_owner_is_refused() {
+        let h = ToolHarness::new(&[JANE, WORK]).await;
+        mount_bytes(&h, WORK, "M1", "A1", PDF, 0).await;
+        crate::users::UserStore::new(h.secrets.clone())
+            .save_mailbox(
+                &crate::users::MailboxRecord {
+                    owner: "mallory@example.com".into(),
+                    // Working tokens: only the owner check stands in the way.
+                    tokens: pidge_client::auth::TokenSet {
+                        access_token: crate::tools::tests::access_token(WORK),
+                        ..crate::tools::tests::fresh_tokens()
+                    },
+                    identity: None,
+                },
+                WORK,
+            )
+            .await
+            .unwrap();
+        let t = token(&h, JANE, WORK, "a.pdf");
+        let (status, headers, body) = get(&h, &format!("/dl/{t}")).await;
+        assert_refused(status, &body);
+        assert_eq!(
+            headers[header::CONTENT_SECURITY_POLICY],
+            crate::oauth::pages::CONTENT_SECURITY_POLICY
+        );
     }
 
     #[tokio::test]

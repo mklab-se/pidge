@@ -13,7 +13,15 @@ use crate::users::{UserStore, log_store_error};
 
 pub struct SecretTokenBackend {
     users: UserStore,
-    cache: Mutex<HashMap<String, TokenSet>>,
+    cache: Mutex<HashMap<String, Cached>>,
+}
+
+/// A mailbox's tokens and the sign-in that owns them, as last read from (or
+/// written to) the store.
+#[derive(Clone)]
+struct Cached {
+    owner: String,
+    tokens: TokenSet,
 }
 
 impl SecretTokenBackend {
@@ -29,6 +37,29 @@ impl SecretTokenBackend {
     pub fn forget(&self, email: &str) {
         self.cache.lock().expect("cache lock").remove(email);
     }
+
+    /// The sign-in address `email`'s stored record names as its owner;
+    /// `None` when nothing is stored. Served from the cache when the tokens
+    /// are, so checking ownership before every tool call costs one store
+    /// read per mailbox until the next connect or disconnect.
+    pub async fn owner_of(&self, email: &str) -> anyhow::Result<Option<String>> {
+        if let Some(hit) = self.cache.lock().expect("cache lock").get(email) {
+            return Ok(Some(hit.owner.clone()));
+        }
+        let Some(rec) = self.users.load_mailbox(email).await? else {
+            return Ok(None);
+        };
+        let owner = rec.owner.clone();
+        self.remember(email, rec.owner, rec.tokens);
+        Ok(Some(owner))
+    }
+
+    fn remember(&self, email: &str, owner: String, tokens: TokenSet) {
+        self.cache
+            .lock()
+            .expect("cache lock")
+            .insert(email.to_string(), Cached { owner, tokens });
+    }
 }
 
 /// Logs the failure (redacted) and returns a `ClientError` whose text names
@@ -42,7 +73,7 @@ fn store_error(email: &str, e: anyhow::Error) -> ClientError {
 impl TokenBackend for SecretTokenBackend {
     async fn load(&self, email: &str) -> Result<Option<TokenSet>, ClientError> {
         if let Some(hit) = self.cache.lock().expect("cache lock").get(email) {
-            return Ok(Some(hit.clone()));
+            return Ok(Some(hit.tokens.clone()));
         }
         let Some(rec) = self
             .users
@@ -52,10 +83,7 @@ impl TokenBackend for SecretTokenBackend {
         else {
             return Ok(None);
         };
-        self.cache
-            .lock()
-            .expect("cache lock")
-            .insert(email.to_string(), rec.tokens.clone());
+        self.remember(email, rec.owner, rec.tokens.clone());
         Ok(Some(rec.tokens))
     }
 
@@ -81,10 +109,7 @@ impl TokenBackend for SecretTokenBackend {
             .save_mailbox(&rec, email)
             .await
             .map_err(|e| store_error(email, e))?;
-        self.cache
-            .lock()
-            .expect("cache lock")
-            .insert(email.to_string(), rec.tokens);
+        self.remember(email, rec.owner, rec.tokens);
         Ok(())
     }
 }

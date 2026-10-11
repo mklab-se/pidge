@@ -21,7 +21,9 @@ use serde::{Deserialize, Serialize};
 use super::PidgeMcp;
 use crate::cache::ReadCache;
 use crate::context::{ToolContext, cached, graph_error, tool_error};
-use crate::render::{age, cap, clean_body, local, message_item, one_line, untrusted, who};
+use crate::render::{
+    age, cap, clean_body, inline_name, local, message_item, one_line, untrusted, who,
+};
 
 #[derive(Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OverviewArgs {
@@ -238,7 +240,7 @@ impl PidgeMcp {
                 for f in folders {
                     out.push_str(&format!(
                         "  {}  id={}  unread={}/{}\n",
-                        one_line(&f.display_name),
+                        inline_name(&f.display_name),
                         f.id,
                         f.unread_item_count.unwrap_or(0),
                         f.total_item_count.unwrap_or(0),
