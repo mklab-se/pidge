@@ -50,8 +50,20 @@ ROLE_RBAC_ADMIN="f58310d9-a9f6-439a-9e8d-f62e7b41a168"
 # grant itself (or anyone else) a broader role such as Owner.
 ROLE_ACR_PULL="7f951dda-4ed3-4680-a7ca-43fe172d538d"
 ROLE_KV_SECRETS_OFFICER="b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
-RBAC_CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}}))"
-RBAC_CONDITION_DESCRIPTION="pidge CI: may only assign AcrPull and Key Vault Secrets Officer"
+# The server's own identity, created by main.bicep (absent before the first
+# deploy). When it exists, the condition also pins *who* may receive those
+# roles: only that identity, so even a compromised deploy run can't grant
+# itself or anyone else Key Vault Secrets Officer.
+APP_IDENTITY_NAME="id-pidge-mcp"
+APP_PRINCIPAL_ID="$(az identity show --resource-group "$RESOURCE_GROUP" --name "$APP_IDENTITY_NAME" --query principalId -o tsv 2>/dev/null || true)"
+ROLES_CLAUSE_WRITE="@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}}"
+ROLES_CLAUSE_DELETE="@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}}"
+if [[ -n "$APP_PRINCIPAL_ID" ]]; then
+  ROLES_CLAUSE_WRITE="${ROLES_CLAUSE_WRITE} AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {${APP_PRINCIPAL_ID}}"
+  ROLES_CLAUSE_DELETE="${ROLES_CLAUSE_DELETE} AND @Resource[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {${APP_PRINCIPAL_ID}}"
+fi
+RBAC_CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (${ROLES_CLAUSE_WRITE})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (${ROLES_CLAUSE_DELETE}))"
+RBAC_CONDITION_DESCRIPTION="pidge CI: may only assign AcrPull and Key Vault Secrets Officer, to the server's identity"
 # The same tags main.bicep puts on everything it declares, except
 # managed-by: this identity is created here, not by Bicep (see the README's
 # "One-time setup" for why).
@@ -106,8 +118,30 @@ else
 fi
 
 log "GitHub environment '$GITHUB_ENVIRONMENT'"
-gh api -X PUT "repos/${REPO}/environments/${GITHUB_ENVIRONMENT}" >/dev/null
-log "  present"
+# Deploys only from main or a v* tag, and only after the owner approves:
+# the environment is what the Azure federated credential trusts.
+GITHUB_REVIEWER_ID="$(gh api user --jq .id)"
+gh api -X PUT "repos/${REPO}/environments/${GITHUB_ENVIRONMENT}" --input - >/dev/null <<JSON
+{"reviewers":[{"type":"User","id":${GITHUB_REVIEWER_ID}}],"prevent_self_review":false,
+ "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+JSON
+existing_policies="$(gh api "repos/${REPO}/environments/${GITHUB_ENVIRONMENT}/deployment-branch-policies" --jq '[.branch_policies[] | "\(.type):\(.name)"] | join(",")')"
+for policy in "branch:main" "tag:v*"; do
+  if [[ ",${existing_policies}," != *",${policy},"* ]]; then
+    gh api -X POST "repos/${REPO}/environments/${GITHUB_ENVIRONMENT}/deployment-branch-policies" \
+      -f type="${policy%%:*}" -f name="${policy#*:}" >/dev/null
+  fi
+done
+# Only admins may create, move or delete release tags.
+if ! gh api "repos/${REPO}/rulesets" --jq '.[].name' | grep -qx "release tags: admins only"; then
+  gh api -X POST "repos/${REPO}/rulesets" --input - >/dev/null <<'JSON'
+{"name":"release tags: admins only","target":"tag","enforcement":"active",
+ "conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},
+ "rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"},{"type":"non_fast_forward"}],
+ "bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}
+JSON
+fi
+log "  present (main and v* tags only, owner approval, admin-only v* tags)"
 
 SCOPE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}"
 
@@ -137,15 +171,26 @@ assign_role_if_missing() {
 # this script (before the condition existed) may have left an unconditioned
 # assignment in place, and that has to be replaced, not left alongside.
 assign_rbac_admin_conditioned() {
-  local unconditioned conditioned id
+  local unconditioned conditioned current id
   conditioned="$(az role assignment list \
     --assignee-object-id "$PRINCIPAL_ID" \
     --role "$ROLE_RBAC_ADMIN" \
     --scope "$SCOPE" \
     --query "[?condition!=null].id" -o tsv)"
   if [[ -n "$conditioned" ]]; then
-    log "Role 'Role Based Access Control Administrator' already assigned (conditioned)"
-    return
+    current="$(az role assignment list \
+      --assignee-object-id "$PRINCIPAL_ID" \
+      --role "$ROLE_RBAC_ADMIN" \
+      --scope "$SCOPE" \
+      --query "[?condition!=null].condition | [0]" -o tsv)"
+    if [[ "$current" == "$RBAC_CONDITION" ]]; then
+      log "Role 'Role Based Access Control Administrator' already assigned (conditioned)"
+      return
+    fi
+    log "Replacing the RBAC Administrator assignment with the current condition"
+    while IFS= read -r id; do
+      [[ -n "$id" ]] && az role assignment delete --ids "$id" >/dev/null
+    done <<<"$conditioned"
   fi
 
   unconditioned="$(az role assignment list \

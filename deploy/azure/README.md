@@ -173,6 +173,18 @@ independent after the CI gate, so a failed crates.io or Homebrew step never
 holds back a deploy; a re-pushed tag skips crate versions that are already
 published.
 
+The deploy is the one job that can reach the server's secrets, so it is
+gated three ways. The `production` environment (which the Azure federated
+credential trusts) accepts deployments only from `main` and `v*` tags, and
+each one waits for the owner's approval in the Actions tab ("Review
+deployments"). A tag ruleset lets only repository admins create, move or
+delete `v*` tags. And the deploy identity's RBAC Administrator grant is
+conditioned to assign only AcrPull and Key Vault Secrets Officer, and only
+to the server's own identity. `setup-github-oidc.sh` sets all three. The
+`crates-io` environment accepts only `v*` tags. Every third-party action is
+pinned to a commit SHA (Dependabot proposes updates), and the workflow's
+`GITHUB_TOKEN` is read-only except in the GitHub Release job.
+
 The deploy job runs in the repository's `production` GitHub environment,
 which fixes its OIDC subject to `repo:mklab-se/pidge:environment:production`
 regardless of the tag or branch that started the run; that is the subject

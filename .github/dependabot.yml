@@ -1,0 +1,8 @@
+# Keeps the SHA-pinned GitHub Actions current (each pin carries its tag in a
+# comment). Cargo dependencies are refreshed in maintenance rounds instead.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

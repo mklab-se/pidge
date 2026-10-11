@@ -32,7 +32,7 @@ param allowedEmails string
 param vaultAdminObjectId string = ''
 
 @description('Log verbosity for the server (RUST_LOG syntax).')
-param logLevel string = 'info,pidge_mcp=debug'
+param logLevel string = 'info'
 
 @description('Custom domain to bind to the Container App ingress, e.g. pidge.mklab.se. Empty skips custom domain binding.')
 param customDomain string = ''
