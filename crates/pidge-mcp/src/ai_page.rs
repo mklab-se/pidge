@@ -3,9 +3,12 @@
 //! browser straight to this server and into the user's own secret; it
 //! never passes through the AI harness or its model.
 //!
-//! Like `/connect`, the page names the pidge account first and binds the
+//! Like `/connect`, the page names the pidge account first and binds each
 //! form to the browser that saw it: the GET sets a cookie nonce that the
-//! POST must present, both as the cookie and as the form's token.
+//! POST must present, both as the cookie and as the form's token. Opening
+//! the page changes nothing else: chat apps and browsers fetch links to
+//! preview them before the user clicks, so a GET can't claim the link.
+//! The first successful save uses it up.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -29,11 +32,14 @@ use crate::users::user_hash;
 pub const LINK_TTL: Duration = Duration::minutes(10);
 const MAX_LINKS: usize = 1_000;
 const COOKIE: &str = "pidge_ai";
+/// Forms (page views) a link keeps valid at once; the oldest goes first.
+const MAX_VIEWS: usize = 5;
 
 #[derive(Debug, Clone)]
 struct AiLink {
     owner: String,
-    nonce: Option<String>,
+    /// The nonces of the forms shown so far, newest last.
+    nonces: Vec<String>,
     created_at: DateTime<Utc>,
 }
 
@@ -64,7 +70,7 @@ impl AiLinks {
             key.clone(),
             AiLink {
                 owner: owner.to_string(),
-                nonce: None,
+                nonces: Vec::new(),
                 created_at: Utc::now(),
             },
         );
@@ -78,9 +84,12 @@ impl AiLinks {
             .cloned()
     }
 
-    fn set_nonce(&self, key: &str, nonce: String) {
+    fn add_nonce(&self, key: &str, nonce: String) {
         if let Some(l) = self.links.lock().expect("ai links lock").get_mut(key) {
-            l.nonce = Some(nonce);
+            l.nonces.push(nonce);
+            if l.nonces.len() > MAX_VIEWS {
+                l.nonces.remove(0);
+            }
         }
     }
 
@@ -109,20 +118,13 @@ async fn show(
     else {
         return expired();
     };
-    // The first browser to open the link keeps it: a copy of the link
-    // opened anywhere else can't take the form over.
-    let nonce = match (&link.nonce, cookie_nonce(&headers)) {
-        (None, _) => {
+    // A browser that already has a form for this link keeps its nonce.
+    let nonce = match cookie_nonce(&headers) {
+        Some(c) if link.nonces.contains(&c) => c,
+        _ => {
             let nonce = random_id();
-            state.review.ai_links.set_nonce(&key, nonce.clone());
+            state.review.ai_links.add_nonce(&key, nonce.clone());
             nonce
-        }
-        (Some(n), Some(c)) if *n == c => c,
-        (Some(_), _) => {
-            return pages::error(
-                StatusCode::BAD_REQUEST,
-                "This link was already opened in another browser. Ask your assistant for a new one.",
-            );
         }
     };
     with_cookie(
@@ -151,8 +153,8 @@ async fn submit(
         return expired();
     };
     let presented = cookie_nonce(&headers);
-    if link.nonce.is_none() || presented != link.nonce || Some(&form.token) != link.nonce.as_ref() {
-        return pages::error(
+    if presented.as_deref() != Some(form.token.as_str()) || !link.nonces.contains(&form.token) {
+        return pages::ai_error(
             StatusCode::BAD_REQUEST,
             "Open the link from your assistant in this browser and fill in the form there.",
         );
@@ -196,7 +198,7 @@ async fn submit(
 
     if let Err(e) = ai::save(&state.secrets, &link.owner, &secret).await {
         crate::users::log_store_error("saving ai key", &link.owner, &e);
-        return pages::error(
+        return pages::ai_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "pidge could not save the key right now. Try again in a minute.",
         );
@@ -248,7 +250,7 @@ async fn try_key(state: &SharedState, secret: &AiSecret) -> Result<(), ErrorKind
 }
 
 fn expired() -> Response {
-    pages::error(
+    pages::ai_error(
         StatusCode::BAD_REQUEST,
         "This link has expired or is not valid. Ask your assistant for a new one.",
     )
@@ -396,6 +398,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_link_preview_fetched_first_does_not_lock_the_user_out() {
+        let h = ToolHarness::new(&["jane@example.com"]).await;
+        mount_typesafe(&h, 200).await;
+        let key = h.state.review.ai_links.issue(&h.signin);
+        // The chat app's link preview, then the user's own browser.
+        open(&h, &key).await;
+        let nonce = open(&h, &key).await;
+        let resp = submit(&h, &key, Some(&nonce), &nonce).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(ai::load(&h.secrets, &h.signin).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
     async fn the_form_only_works_in_the_browser_that_opened_the_link() {
         let h = ToolHarness::new(&["jane@example.com"]).await;
         mount_typesafe(&h, 200).await;
@@ -410,16 +425,6 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         }
         assert!(ai::load(&h.secrets, &h.signin).await.unwrap().is_none());
-        // Opening the link again elsewhere doesn't hand over the form.
-        let elsewhere = app(&h)
-            .oneshot(
-                Request::get(format!("/ai?state={key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(elsewhere.status(), StatusCode::BAD_REQUEST);
         let unknown = submit(&h, "nope", Some(&nonce), &nonce).await;
         assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
     }

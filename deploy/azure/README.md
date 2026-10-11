@@ -353,8 +353,9 @@ sent only by draft id, and the agent proposes before sending.
   order and reports failures on the next call; undo reverses the last action.
   Sessions live in memory for 60 minutes idle; a lost session is rebuilt
   from the inbox, and an action given with an id is still applied.
-- **AI keys.** Entered only on the `/ai` page (one browser per link, cookie
-  plus form token, tested with one tiny request before saving), stored in a
+- **AI keys.** Entered only on the `/ai` page (each form bound to its browser
+  by a cookie plus form token; opening the page claims nothing, since chat
+  apps prefetch links; the first successful save uses the link up), tested with one tiny request before saving), stored in a
   per-user secret `ai-<hash>`, never shown or logged. Only TypeSafe, OpenAI
   and Anthropic, at their own endpoints: no URL comes from input. When the
   account runs out of credits or the key is rejected, the review says so once

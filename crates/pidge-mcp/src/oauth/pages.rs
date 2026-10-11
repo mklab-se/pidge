@@ -10,6 +10,11 @@ pub fn error(status: StatusCode, message: &str) -> Response {
     page(status, "pidge could not sign you in", message)
 }
 
+/// A refusal on the `/ai` key page.
+pub fn ai_error(status: StatusCode, message: &str) -> Response {
+    page(status, "pidge AI setup", message)
+}
+
 /// The one answer `/dl/…` gives for every refusal, so a link's holder
 /// learns nothing about why it stopped working.
 pub fn link_unavailable() -> Response {

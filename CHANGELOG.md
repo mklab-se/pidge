@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- The `/ai` page for entering an AI key no longer says "This link was already opened in another
+  browser" when the user opens it: chat apps (ChatGPT) and browsers fetch a link to preview it
+  before the user clicks, and that fetch claimed the link. Opening the page now claims nothing;
+  each form stays bound to its own browser, and the first successful save uses the link up. Its
+  error pages are titled "pidge AI setup" instead of "pidge could not sign you in"
+
 ## [1.7.0] - 2026-10-11
 
 ### Added
