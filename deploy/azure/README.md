@@ -417,7 +417,7 @@ sent only by draft id, and the agent proposes before sending.
 | `PIDGE_MCP_ALT_HOSTS` | no | Comma-separated extra hostnames the server accepts requests for, besides the public URL host. Set by the deploy script during a custom-domain cutover. |
 | `PIDGE_MCP_LEGACY_ISSUERS` | no | Comma-separated issuer URLs whose previously issued tokens still validate. Set by the deploy script when cutting over to a new public URL. |
 | `PIDGE_MCP_LOG_FORMAT` | no | `json` or `text`, default `json`. The deploy script always sets `json`. |
-| `PIDGE_MCP_REDIRECT_HOSTS` | no | Comma-separated extra hosts an OAuth client may use as its https redirect target (exact host match, no scheme, port or wildcard). Always allowed: `claude.ai`, `chatgpt.com`, and loopback (`localhost`, `127.0.0.1`, `[::1]`, any port, http too). Checked at `/register` and `/authorize`. |
+| `PIDGE_MCP_REDIRECT_HOSTS` | no | Comma-separated extra hosts an OAuth client may use as its https redirect target (exact host match, no scheme, port or wildcard). Always allowed: `claude.ai`, `claude.com`, `chatgpt.com`, and loopback (`localhost`, `127.0.0.1`, `[::1]`, any port, http too). Checked at `/register` and `/authorize`. |
 | `RUST_LOG` | no | Log filter, default `info`. |
 
 ## markitdown

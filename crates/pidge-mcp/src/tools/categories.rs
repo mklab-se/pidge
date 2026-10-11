@@ -23,7 +23,7 @@ use crate::review::sync;
 use crate::users::{UserRecord, user_hash};
 
 /// The user record must stay well under Key Vault's 25 KB secret limit.
-const MAX_RECORD_BYTES: usize = 24_000;
+const MAX_RECORD_BYTES: usize = 14_000;
 
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,

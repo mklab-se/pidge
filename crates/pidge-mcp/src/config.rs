@@ -86,7 +86,7 @@ pub struct Config {
 
 /// The hosts OAuth clients may redirect to over https with no
 /// configuration: Claude and ChatGPT. `PIDGE_MCP_REDIRECT_HOSTS` adds more.
-pub const DEFAULT_REDIRECT_HOSTS: &[&str] = &["claude.ai", "chatgpt.com"];
+pub const DEFAULT_REDIRECT_HOSTS: &[&str] = &["claude.ai", "claude.com", "chatgpt.com"];
 
 /// `PIDGE_MCP_MARKITDOWN`, default `markitdown` (looked up on `PATH`).
 /// Separate from [`Config::from_env`] so `--convert-check` needs no other

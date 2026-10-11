@@ -689,7 +689,9 @@ fn category_where(
 
 /// A KQL phrase: always quoted, inner quotes dropped.
 fn kql_phrase(v: &str) -> String {
-    format!("\"{}\"", v.replace('"', ""))
+    // Neither a quote nor a backslash may reach the phrase: either could
+    // end it early inside the quoted `$search` value.
+    format!("\"{}\"", v.replace(['"', '\\'], ""))
 }
 
 /// A KQL property value, quoted when it contains whitespace or a quote

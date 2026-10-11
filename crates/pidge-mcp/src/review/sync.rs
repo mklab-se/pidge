@@ -477,7 +477,7 @@ async fn granted(state: &SharedState, user: &str, mailbox: &str) -> Option<bool>
 /// mailbox. The caller holds the user's [`Locks`] entry.
 pub async fn sync(state: &SharedState, user: &str, force: bool, only: Option<&str>) -> Report {
     let mut report = Report::default();
-    let Some(mut record) = load(state, user).await else {
+    let Some(mut record) = load_owned(state, user).await else {
         return report;
     };
     let categories = record.review.categories();
@@ -664,6 +664,26 @@ pub async fn sync(state: &SharedState, user: &str, force: bool, only: Option<&st
 }
 
 /// The user's record, fresh from the store.
+/// [`load`], with `mailboxes` narrowed to those whose stored record names
+/// `user` as owner (as `ToolContext` does): the sync, rename and remove
+/// loops reach a mailbox's tokens through this list. Never saved as is.
+async fn load_owned(state: &SharedState, user: &str) -> Option<UserRecord> {
+    let mut record = load(state, user).await?;
+    let mut owned = Vec::with_capacity(record.mailboxes.len());
+    for mailbox in std::mem::take(&mut record.mailboxes) {
+        match state.token_backend.owner_of(&mailbox).await {
+            Ok(Some(owner)) if !owner.eq_ignore_ascii_case(user) => {}
+            Ok(_) => owned.push(mailbox),
+            Err(e) => {
+                log_store_error("checking mailbox owner", &mailbox, &e);
+                return None;
+            }
+        }
+    }
+    record.mailboxes = owned;
+    Some(record)
+}
+
 async fn load(state: &SharedState, user: &str) -> Option<UserRecord> {
     match state.users.load(user).await {
         Ok(r) => r,
@@ -702,7 +722,7 @@ async fn save_sync(state: &SharedState, user: &str, mailboxes: &[String], ms: Ma
 /// the user removed from a mailbox are skipped. Returns how many messages
 /// were written.
 pub async fn tag(state: &SharedState, user: &str, items: Vec<(Candidate, String)>) -> usize {
-    let Some(record) = load(state, user).await else {
+    let Some(record) = load_owned(state, user).await else {
         return 0;
     };
     let ms = &record.review.mailbox_sync;
@@ -746,7 +766,7 @@ pub async fn tag(state: &SharedState, user: &str, items: Vec<(Candidate, String)
 /// already renamed): a new mailbox category, the mail retagged, the old
 /// category deleted when pidge created or linked it.
 pub async fn rename(state: &SharedState, user: &str, old: &str, new: &str) {
-    let Some(record) = load(state, user).await else {
+    let Some(record) = load_owned(state, user).await else {
         return;
     };
     let mut ms = record.review.mailbox_sync.clone();
@@ -835,7 +855,7 @@ pub async fn rename(state: &SharedState, user: &str, old: &str, new: &str) {
 /// it): from the mail too when `from_mail`, and the mailbox category itself
 /// only when pidge created it.
 pub async fn remove(state: &SharedState, user: &str, name: &str, from_mail: bool) {
-    let Some(record) = load(state, user).await else {
+    let Some(record) = load_owned(state, user).await else {
         return;
     };
     let mut ms = record.review.mailbox_sync.clone();

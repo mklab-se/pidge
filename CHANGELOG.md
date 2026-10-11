@@ -47,7 +47,7 @@ All notable changes to this project will be documented in this file.
 ### Security
 
 - **Hosted MCP server, OAuth:** clients may register and authorize only redirects to `claude.ai`,
-  `chatgpt.com` and loopback (`PIDGE_MCP_REDIRECT_HOSTS` adds hosts); clients registered earlier
+  `claude.com`, `chatgpt.com` and loopback (`PIDGE_MCP_REDIRECT_HOSTS` adds hosts); clients registered earlier
   with another host are refused at `/authorize`. At most 10 redirect URIs per client.
 - Refresh tokens rotate on every refresh. Presenting a retired refresh token again revokes that
   client's refresh tokens (it must sign in again); the user's other clients are not affected.
@@ -67,6 +67,8 @@ All notable changes to this project will be documented in this file.
 - Third-party names shown inline (attachments, folders, calendars, event subjects) are one line
   and capped at 120 characters; `List-Unsubscribe` web links are shown percent-encoded; an
   unsubscribe `mailto:` must be one plain address.
+- Mailbox category sync, tagging, renames and removals only touch mailboxes whose stored record
+  names the caller as owner, like every tool.
 
 ## [1.7.1] - 2026-10-11
 
