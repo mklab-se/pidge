@@ -735,6 +735,15 @@ fn connect_pending(owner: &str) -> PendingAuthorization {
     }
 }
 
+/// A connect link as `accounts_connect` mints it: no browser has opened it
+/// or gone on to Microsoft yet.
+fn link_pending(owner: &str) -> PendingAuthorization {
+    PendingAuthorization {
+        callback_nonce: None,
+        ..connect_pending(owner)
+    }
+}
+
 async fn get(h: &Harness, uri: &str) -> axum::response::Response {
     h.app
         .clone()
@@ -765,7 +774,7 @@ async fn body_text(resp: axum::response::Response) -> String {
 async fn connect_link_confirms_the_owner_then_goes_to_microsoft() {
     let h = harness("second@example.com").await;
     h.state
-        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+        .insert_pending("s1".into(), link_pending("jane@example.com"));
 
     // The link first shows whose pidge account the mailbox will join.
     let resp = get(&h, "/connect?state=s1").await;
@@ -813,7 +822,7 @@ async fn connect_link_confirms_the_owner_then_goes_to_microsoft() {
 async fn connect_go_requires_the_confirmation_cookie() {
     let h = harness("second@example.com").await;
     h.state
-        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+        .insert_pending("s1".into(), link_pending("jane@example.com"));
 
     // Handed the Continue URL directly, having never seen the confirmation.
     let resp = get(&h, "/connect/go?state=s1").await;
@@ -1728,7 +1737,7 @@ async fn connect_link_names_the_mailbox_and_preselects_it_at_microsoft() {
 async fn connect_link_without_a_mailbox_sends_no_login_hint() {
     let h = harness("second@example.com").await;
     h.state
-        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+        .insert_pending("s1".into(), link_pending("jane@example.com"));
     let resp = get(&h, "/connect?state=s1").await;
     let cookie = resp.headers()[header::SET_COOKIE]
         .to_str()
@@ -2065,21 +2074,29 @@ async fn consent_and_error_pages_carry_the_security_headers() {
 }
 
 #[tokio::test]
-async fn a_connect_link_without_a_mailbox_binds_to_the_first_browser() {
+async fn a_connect_link_without_a_mailbox_binds_to_the_first_browser_that_continues() {
     let h = harness("second@example.com").await;
     h.state
-        .insert_pending("s1".into(), connect_pending("jane@example.com"));
-    let first = get(&h, "/connect?state=s1").await;
-    assert_eq!(first.status(), StatusCode::OK);
-    let cookie = set_cookie(&first);
+        .insert_pending("s1".into(), link_pending("jane@example.com"));
+    // The chat app's link preview, then the user's own browser: the
+    // preview takes nothing.
+    let preview = get(&h, "/connect?state=s1").await;
+    assert_eq!(preview.status(), StatusCode::OK);
+    let user = get(&h, "/connect?state=s1").await;
+    assert_eq!(user.status(), StatusCode::OK);
+    let cookie = set_cookie(&user);
+    let go = get_with_cookie(&h, "/connect/go?state=s1", &cookie).await;
+    assert_eq!(go.status(), StatusCode::SEE_OTHER);
 
-    // Another browser is told the link was already opened.
+    // From then on the link is that browser's: another is told so.
     let other = get(&h, "/connect?state=s1").await;
     assert_eq!(other.status(), StatusCode::BAD_REQUEST);
     assert!(other.headers().get(header::SET_COOKIE).is_none());
     assert!(body_text(other).await.contains("already opened"));
+    let other_go = get_with_cookie(&h, "/connect/go?state=s1", &set_cookie(&preview)).await;
+    assert_eq!(other_go.status(), StatusCode::BAD_REQUEST);
 
-    // The first browser can reload it, keeping its nonce, and continue.
+    // The user's browser can reload it, keeping its nonce, and continue.
     let again = get_with_cookie(&h, "/connect?state=s1", &cookie).await;
     assert_eq!(again.status(), StatusCode::OK);
     assert_eq!(set_cookie(&again), cookie);

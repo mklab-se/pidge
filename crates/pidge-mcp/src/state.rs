@@ -211,16 +211,16 @@ impl AppState {
         }
     }
 
-    /// Records the confirmation page's cookie nonce on a live pending entry
-    /// that has none yet; `false` (and no change) if one is already set or
-    /// the entry is gone or expired.
-    pub fn claim_consent_nonce(&self, state: &str, nonce: String) -> bool {
+    /// Like [`Self::set_consent_nonce`], but only while no browser has gone
+    /// on to Microsoft from the entry (no callback nonce yet); `false`, and
+    /// no change, once one has, or if the entry is gone or expired.
+    pub fn set_consent_nonce_unless_continued(&self, state: &str, nonce: String) -> bool {
         let mut map = self.pending.lock().expect("pending lock");
         match map
             .get_mut(state)
             .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
         {
-            Some(p) if p.consent_nonce.is_none() => {
+            Some(p) if p.callback_nonce.is_none() => {
                 p.consent_nonce = Some(nonce);
                 true
             }

@@ -976,9 +976,12 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 ///
 /// A link that names its mailbox can be reopened, each time binding the
 /// newest browser: the callback refuses any other account anyway. A link
-/// without one would connect whichever account signs in, so it binds to the
-/// first browser that opens it; another browser is told it was already
-/// opened (the first one can still reload it).
+/// without one would connect whichever account signs in, so once a browser
+/// has gone on to Microsoft from it, it is that browser's: another one is
+/// told it was already opened (the first can still reload it). Until then
+/// the newest view wins, as for a named link, because chat apps fetch a
+/// link to preview it before the user opens it, and that fetch must not
+/// take the link.
 async fn connect(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -994,14 +997,13 @@ async fn connect(
             nonce
         }
         (None, Some(set))
-            if consent_nonce_from(&headers, &CONNECT_CONSENT, &state) == Some(set.clone()) =>
+            if consent_nonce_from(&headers, &CONNECT_CONSENT, &state).as_ref() == Some(&set) =>
         {
             set
         }
-        (None, Some(_)) => return already_opened_connect_link(),
-        (None, None) => {
+        (None, _) => {
             let nonce = jwt::random_id();
-            if !state.claim_consent_nonce(&key, nonce.clone()) {
+            if !state.set_consent_nonce_unless_continued(&key, nonce.clone()) {
                 return already_opened_connect_link();
             }
             nonce
