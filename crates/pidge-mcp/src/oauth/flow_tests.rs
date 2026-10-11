@@ -1300,7 +1300,13 @@ async fn microsoft_error_text_never_reaches_the_log() {
 /// Signs `h`'s user in with a fresh client and redeems the code; returns
 /// `(client_id, access, refresh)`.
 async fn sign_in_and_redeem(h: &Harness) -> (String, String, String) {
-    let client_id = register(&h.app).await;
+    sign_in_and_redeem_as(h, "test").await
+}
+
+/// [`sign_in_and_redeem`] with a client registered under `name`, so two
+/// names give two distinct clients.
+async fn sign_in_and_redeem_as(h: &Harness, name: &str) -> (String, String, String) {
+    let client_id = register_named(&h.app, name).await;
     let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
     let resp = sign_in(h, &client_id, verifier).await;
     assert_eq!(resp.status(), StatusCode::SEE_OTHER);
@@ -2130,9 +2136,11 @@ fn refresh_jti(h: &Harness, token: &str) -> String {
 }
 
 #[tokio::test]
-async fn refresh_tokens_rotate_and_a_reused_one_signs_the_user_out() {
+async fn refresh_tokens_rotate_and_a_reused_one_revokes_that_clients_chain() {
     let h = harness("jane@example.com").await;
-    let (client_id, access, r1) = sign_in_and_redeem(&h).await;
+    let (client_id, _, r1) = sign_in_and_redeem(&h).await;
+    // A second client of the same user (say, another AI app).
+    let (other_client, _, other_refresh) = sign_in_and_redeem_as(&h, "other app").await;
 
     let (status, body) = refresh_grant(&h, &client_id, &r1).await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -2141,7 +2149,6 @@ async fn refresh_tokens_rotate_and_a_reused_one_signs_the_user_out() {
     let (status, body) = refresh_grant(&h, &client_id, &r2).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let r3 = body["refresh_token"].as_str().unwrap().to_string();
-    let access3 = body["access_token"].as_str().unwrap().to_string();
 
     // r1 is two rotations old: someone else has a copy of it.
     let (status, body) = refresh_grant(&h, &client_id, &r1).await;
@@ -2149,22 +2156,19 @@ async fn refresh_tokens_rotate_and_a_reused_one_signs_the_user_out() {
     assert_eq!(body["error"], "invalid_grant");
     assert!(body.get("access_token").is_none());
 
-    // Every session of the user is gone, the legitimate chain included.
+    // That client's chain is gone, the legitimate token included...
+    let (status, body) = refresh_grant(&h, &client_id, &r3).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "invalid_grant");
+    // ...but the user isn't signed out everywhere: the other client goes on.
     let rec = UserStore::new(h.secrets.clone())
         .load("jane@example.com")
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(rec.token_generation, 1);
-    for token in [&access, &access3] {
-        assert_eq!(
-            mcp_initialize(&h.app, Some(token)).await,
-            StatusCode::UNAUTHORIZED
-        );
-    }
-    let (status, body) = refresh_grant(&h, &client_id, &r3).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error_description"], "session was signed out");
+    assert_eq!(rec.token_generation, 0);
+    let (status, body) = refresh_grant(&h, &other_client, &other_refresh).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
 
     // A new sign-in works again.
     let (client_id, access, refresh) = sign_in_and_redeem(&h).await;

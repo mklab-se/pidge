@@ -478,8 +478,10 @@ fails closed, but not identically:
 Refresh tokens rotate: each refresh grant returns a new refresh token and
 retires the one presented. The user record keeps the current refresh
 token id per client (at most 20 clients). Presenting a retired refresh
-token is treated as theft: the user is signed out everywhere, exactly as
-above. One exception covers a client that sends the same refresh twice at
+token is treated as theft of that client's chain: every refresh token of
+that client is refused from then on (its access tokens run out within the
+hour), and it must sign in again, which starts a new chain. The user's
+other clients are not affected. One exception covers a client that sends the same refresh twice at
 once: the token retired in the last 30 seconds is still answered, with a
 refresh token that continues the current chain. A refresh token from
 before rotation existed is accepted once and starts the chain.

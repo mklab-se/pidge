@@ -1175,8 +1175,9 @@ async fn start_refresh_chain(
 ///   is stored. Someone replaying a stolen token inside those 30 seconds
 ///   gets a valid pair too, but no more than the token was already worth.
 /// - Anything else is a retired token used again: someone else holds a
-///   copy. The user is signed out everywhere (as `sign_out_everywhere`
-///   does) and the grant refused.
+///   copy. That client's chain is revoked (every refresh token of it is
+///   refused until it signs in again) and the grant refused. The user's
+///   other clients keep working.
 ///
 /// Store failures refuse with 503 and store nothing, so the presented token
 /// stays current and the client can retry.
@@ -1205,20 +1206,23 @@ async fn rotate_refresh(
             Ok(current)
         }
         RefreshCheck::Reused => {
-            record.token_generation += 1;
-            match state.users.save(&record).await {
-                Ok(generation) => state.set_generation(sub, generation),
-                Err(e) => log_store_error("signing out after refresh token reuse", sub, &e),
+            // Only this client is cut off: a client that mishandles
+            // rotation shouldn't sign the user out of every other client.
+            // The thief and the rightful holder of this chain both lose it;
+            // signing in again starts a fresh one.
+            record.revoke_refresh(client_id, now);
+            if let Err(e) = state.users.save(&record).await {
+                log_store_error("revoking a reused refresh chain", sub, &e);
             }
             state.cache.invalidate_user(sub);
             tracing::warn!(
                 user = %user_hash(sub),
-                "refresh token reused: signed out everywhere"
+                "refresh token reused: this client's refresh tokens are revoked"
             );
             Err(Box::new(oauth_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
-                "refresh token was already used; every session was signed out, sign in again",
+                "refresh token was already used; sign in again",
             )))
         }
     }

@@ -75,6 +75,10 @@ pub struct RefreshChain {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
     pub rotated_at: chrono::DateTime<chrono::Utc>,
+    /// A retired token was presented again: every refresh token of this
+    /// client is refused until it signs in again (which starts a new chain).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub revoked: bool,
 }
 
 /// What a refresh token's `jti` is, against the client's stored chain.
@@ -134,7 +138,9 @@ impl UserRecord {
         let Some(chain) = self.refresh_chains.iter().find(|c| c.client == key) else {
             return RefreshCheck::Unchained;
         };
-        if chain.current == jti {
+        if chain.revoked {
+            RefreshCheck::Reused
+        } else if chain.current == jti {
             RefreshCheck::Current
         } else if chain.previous.as_deref() == Some(jti) && now - chain.rotated_at < REFRESH_GRACE {
             RefreshCheck::Grace(chain.current.clone())
@@ -161,8 +167,19 @@ impl UserRecord {
             current: jti.to_string(),
             previous: previous.map(str::to_string),
             rotated_at: now,
+            revoked: false,
         });
         cap_chains(&mut self.refresh_chains);
+    }
+
+    /// Refuses every further refresh of `client_id` until it signs in
+    /// again. Stamped `now` so it wins the chain merge in [`UserStore::save`].
+    pub fn revoke_refresh(&mut self, client_id: &str, now: chrono::DateTime<chrono::Utc>) {
+        let key = client_key(client_id);
+        if let Some(chain) = self.refresh_chains.iter_mut().find(|c| c.client == key) {
+            chain.revoked = true;
+            chain.rotated_at = now;
+        }
     }
 
     /// Case-insensitive check of whether this user owns `mailbox`.

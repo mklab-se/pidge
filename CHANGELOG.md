@@ -9,8 +9,8 @@ All notable changes to this project will be documented in this file.
 - **Hosted MCP server, OAuth:** clients may register and authorize only redirects to `claude.ai`,
   `chatgpt.com` and loopback (`PIDGE_MCP_REDIRECT_HOSTS` adds hosts); clients registered earlier
   with another host are refused at `/authorize`. At most 10 redirect URIs per client.
-- Refresh tokens rotate on every refresh. Presenting a retired refresh token again signs the user
-  out everywhere. Refresh tokens issued before this release keep working: the first refresh starts
+- Refresh tokens rotate on every refresh. Presenting a retired refresh token again revokes that
+  client's refresh tokens (it must sign in again); the user's other clients are not affected. Refresh tokens issued before this release keep working: the first refresh starts
   the chain, and a client sending the same refresh twice within 30 seconds is not mistaken for theft.
 - `/authorize` errors before the consent page (bad `response_type`, missing PKCE, unknown
   resource) show an error page instead of redirecting to the client.
