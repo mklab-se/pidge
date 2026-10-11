@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- `mail_categories action=prune_mailboxes`: on the user's request, leaves every mailbox with
+  exactly pidge's categories in the same colours. It first lists what would go (the mailbox's own
+  categories and the colour-only defaults, with how many messages carry each); only `apply=true`
+  deletes them, and `remove_from_mail=true` also takes those names off the mail
+
+### Changed
+
+- A `sender:` rule now wins over a `domain:` rule wherever they sit in the category list, so one
+  address (say a company's newsletter) can be carved out of its domain's category
+
 ## [1.7.2] - 2026-10-11
 
 ### Added

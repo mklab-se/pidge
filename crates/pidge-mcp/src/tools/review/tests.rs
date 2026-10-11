@@ -1288,3 +1288,87 @@ async fn renaming_and_removing_follow_into_the_mailboxes() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn prune_lists_first_then_leaves_only_pidges_categories_in_one_colour() {
+    let h = ToolHarness::new(&[JANE, WORK]).await;
+    grant_scope(&h, JANE).await;
+    grant_scope(&h, WORK).await;
+    let mut tagged = msg("t1", "club@example.com", "LAN", 30);
+    tagged.categories = vec!["Hobby"];
+    let mailbox = Mailbox::new(vec![tagged]);
+    mailbox.set_masters(
+        JANE,
+        json!([
+            master("red", "Red category", "preset0"),
+            master("hobby", "Hobby", "preset9"),
+        ]),
+    );
+    mount(&h, mailbox.clone()).await;
+    categories(&h, sync_args(Some(true))).await;
+    // The user recolours one of pidge's categories in Work only.
+    {
+        let mut all = mailbox.masters.lock().unwrap();
+        let list = all.get_mut(&access_token(WORK)).unwrap();
+        for m in list.iter_mut().filter(|m| m["displayName"] == "Important") {
+            m["color"] = json!("preset24");
+        }
+    }
+    let prune =
+        |apply: Option<bool>, from_mail: Option<bool>| crate::tools::categories::CategoriesArgs {
+            action: Some(crate::tools::categories::CategoriesAction::PruneMailboxes),
+            apply,
+            remove_from_mail: from_mail,
+            ..Default::default()
+        };
+
+    let out = categories(&h, prune(None, None)).await;
+    assert!(out.contains("would be removed"), "{out}");
+    assert!(
+        out.contains("Red category (1 messages)") || out.contains("Red category ("),
+        "{out}"
+    );
+    assert!(out.contains("Hobby (1 messages)"), "{out}");
+    assert!(out.contains("Nothing changed yet"), "{out}");
+    assert!(
+        mailbox.masters_of(JANE).iter().any(|m| m["id"] == "hobby"),
+        "a preview deletes nothing"
+    );
+
+    let out = categories(&h, prune(Some(true), Some(true))).await;
+    assert!(out.starts_with("Removed from the mailboxes:"), "{out}");
+    let pidge = crate::review::categories::defaults();
+    for mb in [JANE, WORK] {
+        let names: Vec<String> = mailbox
+            .masters_of(mb)
+            .iter()
+            .map(|m| m["displayName"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names.len(), pidge.len(), "{mb}: {names:?}");
+        assert!(
+            pidge.iter().all(|c| names.contains(&c.name)),
+            "{mb}: {names:?}"
+        );
+    }
+    // Same colour for each category in both mailboxes.
+    for c in &pidge {
+        let colour = |mb: &str| {
+            mailbox
+                .masters_of(mb)
+                .iter()
+                .find(|m| m["displayName"] == c.name.as_str())
+                .map(|m| m["color"].clone())
+        };
+        assert_eq!(colour(JANE), colour(WORK), "{}", c.name);
+    }
+    // The name came off the mail that carried it.
+    let log = mailbox.log.lock().unwrap();
+    assert!(
+        log.iter().any(|(m, u, b)| m == "PATCH"
+            && u == "/me/messages/t1"
+            && b["categories"]
+                .as_array()
+                .is_some_and(|c| !c.contains(&json!("Hobby")))),
+        "{log:?}"
+    );
+}

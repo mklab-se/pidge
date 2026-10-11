@@ -58,6 +58,12 @@ pub enum CategoriesAction {
     /// Classify the inbox mail (read and unread) of the last `days` days
     /// and put the categories on it in the mailboxes.
     SortMail,
+    /// Leave the mailboxes with exactly pidge's categories, in the same
+    /// colours everywhere: lists every other mailbox category (the user's
+    /// own and the colour-only defaults included) with how many messages
+    /// carry it. Only with `apply=true` are they deleted (`remove_from_mail`
+    /// also takes them off the mail). Show the list and ask first.
+    PruneMailboxes,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -120,12 +126,15 @@ pub struct CategoriesArgs {
     /// For `sort_mail`: how many days back, today included (1-31).
     #[serde(default)]
     pub days: Option<u32>,
+    /// For `prune_mailboxes`: really delete (after the user has seen the list).
+    #[serde(default)]
+    pub apply: Option<bool>,
 }
 
 #[tool_router(router = categories_router, vis = "pub(crate)")]
 impl PidgeMcp {
     #[tool(
-        description = "E-mail: the categories mail is sorted into during a review (mail_review_start), in review order. Talk them through with the user: `confirm` keeps the ones in use, `add` (with optional description, rules, example_ids and position in one call)/`update`/`remove`/`reorder` edit them, `add_rule` pins a sender or domain to a category (e.g. \"everything from the climbing club is Leisure\" → rule domain:climbingclub.se), `add_example` teaches by a real message id (\"mail like this one\"; a review's short id such as r3 works), `use_defaults` goes back to the standard set. `Other` is built in for whatever fits nowhere. `mailbox_sync enabled=true` also puts the categories in the user's mailboxes (as the mailbox's own categories, and on the mail a review sorts); `sort_mail days=N` (1 = today, up to 31) classifies and tags the inbox mail of the last N days without a review, for \"classify today's mail\" (with the user's AI key it costs a few hundredths of a cent per 100 messages). Returns the updated list."
+        description = "E-mail: the categories mail is sorted into during a review (mail_review_start), in review order. Talk them through with the user: `confirm` keeps the ones in use, `add` (with optional description, rules, example_ids and position in one call)/`update`/`remove`/`reorder` edit them, `add_rule` pins a sender or domain to a category (e.g. \"everything from the climbing club is Leisure\" → rule domain:climbingclub.se), `add_example` teaches by a real message id (\"mail like this one\"; a review's short id such as r3 works), `use_defaults` goes back to the standard set. `Other` is built in for whatever fits nowhere. `mailbox_sync enabled=true` also puts the categories in the user's mailboxes (as the mailbox's own categories, and on the mail a review sorts); `prune_mailboxes` (only when the user asks to clean up the mailboxes' categories) lists, and with apply=true removes, every mailbox category that isn't pidge's so all mailboxes look the same; `sort_mail days=N` (1 = today, up to 31) classifies and tags the inbox mail of the last N days without a review, for \"classify today's mail\" (with the user's AI key it costs a few hundredths of a cent per 100 messages). Returns the updated list."
     )]
     pub(crate) async fn mail_categories(
         &self,
@@ -143,6 +152,9 @@ impl PidgeMcp {
                     .map(ok);
             }
             CategoriesAction::MailboxSync => return self.mailbox_sync(&tc, &args).await.map(ok),
+            CategoriesAction::PruneMailboxes => {
+                return self.prune_mailboxes(&tc, &args).await.map(ok);
+            }
             _ => {}
         }
         let syncing = tc.record.review.mailbox_sync.enabled;
@@ -288,6 +300,88 @@ impl PidgeMcp {
     }
 
     /// `mail_categories action=mailbox_sync`.
+    async fn prune_mailboxes(
+        &self,
+        tc: &ToolContext,
+        args: &CategoriesArgs,
+    ) -> Result<String, McpError> {
+        if !tc.record.review.mailbox_sync.enabled {
+            return Ok(
+                "Mailbox categories are off, so pidge doesn't manage the mailboxes' categories. Turn them on first (mail_categories action=mailbox_sync enabled=true)."
+                    .into(),
+            );
+        }
+        let signin = tc.record.signin.clone();
+        let apply = args.apply == Some(true);
+        let from_mail = args.remove_from_mail == Some(true);
+        let lock = self.state.review.sync_locks.for_user(&signin);
+        let report = {
+            let _guard = lock.lock().await;
+            // Link pidge's own first, so none of them is taken for a stranger.
+            sync::sync(&self.state, &signin, true, None).await;
+            sync::prune(&self.state, &signin, apply, from_mail).await
+        };
+        let mut out = String::new();
+        if report.pruned.is_empty() {
+            out.push_str("The mailboxes have only pidge's categories.");
+        } else {
+            out.push_str(if apply {
+                "Removed from the mailboxes:"
+            } else {
+                "These mailbox categories are not pidge's and would be removed:"
+            });
+            let mut mailboxes: Vec<&str> =
+                report.pruned.iter().map(|p| p.mailbox.as_str()).collect();
+            mailboxes.dedup();
+            for mb in mailboxes {
+                let names: Vec<String> = report
+                    .pruned
+                    .iter()
+                    .filter(|p| p.mailbox == mb)
+                    .map(|p| {
+                        let n = if p.messages >= sync::RETAG_CAP {
+                            format!("{}+", sync::RETAG_CAP)
+                        } else {
+                            p.messages.to_string()
+                        };
+                        format!("{} ({n} messages)", one_line(&p.name))
+                    })
+                    .collect();
+                out.push_str(&format!("\n- {mb}: {}", names.join(", ")));
+            }
+            if apply {
+                out.push_str(if from_mail {
+                    "\nTheir names were also taken off the mail."
+                } else {
+                    "\nMail that carried them keeps the name, without a colour."
+                });
+            } else {
+                out.push_str(
+                    "\nNothing changed yet. Show the user this list; if they agree, call again with apply=true, and remove_from_mail=true to also take these names off the mail that carries them.",
+                );
+            }
+        }
+        if report.recoloured > 0 {
+            out.push_str(&format!(
+                "\n{} of pidge's categories were given the same colour as in the other mailboxes.",
+                report.recoloured
+            ));
+        }
+        if !report.skipped.is_empty() {
+            out.push_str(&format!(
+                "\nCould not read the categories of: {} (accounts_connect once may be needed).",
+                report.skipped.join(", ")
+            ));
+        }
+        if report.failed > 0 {
+            out.push_str(&format!(
+                "\n{} changes failed; try again later.",
+                report.failed
+            ));
+        }
+        Ok(out)
+    }
+
     async fn mailbox_sync(
         &self,
         tc: &ToolContext,
@@ -462,9 +556,10 @@ fn edit(
         .transpose()
         .map_err(tool_error)?;
     Ok(match action {
-        CategoriesAction::List | CategoriesAction::MailboxSync | CategoriesAction::SortMail => {
-            String::new()
-        }
+        CategoriesAction::List
+        | CategoriesAction::MailboxSync
+        | CategoriesAction::SortMail
+        | CategoriesAction::PruneMailboxes => String::new(),
         CategoriesAction::Confirm => "Confirmed.".into(),
         CategoriesAction::UseDefaults => "Back to the default categories.".into(),
         CategoriesAction::Add => {

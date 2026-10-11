@@ -893,6 +893,120 @@ pub async fn remove(state: &SharedState, user: &str, name: &str, from_mail: bool
     state.cache.invalidate_user(user);
 }
 
+/// One mailbox category a prune removes (or would remove): its name and
+/// how many messages carry it (capped at [`RETAG_CAP`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pruned {
+    pub mailbox: String,
+    pub name: String,
+    pub messages: usize,
+}
+
+/// What [`prune`] found or did.
+#[derive(Debug, Default)]
+pub struct PruneReport {
+    pub pruned: Vec<Pruned>,
+    /// pidge categories given pidge's colour in a mailbox.
+    pub recoloured: usize,
+    /// Mailboxes whose categories could not be read (or need
+    /// `accounts_connect` once).
+    pub skipped: Vec<String>,
+    pub failed: usize,
+}
+
+/// Leaves the user's mailboxes with exactly pidge's categories, in pidge's
+/// colours: every other mailbox category (the user's own and the
+/// colour-only defaults included) is listed, and with `apply` deleted,
+/// also from the mail when `from_mail`. Only on the user's explicit
+/// request; the caller holds the user's [`Locks`] entry. Run a [`sync`]
+/// first so pidge's own categories are linked and never pruned.
+pub async fn prune(state: &SharedState, user: &str, apply: bool, from_mail: bool) -> PruneReport {
+    let mut report = PruneReport::default();
+    let Some(record) = load_owned(state, user).await else {
+        return report;
+    };
+    let ms = &record.review.mailbox_sync;
+    let pidge: Vec<String> = record
+        .review
+        .categories()
+        .iter()
+        .map(|c| c.name.to_ascii_lowercase())
+        .collect();
+    for mailbox in &record.mailboxes {
+        if !ms.active(mailbox) {
+            continue;
+        }
+        let masters = match list_masters(state, mailbox).await {
+            Ok(m) => m,
+            Err(_) => {
+                report.skipped.push(mailbox.clone());
+                continue;
+            }
+        };
+        let links = ms.mailboxes.get(mailbox).map(|st| &st.links);
+        let linked_ids: HashSet<&str> = links
+            .map(|l| l.values().map(|l| l.id.as_str()).collect())
+            .unwrap_or_default();
+        for m in &masters {
+            let ours =
+                linked_ids.contains(m.id.as_str()) || pidge.contains(&m.name.to_ascii_lowercase());
+            if ours {
+                // One look everywhere: pidge's colour for its own categories.
+                let wanted = links
+                    .and_then(|l| l.iter().find(|(_, l)| l.id == m.id))
+                    .and_then(|(name, _)| ms.colors.get(name));
+                if apply
+                    && let Some(color) = wanted
+                    && *color != m.color
+                {
+                    match recolour_master(state, mailbox, &m.id, color).await {
+                        Ok(()) => report.recoloured += 1,
+                        Err(_) => report.failed += 1,
+                    }
+                }
+                continue;
+            }
+            let carrying = messages_with(state, mailbox, &m.name)
+                .await
+                .unwrap_or_default();
+            report.pruned.push(Pruned {
+                mailbox: mailbox.clone(),
+                name: m.name.clone(),
+                messages: carrying.len(),
+            });
+            if !apply {
+                continue;
+            }
+            if from_mail && !carrying.is_empty() {
+                let changes = carrying
+                    .into_iter()
+                    .map(|(id, cats)| {
+                        let next = cats
+                            .into_iter()
+                            .filter(|c| !c.eq_ignore_ascii_case(&m.name))
+                            .collect();
+                        (id, next)
+                    })
+                    .collect();
+                write_categories(state, mailbox, changes).await;
+            }
+            if delete_master(state, mailbox, &m.id).await.is_err() {
+                report.failed += 1;
+            }
+        }
+    }
+    if apply {
+        state.cache.invalidate_user(user);
+        tracing::info!(
+            user = %user_hash(user),
+            pruned = report.pruned.len(),
+            failed = report.failed,
+            "mailbox categories pruned"
+        );
+    }
+    report
+}
+
 /// The queued notes, cleared from the record: each is shown once.
 pub async fn take_notes(state: &SharedState, user: &str) -> Vec<String> {
     let Some(mut rec) = load(state, user).await else {

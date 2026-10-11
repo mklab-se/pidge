@@ -183,10 +183,19 @@ pub fn rule_matches(rule: &str, from_address: &str) -> bool {
 }
 
 /// The first category with a rule matching `from_address`.
+///
+/// A `sender:` rule wins over a `domain:` rule wherever the two sit in the
+/// list, so one sender can be carved out of its domain's category (a
+/// company's newsletter address, say, out of that company's mail).
 pub fn by_rule<'a>(categories: &'a [Category], from_address: &str) -> Option<&'a Category> {
-    categories
-        .iter()
-        .find(|c| c.rules.iter().any(|r| rule_matches(r, from_address)))
+    let matching = |kind: &str| {
+        categories.iter().find(|c| {
+            c.rules
+                .iter()
+                .any(|r| r.starts_with(kind) && rule_matches(r, from_address))
+        })
+    };
+    matching("sender:").or_else(|| matching("domain:"))
 }
 
 /// A short stable fingerprint of the categories, for cache keys: any edit
@@ -262,6 +271,22 @@ mod tests {
         assert!(rule_matches("domain:example.com", "x@mail.example.com"));
         assert!(rule_matches("domain:example.com", "x@example.com"));
         assert!(!rule_matches("domain:example.com", "x@notexample.com"));
+    }
+
+    #[test]
+    fn a_sender_rule_wins_over_a_domain_rule_listed_before_it() {
+        let mut cats = defaults();
+        cats[0].rules.push("domain:nox.example".into());
+        cats[3].rules.push("sender:news@nox.example".into());
+        assert_eq!(
+            by_rule(&cats, "news@nox.example").unwrap().name,
+            cats[3].name
+        );
+        assert_eq!(
+            by_rule(&cats, "david@nox.example").unwrap().name,
+            cats[0].name
+        );
+        assert!(by_rule(&cats, "anna@example.com").is_none());
     }
 
     #[test]
