@@ -274,8 +274,11 @@ jobs:
           # match, so a tag like v1.5.0-rc.1 never moves `latest`.
           flavor: |
             latest=auto
+          # The plain version (1.2.3) plus the git tag itself (v1.2.3),
+          # which the deploy job imports into ACR.
           tags: |
             type=semver,pattern={{version}}
+            type=ref,event=tag
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
@@ -333,15 +336,23 @@ jobs:
   # the subject the deploy identity's federated credential trusts (see
   # deploy/azure/setup-github-oidc.sh). Forks have no Azure identity to
   # federate with, so the job is skipped there instead of failing.
+  #
+  # On a tag the image is the one the `image` job just pushed to GHCR,
+  # imported into ACR (seconds) instead of built a second time (minutes);
+  # a manual dispatch has no GHCR image and builds in ACR as before.
   deploy:
     name: Deploy MCP
-    needs: ci
-    if: github.repository == 'mklab-se/pidge'
+    needs: [ci, image]
+    if: >-
+      always() && github.repository == 'mklab-se/pidge' &&
+      needs.ci.result == 'success' &&
+      (needs.image.result == 'success' || needs.image.result == 'skipped')
     runs-on: ubuntu-latest
     environment: production
     permissions:
       id-token: write
       contents: read
+      packages: read
     # A second trigger queues behind a deploy in progress rather than
     # racing or cancelling it.
     concurrency:
@@ -384,6 +395,10 @@ jobs:
           echo "url=${url%/mcp}" >> "$GITHUB_OUTPUT"
         env:
           IMAGE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
+          # The `image` job tags the GHCR image with the git tag too.
+          IMPORT_IMAGE: ${{ needs.image.result == 'success' && format('ghcr.io/mklab-se/pidge-mcp:{0}', github.ref_name) || '' }}
+          IMPORT_USERNAME: ${{ needs.image.result == 'success' && github.actor || '' }}
+          IMPORT_PASSWORD: ${{ needs.image.result == 'success' && secrets.GITHUB_TOKEN || '' }}
           PIDGE_MCP_ALLOWED_EMAILS: ${{ secrets.PIDGE_MCP_ALLOWED_EMAILS }}
           PIDGE_MCP_CUSTOM_DOMAIN: ${{ vars.PIDGE_MCP_CUSTOM_DOMAIN }}
           PIDGE_MCP_CUTOVER: ${{ vars.PIDGE_MCP_CUTOVER }}

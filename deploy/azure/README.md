@@ -155,7 +155,11 @@ Releasing and deploying are one workflow with one trigger. `.github/workflows/re
 runs when the release skill pushes a `v*` tag: its `CI` job (format, clippy,
 tests) gates everything else, then the CLI binaries, SBOMs, GitHub Release,
 Homebrew formula, crates.io crates and the GHCR image are published and the
-`Deploy MCP` job deploys `pidge-mcp` from that same tagged commit. A push to
+`Deploy MCP` job deploys `pidge-mcp` from that same tagged commit. The
+deploy doesn't build the image a second time: it waits for the GHCR image
+(`ghcr.io/mklab-se/pidge-mcp:v1.2.3`) and copies it into the Azure registry
+with `az acr import` (`IMPORT_IMAGE` in `deploy.sh`), which takes seconds
+instead of a full ACR build. A push to
 `main` runs the `CI` workflow but deploys nothing: the tag is the deploy
 intent for both the CLI and the server. The image is tagged with the
 release tag (`v1.2.3`).

@@ -5,7 +5,9 @@
 #
 # Idempotent. Phases:
 #   1. Bicep: identity, registry, vault, logs, environment (no app yet)
-#   2. Build the container image in ACR (cloud build, no local Docker needed)
+#   2. Build the container image in ACR (cloud build, no local Docker needed),
+#      or, with IMPORT_IMAGE set, copy an image already built elsewhere (the
+#      release workflow's GHCR image) into ACR with `az acr import`
 #   3. Container app, with an optional custom domain:
 #        3a. bind the hostname with no certificate (bindingType Disabled)
 #        3b. create the managed certificate if it doesn't exist yet, and
@@ -58,6 +60,9 @@ APP_NAME="ca-pidge-mcp"
 ENTRA_APP_ID="${PIDGE_CLIENT_ID:-e49f90dc-c265-4392-b62f-b26704f9088f}"
 ALLOWED_EMAILS="${PIDGE_MCP_ALLOWED_EMAILS:?set PIDGE_MCP_ALLOWED_EMAILS (comma-separated)}"
 IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
+# An image to import instead of building, e.g. ghcr.io/mklab-se/pidge-mcp:1.7.6,
+# with IMPORT_USERNAME / IMPORT_PASSWORD for a private registry.
+IMPORT_IMAGE="${IMPORT_IMAGE:-}"
 DOMAIN_INPUT="${PIDGE_MCP_CUSTOM_DOMAIN:-}"
 CUTOVER_INPUT="${PIDGE_MCP_CUTOVER:-}"
 SKIP_BUILD=false
@@ -208,6 +213,18 @@ IMAGE="$LOGIN_SERVER/pidge-mcp:$IMAGE_TAG"
 
 if [[ "$SKIP_BUILD" == true ]]; then
   log "Skipping image build; using $IMAGE"
+elif [[ -n "$IMPORT_IMAGE" ]]; then
+  log "Phase 2: importing $IMPORT_IMAGE as $IMAGE"
+  import_auth=()
+  if [[ -n "${IMPORT_USERNAME:-}" ]]; then
+    import_auth=(--username "$IMPORT_USERNAME" --password "${IMPORT_PASSWORD:?set IMPORT_PASSWORD with IMPORT_USERNAME}")
+  fi
+  az acr import \
+    --name "$REGISTRY" \
+    --source "$IMPORT_IMAGE" \
+    --image "pidge-mcp:$IMAGE_TAG" \
+    --force \
+    "${import_auth[@]}" >/dev/null
 else
   log "Phase 2: building $IMAGE in ACR"
   az acr build \
