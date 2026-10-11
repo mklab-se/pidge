@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.6] - 2026-10-11
+
+### Added
+
+- Hosted MCP server: the pages a person sees have pictures. Connecting a mailbox shows the
+  mailbox going to the pidge account, signing an app in shows the app connecting to pidge, the AI
+  key page shows the key going to the account, and the done and error pages show the mascot. The
+  names on them are page text laid over built-in templates (escaped, and split before the `@` when
+  long), so the account a mailbox joins is the first thing you see. Pages now allow images from the
+  server itself (`img-src 'self'`) and nothing else
+
 ## [1.7.5] - 2026-10-11
 
 ### Fixed
