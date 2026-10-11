@@ -55,7 +55,31 @@ use crate::users::{
 
 pub const SCOPE: &str = "mail";
 
+/// The endpoints an MCP client may call from a web page (claude.ai checks a
+/// server from the browser): discovery, registration and the token
+/// endpoint. None of them uses cookies, so any origin may read them; the
+/// browser-facing consent pages stay same-origin.
+pub fn cors() -> tower_http::cors::CorsLayer {
+    use axum::http::{HeaderName, Method};
+    tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
+        .allow_headers(tower_http::cors::Any)
+        .expose_headers([
+            header::WWW_AUTHENTICATE,
+            HeaderName::from_static("mcp-session-id"),
+            HeaderName::from_static("mcp-protocol-version"),
+        ])
+}
+
 pub fn router() -> Router<SharedState> {
+    Router::new()
+        .merge(open_router().layer(cors()))
+        .merge(consent_router())
+}
+
+/// Discovery, registration and token: callable cross-origin.
+fn open_router() -> Router<SharedState> {
     Router::new()
         .route(
             "/.well-known/oauth-protected-resource",
@@ -74,12 +98,17 @@ pub fn router() -> Router<SharedState> {
             get(authorization_server),
         )
         .route("/register", post(register))
+        .route("/token", post(token))
+}
+
+/// The pages and redirects a person's browser walks through.
+fn consent_router() -> Router<SharedState> {
+    Router::new()
         .route("/authorize", get(authorize))
         .route("/authorize/go", get(authorize_go))
         .route("/callback", get(callback))
         .route("/connect", get(connect))
         .route("/connect/go", get(connect_go))
-        .route("/token", post(token))
 }
 
 // ---------------------------------------------------------------------------

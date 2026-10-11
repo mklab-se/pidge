@@ -2267,3 +2267,71 @@ async fn a_refresh_the_store_cannot_record_keeps_the_presented_token_current() {
     assert!(logged.contains("saving refresh chain"), "{logged}");
     crate::test_support::assert_no_address("log", &logged);
 }
+
+#[tokio::test]
+async fn mcp_and_discovery_answer_browsers_cross_origin_but_consent_pages_do_not() {
+    let h = harness("jane@example.com").await;
+    let send = |req: Request<Body>| {
+        let app = h.app.clone();
+        async move { app.oneshot(req).await.unwrap() }
+    };
+    // A browser's preflight for the MCP endpoint is answered, not challenged.
+    let pre = send(
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/mcp")
+            .header(header::ORIGIN, "https://claude.ai")
+            .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization,content-type",
+            )
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(pre.status().is_success(), "{}", pre.status());
+    assert_eq!(pre.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+    // The challenge itself is readable, WWW-Authenticate included.
+    let challenge = send(
+        Request::post("/mcp")
+            .header(header::ORIGIN, "https://claude.ai")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(challenge.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        challenge.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "*"
+    );
+    let exposed = challenge.headers()[header::ACCESS_CONTROL_EXPOSE_HEADERS]
+        .to_str()
+        .unwrap()
+        .to_ascii_lowercase();
+    assert!(exposed.contains("www-authenticate"), "{exposed}");
+    let discovery = send(
+        Request::get("/.well-known/oauth-protected-resource/mcp")
+            .header(header::ORIGIN, "https://claude.ai")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(
+        discovery.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        "*"
+    );
+    // The pages a person walks through stay same-origin.
+    let page = send(
+        Request::get("/connect?state=x")
+            .header(header::ORIGIN, "https://evil.example")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert!(
+        page.headers()
+            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .is_none()
+    );
+}

@@ -32,9 +32,15 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
             .with_cancellation_token(cancel),
     );
 
-    let mcp_routes = Router::new().nest_service("/mcp", mcp_service).layer(
-        axum::middleware::from_fn_with_state(state.clone(), oauth::bearer::require_bearer),
-    );
+    // CORS outside the bearer check, so a browser's preflight is answered
+    // and the 401's WWW-Authenticate is readable cross-origin.
+    let mcp_routes = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            oauth::bearer::require_bearer,
+        ))
+        .layer(oauth::cors());
 
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
