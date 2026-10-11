@@ -20,8 +20,8 @@
 <!-- "What's new" callout: keep it right after the badges and refresh it on every minor/major
      release (version and a one-line summary of the headline changes). Only link CHANGELOG.md. -->
 <p align="center">
-  <strong>pidge 1.5</strong> is here: the e-mail and calendar client for your AI agent, with a
-  rewritten README and usage guide, and ailloy 3.0 under the hood.<br>
+  <strong>pidge 1.7</strong> is here: go through your inbox hands-free from a voice assistant, one
+  call per message, sorted into your own categories (optionally by your own Jev key).<br>
   <a href="CHANGELOG.md"><strong>What's new</strong></a>
 </p>
 
