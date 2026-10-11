@@ -98,13 +98,33 @@ struct ShowParams {
     state: Option<String>,
 }
 
-async fn show(State(state): State<SharedState>, Query(p): Query<ShowParams>) -> Response {
-    let Some(key) = p.state.filter(|k| state.review.ai_links.peek(k).is_some()) else {
+async fn show(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(p): Query<ShowParams>,
+) -> Response {
+    let Some((key, link)) = p
+        .state
+        .and_then(|k| state.review.ai_links.peek(&k).map(|l| (k, l)))
+    else {
         return expired();
     };
-    let link = state.review.ai_links.peek(&key).expect("checked");
-    let nonce = random_id();
-    state.review.ai_links.set_nonce(&key, nonce.clone());
+    // The first browser to open the link keeps it: a copy of the link
+    // opened anywhere else can't take the form over.
+    let nonce = match (&link.nonce, cookie_nonce(&headers)) {
+        (None, _) => {
+            let nonce = random_id();
+            state.review.ai_links.set_nonce(&key, nonce.clone());
+            nonce
+        }
+        (Some(n), Some(c)) if *n == c => c,
+        (Some(_), _) => {
+            return pages::error(
+                StatusCode::BAD_REQUEST,
+                "This link was already opened in another browser. Ask your assistant for a new one.",
+            );
+        }
+    };
     with_cookie(
         pages::ai_form(&link.owner, &key, &nonce, None),
         &nonce,
@@ -189,7 +209,10 @@ async fn submit(
             .load(&link.owner)
             .await?
             .unwrap_or_else(|| crate::users::UserRecord::new(&link.owner));
+        // A fresh `status_since` marks the new key, so a review still
+        // running with the old one won't write its result over it.
         rec.ai.set_status(AiStatus::Ok, Utc::now());
+        rec.ai.status_since = Some(Utc::now());
         rec.ai.provider = Some(label.clone());
         rec.ai.last_attempt_at = None;
         state.users.save(&rec).await
@@ -387,6 +410,16 @@ mod tests {
             assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         }
         assert!(ai::load(&h.secrets, &h.signin).await.unwrap().is_none());
+        // Opening the link again elsewhere doesn't hand over the form.
+        let elsewhere = app(&h)
+            .oneshot(
+                Request::get(format!("/ai?state={key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(elsewhere.status(), StatusCode::BAD_REQUEST);
         let unknown = submit(&h, "nope", Some(&nonce), &nonce).await;
         assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
     }

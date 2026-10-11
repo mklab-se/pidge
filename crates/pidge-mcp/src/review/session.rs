@@ -207,7 +207,7 @@ impl Session {
             .map_err(|_| "the review has ended".to_string())?;
         match tokio::time::timeout(Duration::from_secs(20), rx).await {
             Ok(Ok(r)) => r,
-            _ => Err("undo took too long; check the Archive or Deleted Items folder".into()),
+            _ => Err("undo is taking long and is still running in the background".into()),
         }
     }
 
@@ -400,75 +400,88 @@ async fn apply(state: &SharedState, s: &Session, act: Act, indexes: Vec<usize>) 
         .filter(|(n, _)| !failed.contains_key(n))
         .map(|(_, t)| t)
         .collect();
-    if !done.is_empty() {
-        inner.undo = Some(UndoRecord { act, touched: done });
+    // Leaving a message unread changes nothing, so it leaves the undo
+    // record alone; an action that failed everywhere clears it, so undo
+    // never reaches past the failure to the action before.
+    if act != Act::KeepUnread {
+        inner.undo = (!done.is_empty()).then_some(UndoRecord { act, touched: done });
     }
 }
 
 async fn undo(state: &SharedState, s: &Session) -> Result<Vec<usize>, String> {
     let record = s.lock().undo.take().ok_or("there is nothing to undo")?;
+    // Per account: the moved messages back to the inbox in one batch, then
+    // everything marked unread (and unflagged) in another.
+    let mut by_account: HashMap<String, Vec<&Touched>> = HashMap::new();
+    for t in &record.touched {
+        by_account.entry(t.account.clone()).or_default().push(t);
+    }
     let mut restored = Vec::new();
     let mut errors = 0;
-    for t in &record.touched {
-        let id = s.lock().items.get(t.index).map(|i| i.cand.id.clone());
-        let Some(id) = id else { continue };
-        let result = match (&t.moved_to, record.act) {
-            (Some(moved), _) => {
-                match graph::run(
-                    state,
-                    &t.account,
-                    std::slice::from_ref(moved),
-                    Op::Move("inbox"),
-                )
-                .await
-                .remove(0)
-                {
-                    Ok(back) => {
-                        let back = back.unwrap_or_else(|| moved.clone());
-                        let r = graph::run(
-                            state,
-                            &t.account,
-                            std::slice::from_ref(&back),
-                            Op::MarkUnread,
-                        )
-                        .await
-                        .remove(0);
-                        r.map(|_| Some(back))
+    for (account, touched) in by_account {
+        // (index, id the message has now), for those that are back.
+        let mut back: Vec<(usize, String)> = Vec::new();
+        let moved: Vec<&&Touched> = touched.iter().filter(|t| t.moved_to.is_some()).collect();
+        if !moved.is_empty() {
+            let ids: Vec<String> = moved.iter().filter_map(|t| t.moved_to.clone()).collect();
+            let results = graph::run(state, &account, &ids, Op::Move("inbox")).await;
+            for ((t, old), r) in moved.iter().zip(&ids).zip(results) {
+                match r {
+                    Ok(new_id) => {
+                        let new_id = new_id.unwrap_or_else(|| old.clone());
+                        // Back in the inbox: record the id whatever happens next.
+                        if let Some(item) = s.lock().items.get_mut(t.index) {
+                            item.cand.id = new_id.clone();
+                            item.handled = false;
+                        }
+                        back.push((t.index, new_id));
                     }
-                    Err(e) => Err(e),
+                    Err(_) => errors += 1,
                 }
             }
-            (None, Act::Flag) => graph::run(state, &t.account, &[id], Op::Unflag)
-                .await
-                .remove(0)
-                .map(|_| None),
-            (None, Act::Read) => graph::run(state, &t.account, &[id], Op::MarkUnread)
-                .await
-                .remove(0)
-                .map(|_| None),
-            (None, _) => Ok(None),
+        }
+        for t in touched.iter().filter(|t| t.moved_to.is_none()) {
+            if let Some(item) = s.lock().items.get(t.index) {
+                back.push((t.index, item.cand.id.clone()));
+            }
+        }
+        let op = match record.act {
+            Act::Flag => Some(Op::Unflag),
+            Act::KeepUnread => None,
+            _ => Some(Op::MarkUnread),
         };
-        match result {
-            Ok(new_id) => {
-                let mut inner = s.lock();
-                if let Some(item) = inner.items.get_mut(t.index) {
-                    if let Some(new_id) = new_id {
-                        item.cand.id = new_id;
-                    }
-                    item.handled = false;
+        if let Some(op) = op
+            && !back.is_empty()
+        {
+            let ids: Vec<String> = back.iter().map(|(_, id)| id.clone()).collect();
+            let results = graph::run(state, &account, &ids, op).await;
+            for ((index, _), r) in back.iter().zip(results) {
+                if r.is_err() && record.act == Act::Read {
+                    errors += 1;
+                    continue;
                 }
-                if let Some(n) = inner.tally.get_mut(record.act.past()) {
-                    *n = n.saturating_sub(1);
-                }
-                restored.push(t.index);
+                restored.push(*index);
             }
-            Err(_) => errors += 1,
+        } else {
+            restored.extend(back.iter().map(|(i, _)| *i));
+        }
+    }
+    {
+        let mut inner = s.lock();
+        for &i in &restored {
+            if let Some(item) = inner.items.get_mut(i) {
+                item.handled = false;
+            }
+        }
+        if let Some(n) = inner.tally.get_mut(record.act.past()) {
+            *n = n.saturating_sub(restored.len());
         }
     }
     state.cache.invalidate_user(&s.user);
     if restored.is_empty() && errors > 0 {
         return Err("undo failed at Microsoft; the message is in Archive or Deleted Items".into());
     }
+    restored.sort_unstable();
     Ok(restored)
 }
 

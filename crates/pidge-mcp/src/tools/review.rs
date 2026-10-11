@@ -365,8 +365,23 @@ impl PidgeMcp {
             ));
         }
         if settings != tc.record.ai {
-            self.update_record(&tc.user.email, |r| r.ai = settings.clone())
-                .await;
+            // Only what this review decided, onto the freshest record: the
+            // user may have saved a new key (or removed it) meanwhile.
+            let hint_at = settings.last_hint_at;
+            self.update_record(&tc.user.email, |r| {
+                if label.is_some()
+                    && r.ai.provider == tc.record.ai.provider
+                    && r.ai.status == tc.record.ai.status
+                    && r.ai.status_since == tc.record.ai.status_since
+                {
+                    r.ai.set_status(settings.status, now);
+                    r.ai.last_attempt_at = settings.last_attempt_at;
+                }
+                if hint_at.is_some() {
+                    r.ai.last_hint_at = hint_at;
+                }
+            })
+            .await;
         }
 
         let total = items.len();
