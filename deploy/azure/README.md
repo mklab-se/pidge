@@ -305,11 +305,11 @@ of the user's connected mailboxes unless `account` names one of them.
 | `accounts_connect` | Returns a link (valid 10 minutes) to connect another mailbox. |
 | `accounts_connect_ai` | Returns a link (valid 10 minutes) to a page where the user enters their own AI key (TypeSafe, OpenAI or Anthropic) for sorting mail. |
 | `accounts_update` | Default sender, timezone, disconnect a mailbox, trust or untrust a sender, remove the AI key (`ai=off`), stop AI tips (`ai_hints=false`). |
-| `mail_review_start` | Starts going through unread mail: picks the range (since the last review, adjusted to a sensible amount), sorts into the user's categories, suggests a bulk clean-up, returns a session and the first message. |
-| `mail_review_next` | The decision on the current message (read, archive, delete, flag, keep unread, undo, or a whole category) applied in the background, and the next message, in one call. |
-| `mail_categories` | The review categories: list, confirm, add, update, remove, reorder, rules (sender or domain) and examples (a real message by id). |
-| `mail_overview` | Recent mail, newest first, with ids and triage flags (to-me, trusted, question, attachments, flagged, unread, invite). |
-| `mail_search` | Free-text search plus from, subject, date range, attachments and folder filters. |
+| `mail_review_start` | Starts going through unread mail: picks the range (since the last review, adjusted to a sensible amount), sorts into the user's categories (or only the named `category`: "go through my Uppdrag mail"), merges copies of one message, suggests a bulk clean-up, returns a session and the first message (short id `r1`, body as link text, at most 900 characters). |
+| `mail_review_next` | The decision on the current message (read, archive, delete, flag, keep unread, undo, or a whole category) applied in the background to every copy, and the next message, in one call. Takes the short id (`r3`) or the full id. |
+| `mail_categories` | The review categories: list, confirm, add (with rules, examples and position in one call), update, remove, reorder, rules (sender or domain) and examples (a real message by id). `mailbox_sync` writes them to the mailboxes too (off by default; per mailbox with `account`, `restore` for one the user deleted there); `sort_mail days=N` classifies and tags the last N days of inbox mail without a review. |
+| `mail_overview` | Recent mail, newest first, with ids and triage flags (to-me, trusted, question, attachments, flagged, unread, invite); `category` lists one category's mail. |
+| `mail_search` | Free-text search plus from, subject, date range, attachments, folder and category filters. |
 | `mail_read` | One message, or its conversation with `thread=true` (see behaviour notes). |
 | `mail_folders` | Top-level folders per mailbox with ids and unread/total counts. |
 | `mail_draft` | Create or revise a draft: new, reply, reply_all or forward. Returns the draft id and a preview. |
@@ -364,7 +364,30 @@ sent only by draft id, and the agent proposes before sending.
   senders). `mail_review_next` applies the action in the background in
   order and reports failures on the next call; undo reverses the last action.
   Sessions live in memory for 60 minutes idle; a lost session is rebuilt
-  from the inbox, and an action given with an id is still applied.
+  from the inbox, and an action given with a full id is still applied (a
+  short id such as `r3` only means something inside its session). Copies
+  of one message (same `Message-ID`, same sender and subject within 10
+  minutes, or the user's own forward) are one item, and an action applies
+  to every copy. "needs reply" is said only at an AI probability of at
+  least 0.7, and never for bulk or machine-sent mail. Every review response
+  ends with a line steering the harness back to `mail_review_next`.
+- **Mailbox categories.** Off by default; `mail_categories
+  action=mailbox_sync enabled=true` turns it on for all the user's
+  mailboxes (`account` leaves one out or brings it back). pidge's list
+  stays the source of truth. At most every 10 minutes per mailbox (and
+  after every category edit) pidge reads the mailbox's categories, links
+  each pidge category to one of the same name or creates it, adopts a
+  colour the user changed there (and sets it in the other mailboxes),
+  respects one the user deleted there (asks once whether to bring it back
+  or drop it from pidge) and asks once about one they renamed. The user's
+  own categories and the colour-only defaults ("Red category", "Röd
+  kategori", …) are never touched. A review tags its sorted mail in the
+  background after answering; renames and removals retag at most 500
+  messages per mailbox. Creating and colouring categories needs the Graph
+  scope `MailboxSettings.ReadWrite`: a mailbox signed in before it was added
+  is still tagged, and `accounts_list` says it needs `accounts_connect` once.
+  Token refreshes never ask for a scope the sign-in did not grant (Microsoft
+  refuses those), so existing mailboxes keep working without it.
 - **AI keys.** Entered only on the `/ai` page (each form bound to its browser
   by a cookie plus form token; opening the page claims nothing, since chat
   apps prefetch links; the first successful save uses the link up), tested with one tiny request before saving), stored in a

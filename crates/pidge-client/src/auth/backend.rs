@@ -153,6 +153,7 @@ mod tests {
                     access_token: "OLD_AT".into(),
                     refresh_token: "OLD_RT".into(),
                     expires_at: Utc::now() - Duration::seconds(60),
+                    scope: None,
                 },
             )
             .await
@@ -165,6 +166,86 @@ mod tests {
         let stored = backend.load("jane@example.com").await.unwrap().unwrap();
         assert_eq!(stored.refresh_token, "NEW_RT");
         assert_eq!(*backend.seen_access_tokens.lock().unwrap(), vec!["NEW_AT"]);
+    }
+
+    /// Microsoft's token endpoint as it treats an account consented before
+    /// `MailboxSettings.ReadWrite` was added: a refresh asking for it is
+    /// refused (`invalid_grant`), anything else succeeds.
+    struct OldConsent;
+
+    impl wiremock::Respond for OldConsent {
+        fn respond(&self, req: &wiremock::Request) -> ResponseTemplate {
+            let form: HashMap<String, String> = url::form_urlencoded::parse(&req.body)
+                .into_owned()
+                .collect();
+            if form["scope"].contains("MailboxSettings") {
+                return ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                    "error": "invalid_grant",
+                    "error_description": "AADSTS65001: consent required"
+                }));
+            }
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "NEW_AT",
+                "refresh_token": "NEW_RT",
+                "expires_in": 3600,
+                "scope": "https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/User.Read"
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_token_consented_before_a_new_scope_keeps_refreshing() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/v2.0/token"))
+            .respond_with(OldConsent)
+            .mount(&server)
+            .await;
+        let backend = Arc::new(MemoryBackend::default());
+        let expired = |scope: Option<&str>| TokenSet {
+            access_token: "OLD_AT".into(),
+            refresh_token: "OLD_RT".into(),
+            expires_at: Utc::now() - Duration::seconds(60),
+            scope: scope.map(str::to_string),
+        };
+        let auth = AuthClient::for_test("cid", server.uri()).with_backend(backend.clone());
+        assert!(auth.scope().contains("MailboxSettings.ReadWrite"));
+
+        // Stored before grants were recorded, then once more with a grant
+        // that lacks the scope: both refresh with the original set.
+        for scope in [None, Some("Mail.ReadWrite User.Read")] {
+            backend
+                .save("jane@example.com", &expired(scope))
+                .await
+                .unwrap();
+            assert_eq!(
+                auth.get_valid_token("jane@example.com").await.unwrap(),
+                "NEW_AT"
+            );
+            let stored = backend.load("jane@example.com").await.unwrap().unwrap();
+            assert!(stored.scope.unwrap().contains("Mail.ReadWrite"));
+        }
+
+        // A sign-in that granted the new scope refreshes with it.
+        backend
+            .save(
+                "jane@example.com",
+                &expired(Some("Mail.ReadWrite MailboxSettings.ReadWrite")),
+            )
+            .await
+            .unwrap();
+        let err = auth.get_valid_token("jane@example.com").await.unwrap_err();
+        assert!(matches!(err, ClientError::SessionExpired { .. }), "{err:?}");
+        let asked: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| String::from_utf8_lossy(&r.body).into_owned())
+            .collect();
+        assert_eq!(asked.len(), 3);
+        assert!(!asked[0].contains("MailboxSettings") && !asked[1].contains("MailboxSettings"));
+        assert!(asked[2].contains("MailboxSettings"));
     }
 
     #[tokio::test]
@@ -185,6 +266,7 @@ mod tests {
                     access_token: "FRESH".into(),
                     refresh_token: "RT".into(),
                     expires_at: Utc::now() + Duration::seconds(3600),
+                    scope: None,
                 },
             )
             .await

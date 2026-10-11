@@ -125,6 +125,7 @@ mod tests {
             access_token: "AT".into(),
             refresh_token: "RT".into(),
             expires_at: Utc::now() + Duration::seconds(3600),
+            scope: None,
         }
     }
 

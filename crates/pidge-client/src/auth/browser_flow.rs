@@ -140,6 +140,7 @@ pub(crate) async fn exchange_code_to_success(
             refresh_token: tokens_response.refresh_token.unwrap_or_default(),
             expires_at: chrono::Utc::now()
                 + chrono::Duration::seconds(tokens_response.expires_in.unwrap_or(3600)),
+            scope: tokens_response.scope,
         },
         id_token: tokens_response.id_token,
     })
@@ -422,6 +423,8 @@ struct TokenResponse {
     refresh_token: Option<String>,
     expires_in: Option<i64>,
     id_token: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 async fn exchange_code(

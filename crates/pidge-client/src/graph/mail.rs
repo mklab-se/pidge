@@ -194,6 +194,7 @@ pub async fn list_inbox(
         limit,
         skip,
         unread_only,
+        None,
     )
     .await
 }
@@ -221,6 +222,33 @@ pub async fn list_folder_messages(
         limit,
         skip,
         unread_only,
+        None,
+    )
+    .await
+}
+
+/// Like [`list_folder_messages`] with an OData `$filter` of the caller's
+/// (values already escaped, `receivedDateTime` first so Graph accepts it
+/// with the `receivedDateTime desc` order).
+pub async fn list_folder_messages_where(
+    http: &reqwest::Client,
+    base_url: &str,
+    access_token: &str,
+    account: &str,
+    folder_id: &str,
+    limit: usize,
+    filter: &str,
+) -> Result<InboxPage, ClientError> {
+    list_folder(
+        http,
+        base_url,
+        access_token,
+        account,
+        folder_id,
+        limit,
+        0,
+        false,
+        Some(filter),
     )
     .await
 }
@@ -244,6 +272,7 @@ pub async fn list_drafts(
         limit,
         skip,
         false,
+        None,
     )
     .await
 }
@@ -258,6 +287,7 @@ async fn list_folder(
     limit: usize,
     skip: usize,
     unread_only: bool,
+    filter: Option<&str>,
 ) -> Result<InboxPage, ClientError> {
     let url = format!("{base_url}/me/mailFolders/{folder}/messages");
     // Body is fetched in its native content type (HTML or text) so the
@@ -274,7 +304,9 @@ async fn list_folder(
     if skip > 0 {
         req = req.query(&[("$skip", &skip.to_string())]);
     }
-    if unread_only {
+    if let Some(filter) = filter {
+        req = req.query(&[("$filter", filter)]);
+    } else if unread_only {
         req = req.query(&[("$filter", "isRead eq false")]);
     }
 

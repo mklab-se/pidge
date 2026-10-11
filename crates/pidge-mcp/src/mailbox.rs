@@ -134,6 +134,7 @@ mod tests {
                     access_token: "a".into(),
                     refresh_token: "r".into(),
                     expires_at: chrono::Utc::now(),
+                    scope: None,
                 },
             )
             .await

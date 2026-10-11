@@ -32,6 +32,9 @@ pub(crate) struct TokenResponse {
     pub expires_in: Option<u64>,
     #[serde(default)]
     pub id_token: Option<String>,
+    /// The scopes granted, space-separated.
+    #[serde(default)]
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +127,7 @@ where
                     access_token: tr.access_token,
                     refresh_token,
                     expires_at: Utc::now() + chrono::Duration::seconds(expires as i64 - 60),
+                    scope: tr.scope,
                 },
                 id_token: tr.id_token,
             });

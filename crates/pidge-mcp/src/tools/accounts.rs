@@ -67,7 +67,7 @@ impl PidgeMcp {
     #[tool(
         description = "E-mail accounts: the user's connected mailboxes with their health (ok / needs reconnect), the sign-in address, the default sender for new mail and events, the timezone, trusted senders, and the status of AI sorting."
     )]
-    async fn accounts_list(
+    pub(crate) async fn accounts_list(
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
@@ -295,6 +295,9 @@ impl PidgeMcp {
             };
             let health = if healthy { "ok" } else { "needs reconnect" };
             out.push_str(&format!("  - {mailbox}{role}: {health}\n"));
+            if let Some(note) = record.review.mailbox_sync.account_note(mailbox) {
+                out.push_str(&format!("    {note}\n"));
+            }
         }
         let trusted = if record.trusted_senders.is_empty() {
             "none".to_string()

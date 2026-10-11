@@ -16,27 +16,55 @@ use crate::state::SharedState;
 /// Most candidates listed per mailbox.
 pub const MAX_CANDIDATES: usize = 100;
 
-const SELECT: &str = "id,subject,from,receivedDateTime,bodyPreview,hasAttachments,toRecipients,inferenceClassification";
+const SELECT: &str = "id,subject,from,receivedDateTime,bodyPreview,hasAttachments,toRecipients,inferenceClassification,internetMessageId,categories";
 
-/// Unread inbox mail received at or after `since` (all unread when
-/// `None`), newest first, and the inbox's total unread count.
+/// Which inbox mail to list.
+#[derive(Debug, Clone)]
+pub struct Listing {
+    pub since: Option<DateTime<Utc>>,
+    /// Unread only (a review), or read and unread (`sort_mail`).
+    pub unread_only: bool,
+    pub top: usize,
+    /// One more `$filter` clause, already OData-escaped (a category filter).
+    pub extra: Option<String>,
+}
+
+impl Listing {
+    /// A review's listing: unread mail since `since`.
+    pub fn unread(since: Option<DateTime<Utc>>) -> Self {
+        Self {
+            since,
+            unread_only: true,
+            top: MAX_CANDIDATES,
+            extra: None,
+        }
+    }
+}
+
+/// Inbox mail received at or after `since` (all when `None`), newest
+/// first, and the inbox's total unread count.
 pub async fn list_candidates(
     state: &SharedState,
     account: &str,
-    since: Option<DateTime<Utc>>,
+    listing: Listing,
     my_addresses: &[String],
 ) -> Result<(Vec<Candidate>, Option<u64>), ClientError> {
     // Graph wants an `$orderby` property first in `$filter` too.
-    let filter = match since {
-        Some(t) => format!(
-            "receivedDateTime ge {} and isRead eq false",
-            t.to_rfc3339_opts(SecondsFormat::Secs, true)
-        ),
-        None => "receivedDateTime ge 1900-01-01T00:00:00Z and isRead eq false".to_string(),
-    };
+    let since = listing.since.map_or_else(
+        || "1900-01-01T00:00:00Z".to_string(),
+        |t| t.to_rfc3339_opts(SecondsFormat::Secs, true),
+    );
+    let mut filter = format!("receivedDateTime ge {since}");
+    if listing.unread_only {
+        filter.push_str(" and isRead eq false");
+    }
+    if let Some(extra) = &listing.extra {
+        filter.push_str(&format!(" and ({extra})"));
+    }
     let list_url = format!(
-        "/me/mailFolders/inbox/messages?$filter={}&$orderby=receivedDateTime%20desc&$top={MAX_CANDIDATES}&$select={SELECT}",
-        encode(&filter)
+        "/me/mailFolders/inbox/messages?$filter={}&$orderby=receivedDateTime%20desc&$top={}&$select={SELECT}",
+        encode(&filter),
+        listing.top
     );
     let requests = vec![
         BatchRequest::bare("list", "GET", list_url),
@@ -116,6 +144,21 @@ fn candidate(account: &str, row: &Value, my_addresses: &[String]) -> Option<Cand
         received_at,
         focused,
         list: false,
+        internet_id: row
+            .get("internetMessageId")
+            .and_then(Value::as_str)
+            .map(|v| v.trim().to_ascii_lowercase())
+            .filter(|v| !v.is_empty()),
+        categories: row
+            .get("categories")
+            .and_then(Value::as_array)
+            .map(|cs| {
+                cs.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -283,7 +326,7 @@ fn missing(what: &str) -> ClientError {
 }
 
 /// Percent-encodes an OData query value for a `$batch` relative URL.
-fn encode(s: &str) -> String {
+pub fn encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || b"-_.~:".contains(&b) {
