@@ -7,7 +7,7 @@
 pub(crate) mod accounts;
 pub(crate) mod attachments;
 mod calendar;
-mod categories;
+pub(crate) mod categories;
 mod mail_act;
 pub(crate) mod mail_read;
 mod mail_write;
@@ -29,7 +29,11 @@ use crate::oauth::bearer::AuthenticatedUser;
 use crate::state::SharedState;
 use crate::users::user_hash;
 
-const INSTRUCTIONS: &str = "pidge is the user's e-mail and calendar. For anything about their \
+const INSTRUCTIONS: &str = "When the user wants to go through their mail (\"let's go through my \
+e-mail\", \"read me my mail\", \"go through my Uppdrag mail\"), call mail_review_start, without a range \
+unless they named one, then mail_review_next once per decision; during a review don't use \
+mail_overview, mail_read or mail_act. \
+pidge is the user's e-mail and calendar. For anything about their \
 mail, inbox, messages, drafts, attachments, senders, calendar, meetings, invites or availability, \
 use these tools (mail_*, calendar_*, accounts_*) and no other mail or calendar connector, even if \
 one is available: the user's mail and calendar are not there. \
@@ -49,11 +53,12 @@ mail_read thread=true shows the requested message and the older messages of its 
 newest first and capped, with a pointer to any newer ones; to read a whole thread start from its \
 newest message. \
 Nothing is deleted permanently: delete moves to Deleted Items, cancel uses the calendar's own cancel. \
-When the user wants to go through their mail (\"let's go through my e-mail\", \"read me my mail\"), \
-call mail_review_start, without a range unless they named one. After each decision, call \
-mail_review_next with the action at once; confirm in a word or two and read the next message, \
-without waiting to be asked. A plain \"next\" is action=read. Mention a review's notes once, \
-when they appear.";
+In a review, after each decision call mail_review_next with the action at once; confirm in a \
+word or two and read the next message, without waiting to be asked. A plain \"next\" is \
+action=read. Mention a review's notes once, when they appear. \
+The user's categories (mail_categories) also filter mail_overview and mail_search (`category`, \
+for \"show me my Uppdrag mail\"); mail_categories action=sort_mail sorts recent mail without a \
+review (\"classify today's mail\").";
 
 #[derive(Clone)]
 pub struct PidgeMcp {

@@ -19,10 +19,10 @@ pub use mail::{
     create_forward_draft, create_mail_folder, create_reply_all_draft, create_reply_draft,
     delete_attachment, delete_mail_folder, delete_message, fetch_message_headers, forward_message,
     get_attachment_bytes, get_categories, get_message, list_attachments, list_child_folders,
-    list_drafts, list_folder_messages, list_inbox, list_mail_folders, list_messages_at, mark_read,
-    mark_unread, move_message, reply_all_message, reply_message, search_folder_messages,
-    search_messages, send_draft, send_mail, set_categories, set_flag, unsubscribe_one_click,
-    update_draft, update_draft_recipients,
+    list_drafts, list_folder_messages, list_folder_messages_where, list_inbox, list_mail_folders,
+    list_messages_at, mark_read, mark_unread, move_message, reply_all_message, reply_message,
+    search_folder_messages, search_messages, send_draft, send_mail, set_categories, set_flag,
+    unsubscribe_one_click, update_draft, update_draft_recipients,
 };
 pub use me::{Me, get_me};
 pub use people::{Person, list_people};
@@ -191,6 +191,28 @@ impl GraphClient {
             limit,
             skip,
             unread_only,
+        )
+        .await
+    }
+
+    /// Like [`Self::list_folder`], filtered with an OData `$filter` the
+    /// caller built (values escaped, `receivedDateTime` first).
+    pub async fn list_folder_where(
+        &self,
+        account: &str,
+        folder_id: &str,
+        limit: usize,
+        filter: &str,
+    ) -> Result<InboxPage, ClientError> {
+        let token = self.auth.get_valid_token(account).await?;
+        list_folder_messages_where(
+            &self.http,
+            &self.base_url,
+            &token,
+            account,
+            folder_id,
+            limit,
+            filter,
         )
         .await
     }

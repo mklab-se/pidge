@@ -67,14 +67,47 @@ impl Act {
 
 pub struct Item {
     pub cand: Candidate,
+    /// Other copies of the same message (a duplicate delivery, the same
+    /// mail in another mailbox, the user's own forward of it): every action
+    /// on the item applies to them too.
+    pub copies: Vec<Candidate>,
     pub judgment: Judgment,
     pub handled: bool,
+}
+
+impl Item {
+    /// The item's messages: `0` is `cand`, `k` is `copies[k - 1]`.
+    fn message(&self, copy: usize) -> Option<&Candidate> {
+        match copy {
+            0 => Some(&self.cand),
+            k => self.copies.get(k - 1),
+        }
+    }
+
+    fn message_mut(&mut self, copy: usize) -> Option<&mut Candidate> {
+        match copy {
+            0 => Some(&mut self.cand),
+            k => self.copies.get_mut(k - 1),
+        }
+    }
+}
+
+/// The session-scoped short id of item `index`: `r1`, `r2`, …
+pub fn short_id(index: usize) -> String {
+    format!("r{}", index + 1)
+}
+
+/// The item index a short id names, if `id` is one.
+pub fn parse_short(id: &str) -> Option<usize> {
+    let n: usize = id.trim().strip_prefix(['r', 'R'])?.parse().ok()?;
+    n.checked_sub(1)
 }
 
 /// One message an action touched, with its id after a move.
 #[derive(Debug, Clone)]
 struct Touched {
     index: usize,
+    copy: usize,
     account: String,
     moved_to: Option<String>,
 }
@@ -146,9 +179,44 @@ impl Session {
         self.inner.lock().expect("review session lock")
     }
 
-    /// The index of the message `id`, if this session holds it.
+    /// The index of the item `id` names: a short id (`r3`), or the full id
+    /// of any of the item's copies.
     pub fn index_of(&self, id: &str) -> Option<usize> {
-        self.lock().items.iter().position(|i| i.cand.id == id)
+        let inner = self.lock();
+        if let Some(i) = parse_short(id) {
+            return (i < inner.items.len()).then_some(i);
+        }
+        inner
+            .items
+            .iter()
+            .position(|i| i.cand.id == id || i.copies.iter().any(|c| c.id == id))
+    }
+
+    /// The mailbox and full id of item `index`'s first message.
+    pub fn message_ref(&self, index: usize) -> Option<(String, String)> {
+        self.lock()
+            .items
+            .get(index)
+            .map(|i| (i.cand.account.clone(), i.cand.id.clone()))
+    }
+
+    /// Unhandled items, the current one included.
+    pub fn remaining(&self) -> usize {
+        self.lock().items.iter().filter(|i| !i.handled).count()
+    }
+
+    /// Every message of the session with the category its item is in, for
+    /// tagging the mail in the mailboxes.
+    pub fn tagging(&self) -> Vec<(Candidate, String)> {
+        self.lock()
+            .items
+            .iter()
+            .flat_map(|i| {
+                std::iter::once(&i.cand)
+                    .chain(&i.copies)
+                    .map(|c| (c.clone(), i.judgment.category.clone()))
+            })
+            .collect()
     }
 
     pub fn current(&self) -> Option<usize> {
@@ -245,7 +313,7 @@ impl Session {
         &self,
         index: usize,
         cache: &super::classify::ClassCache,
-    ) -> Option<(Candidate, Judgment)> {
+    ) -> Option<(Candidate, Judgment, usize)> {
         let mut inner = self.lock();
         let item = inner.items.get_mut(index)?;
         if item.judgment.source == super::classify::Source::Signal
@@ -254,13 +322,15 @@ impl Session {
         {
             item.judgment = j;
         }
-        Some((item.cand.clone(), item.judgment.clone()))
+        Some((item.cand.clone(), item.judgment.clone(), item.copies.len()))
     }
 
-    pub fn position_counts(&self) -> (usize, usize) {
-        let inner = self.lock();
-        let handled = inner.items.iter().filter(|i| i.handled).count();
-        (handled, inner.items.len())
+    /// Bodies fetched ahead of the session (while classifying).
+    pub fn add_bodies(&self, bodies: impl IntoIterator<Item = FullMessage>) {
+        let mut inner = self.lock();
+        for m in bodies {
+            inner.bodies.insert(m.id.clone(), m);
+        }
     }
 
     /// `9 archived, 2 deleted, …` for the closing line.
@@ -332,23 +402,29 @@ async fn worker(state: SharedState, session: Weak<Session>, mut rx: mpsc::Unboun
     }
 }
 
+/// One message an action is applied to: `(item index, copy, account, id)`.
+type Target = (usize, usize, String, String);
+
 async fn apply(state: &SharedState, s: &Session, act: Act, indexes: Vec<usize>) {
-    let targets: Vec<(usize, String, String)> = {
+    // Every copy of each item: a merged duplicate is handled as one.
+    let targets: Vec<Target> = {
         let inner = s.lock();
         indexes
             .iter()
-            .filter_map(|&i| {
-                inner
-                    .items
-                    .get(i)
-                    .map(|it| (i, it.cand.account.clone(), it.cand.id.clone()))
+            .filter_map(|&i| inner.items.get(i).map(|it| (i, it)))
+            .flat_map(|(i, it)| {
+                (0..=it.copies.len()).filter_map(move |k| {
+                    it.message(k)
+                        .map(|c| (i, k, c.account.clone(), c.id.clone()))
+                })
             })
             .collect()
     };
     let mut touched: Vec<Touched> = targets
         .iter()
-        .map(|(i, a, _)| Touched {
+        .map(|(i, k, a, _)| Touched {
             index: *i,
+            copy: *k,
             account: a.clone(),
             moved_to: None,
         })
@@ -356,13 +432,13 @@ async fn apply(state: &SharedState, s: &Session, act: Act, indexes: Vec<usize>) 
     let mut failed: HashMap<usize, String> = HashMap::new();
     for op in act.ops() {
         let mut by_account: HashMap<&str, Vec<usize>> = HashMap::new();
-        for (n, (_, account, _)) in targets.iter().enumerate() {
+        for (n, (_, _, account, _)) in targets.iter().enumerate() {
             if !failed.contains_key(&n) {
                 by_account.entry(account.as_str()).or_default().push(n);
             }
         }
         for (account, ns) in by_account {
-            let ids: Vec<String> = ns.iter().map(|&n| targets[n].2.clone()).collect();
+            let ids: Vec<String> = ns.iter().map(|&n| targets[n].3.clone()).collect();
             let results = graph::run(state, account, &ids, *op).await;
             for (n, r) in ns.into_iter().zip(results) {
                 match r {
@@ -380,11 +456,17 @@ async fn apply(state: &SharedState, s: &Session, act: Act, indexes: Vec<usize>) 
     }
     state.cache.invalidate_user(&s.user);
     let mut inner = s.lock();
+    let mut reported = std::collections::HashSet::new();
     for (n, reason) in &failed {
-        let (index, _, id) = &targets[*n];
+        let index = &targets[*n].0;
+        // One line per item, however many of its copies failed.
+        if !reported.insert(*index) {
+            continue;
+        }
         inner.failures.push(format!(
-            "earlier: {} message {id} failed: {reason}",
-            act.noun()
+            "earlier: {} message {} failed: {reason}",
+            act.noun(),
+            short_id(*index)
         ));
         // Not done after all: offer it again.
         if let Some(item) = inner.items.get_mut(*index) {
@@ -431,7 +513,9 @@ async fn undo(state: &SharedState, s: &Session) -> Result<Vec<usize>, String> {
                         let new_id = new_id.unwrap_or_else(|| old.clone());
                         // Back in the inbox: record the id whatever happens next.
                         if let Some(item) = s.lock().items.get_mut(t.index) {
-                            item.cand.id = new_id.clone();
+                            if let Some(m) = item.message_mut(t.copy) {
+                                m.id = new_id.clone();
+                            }
                             item.handled = false;
                         }
                         back.push((t.index, new_id));
@@ -441,8 +525,8 @@ async fn undo(state: &SharedState, s: &Session) -> Result<Vec<usize>, String> {
             }
         }
         for t in touched.iter().filter(|t| t.moved_to.is_none()) {
-            if let Some(item) = s.lock().items.get(t.index) {
-                back.push((t.index, item.cand.id.clone()));
+            if let Some(m) = s.lock().items.get(t.index).and_then(|i| i.message(t.copy)) {
+                back.push((t.index, m.id.clone()));
             }
         }
         let op = match record.act {
@@ -466,6 +550,8 @@ async fn undo(state: &SharedState, s: &Session) -> Result<Vec<usize>, String> {
             restored.extend(back.iter().map(|(i, _)| *i));
         }
     }
+    restored.sort_unstable();
+    restored.dedup();
     {
         let mut inner = s.lock();
         for &i in &restored {
@@ -481,7 +567,6 @@ async fn undo(state: &SharedState, s: &Session) -> Result<Vec<usize>, String> {
     if restored.is_empty() && errors > 0 {
         return Err("undo failed at Microsoft; the message is in Archive or Deleted Items".into());
     }
-    restored.sort_unstable();
     Ok(restored)
 }
 
@@ -498,6 +583,15 @@ impl Sessions {
         let list = map.get_mut(user)?;
         list.retain(|s| !s.expired());
         list.iter().find(|s| s.id == id).cloned()
+    }
+
+    /// The caller's most recently used session, for a short id given
+    /// without its session (e.g. to `mail_categories`).
+    pub fn latest(&self, user: &str) -> Option<Arc<Session>> {
+        let mut map = self.map.lock().expect("sessions lock");
+        let list = map.get_mut(user)?;
+        list.retain(|s| !s.expired());
+        list.iter().max_by_key(|s| s.last_used()).cloned()
     }
 
     pub fn insert(&self, session: Arc<Session>) {

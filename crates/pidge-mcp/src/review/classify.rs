@@ -34,7 +34,7 @@ const CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 const CACHE_CAPACITY: usize = 20_000;
 
 /// A review candidate: the fields classification and ordering use.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Candidate {
     pub account: String,
     pub id: String,
@@ -52,6 +52,10 @@ pub struct Candidate {
     pub list: bool,
     /// Machine-sent (`noreply` sender, `Auto-Submitted`).
     pub automated: bool,
+    /// The `Message-ID` header, which every copy of one message shares.
+    pub internet_id: Option<String>,
+    /// The categories already on the message in the mailbox.
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -423,6 +427,7 @@ mod tests {
             focused: None,
             list: false,
             automated: false,
+            ..Default::default()
         }
     }
 

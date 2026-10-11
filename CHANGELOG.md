@@ -2,6 +2,48 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Mailbox categories in the hosted MCP server**, off by default:
+  `mail_categories action=mailbox_sync enabled=true` puts pidge's categories in the user's
+  mailboxes as the mailbox's own categories and on the mail a review sorts, so they show in the
+  user's mail app. pidge's list stays the source of truth across mailboxes; a colour the user
+  changes in a mailbox is adopted everywhere, a category they delete there is respected (pidge asks
+  once whether to bring it back), a rename there is offered for everywhere, and the user's own
+  categories and the colour-only defaults are never touched. On first use pidge offers to adopt the
+  mailboxes' own named categories. Per mailbox with `account`; `restore` brings back one the user
+  deleted there. Renaming or removing a pidge category follows into the mailboxes (removal asks
+  whether to take it off the mail too)
+- **Classify without a review**: `mail_categories action=sort_mail days=N` (1 = today, up to 31)
+  sorts the inbox mail of the last N days, read and unread, answers with the per-category counts
+  and tags the mail in the background, at most 500 messages per call
+- **By category**: `mail_overview` and `mail_search` take `category` ("show me my Uppdrag mail"),
+  and `mail_review_start` takes `category` (one or several) to go through just those; with mailbox
+  categories on it reads the tagged mail straight from the mailbox
+- `mail_categories action=add` takes `rules`, `example_ids` and `position` in the same call, and
+  example ids can be a review's short ids
+- The pidge app asks for `MailboxSettings.ReadWrite` at sign-in (needed to create and colour
+  mailbox categories). Mailboxes connected before keep working: a token refresh never asks for a
+  scope the sign-in did not grant. They are still tagged, and `accounts_list` says they need
+  `accounts_connect` once for the rest
+
+### Changed
+
+- Reviews keep ChatGPT and other harnesses in the review: `mail_overview` no longer presents itself
+  for going through the inbox, the server instructions open with the review rule, and every review
+  response ends with one line saying to read it out and call `mail_review_next`
+- Review responses are shorter: items carry short ids (`r1`, `r2`, ...; full ids still accepted),
+  bodies are link text only, capped at 900 characters, a bulk action answers with its receipt and a
+  one-line "Still on" reminder instead of the whole message again, and the position reads "9 left"
+- Copies of one message (a duplicate delivery, the same mail in two mailboxes, the user's own
+  forward) are one review item, marked "(2 copies)"; an action applies to every copy
+- "needs reply" is said only when the AI is at least 70% sure, and never for bulk or machine-sent
+  mail
+- `mail_review_start` reads the mailing-list headers, loads the AI client and fetches the likely
+  first bodies at the same time
+
 ## [1.7.1] - 2026-10-11
 
 ### Fixed

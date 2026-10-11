@@ -7,9 +7,11 @@
 pub mod ai;
 pub mod categories;
 pub mod classify;
+pub mod dedupe;
 pub mod graph;
 pub mod scope;
 pub mod session;
+pub mod sync;
 
 use std::sync::Arc;
 
@@ -30,6 +32,9 @@ pub struct ReviewSettings {
     pub confirmed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_review_at: Option<DateTime<Utc>>,
+    /// Writing the categories to the mailboxes too (off by default).
+    #[serde(default, skip_serializing_if = "sync::MailboxSync::is_default")]
+    pub mailbox_sync: sync::MailboxSync,
 }
 
 impl ReviewSettings {
@@ -50,6 +55,8 @@ pub struct ReviewState {
     pub classes: Arc<classify::ClassCache>,
     pub ai_clients: ai::AiClients,
     pub ai_links: crate::ai_page::AiLinks,
+    /// One mailbox-category task at a time per user.
+    pub sync_locks: sync::Locks,
     /// A TypeSafe endpoint override: set only by tests (a mock server).
     pub ai_endpoint: Option<String>,
 }

@@ -1,7 +1,9 @@
 //! `mail_categories`: the user's review categories, talked through with
 //! the harness: list, confirm the defaults, add, rename, describe, remove,
 //! reorder, and teach by rule (a sender or domain) or by example (a real
-//! message, copied by id from the user's own mailbox).
+//! message, copied by id from the user's own mailbox). With mailbox sync
+//! on, the categories are also written to the user's mailboxes
+//! ([`crate::review::sync`]), and `sort_mail` tags recent mail.
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -16,6 +18,8 @@ use crate::render::{one_line, untrusted, who};
 use crate::review::categories::{
     self as cats, Category, Example, MAX_CATEGORIES, MAX_EXAMPLES, MAX_RULES, OTHER,
 };
+use crate::review::session::parse_short;
+use crate::review::sync;
 use crate::users::{UserRecord, user_hash};
 
 /// The user record must stay well under Key Vault's 25 KB secret limit.
@@ -32,6 +36,8 @@ pub enum CategoriesAction {
     Confirm,
     /// Back to the default categories (drops the user's own).
     UseDefaults,
+    /// A new category `name`, optionally with `description`, `rules`,
+    /// `example_ids` and `position` in the same call.
     Add,
     /// Rename (`new_name`), describe (`description`) or toggle
     /// `bulk_suggestion` on `name`.
@@ -45,6 +51,13 @@ pub enum CategoriesAction {
     RemoveExample,
     /// Put the categories in `order` (names); unnamed ones keep their order after.
     Reorder,
+    /// Writing the categories to the mailboxes: `enabled` turns it on or
+    /// off (with `account`: for that mailbox only), `restore` brings back a
+    /// category the user deleted in `account`; with neither, the status.
+    MailboxSync,
+    /// Classify the inbox mail (read and unread) of the last `days` days
+    /// and put the categories on it in the mailboxes.
+    SortMail,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -63,50 +76,105 @@ pub struct CategoriesArgs {
     /// For `add_rule`/`remove_rule`: `sender:<address>` or `domain:<domain>`.
     #[serde(default)]
     pub rule: Option<String>,
-    /// For `add_example`: a message id from the review or mail_overview.
+    /// For `add`: rules for the new category, as for `add_rule`.
+    #[serde(default)]
+    pub rules: Option<Vec<String>>,
+    /// For `add_example`: a message id (a review's short id such as `r3`,
+    /// or an id from mail_overview).
     #[serde(default)]
     pub id: Option<String>,
+    /// For `add`: message ids to copy as examples of the new category.
+    #[serde(default)]
+    pub example_ids: Option<Vec<String>>,
+    /// The review session a short id (`r3`) belongs to; the latest when absent.
+    #[serde(default)]
+    pub session: Option<String>,
     /// For `remove_example`: the example's number as listed.
     #[serde(default)]
     pub example: Option<usize>,
     /// For `add`/`update`: offer "archive all of these" at review start.
     #[serde(default)]
     pub bulk_suggestion: Option<bool>,
+    /// For `add`: where the new category goes in the list (1 = first);
+    /// last when absent.
+    #[serde(default)]
+    pub position: Option<usize>,
     /// For `reorder`: category names in the new order.
     #[serde(default)]
     pub order: Option<Vec<String>>,
+    /// For `remove` with mailbox sync on: also take the category off the
+    /// mail in the mailboxes. Ask the user.
+    #[serde(default)]
+    pub remove_from_mail: Option<bool>,
+    /// For `mailbox_sync`: on or off.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// For `mailbox_sync`: the one mailbox `enabled` or `restore` is about.
+    /// For `sort_mail`: only this mailbox.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// For `mailbox_sync` with `account`: a category the user deleted in
+    /// that mailbox, to write there again.
+    #[serde(default)]
+    pub restore: Option<String>,
+    /// For `sort_mail`: how many days back, today included (1-31).
+    #[serde(default)]
+    pub days: Option<u32>,
 }
 
 #[tool_router(router = categories_router, vis = "pub(crate)")]
 impl PidgeMcp {
     #[tool(
-        description = "E-mail: the categories mail is sorted into during a review (mail_review_start), in review order. Talk them through with the user: `confirm` keeps the ones in use, `add`/`update`/`remove`/`reorder` edit them, `add_rule` pins a sender or domain to a category (e.g. \"everything from the climbing club is Leisure\" → rule domain:climbingclub.se), `add_example` teaches by a real message id (\"mail like this one\"), `use_defaults` goes back to the standard set. `Other` is built in for whatever fits nowhere. Returns the updated list."
+        description = "E-mail: the categories mail is sorted into during a review (mail_review_start), in review order. Talk them through with the user: `confirm` keeps the ones in use, `add` (with optional description, rules, example_ids and position in one call)/`update`/`remove`/`reorder` edit them, `add_rule` pins a sender or domain to a category (e.g. \"everything from the climbing club is Leisure\" → rule domain:climbingclub.se), `add_example` teaches by a real message id (\"mail like this one\"; a review's short id such as r3 works), `use_defaults` goes back to the standard set. `Other` is built in for whatever fits nowhere. `mailbox_sync enabled=true` also puts the categories in the user's mailboxes (as the mailbox's own categories, and on the mail a review sorts); `sort_mail days=N` (1 = today, up to 31) classifies and tags the inbox mail of the last N days without a review, for \"classify today's mail\" (with the user's AI key it costs a few hundredths of a cent per 100 messages). Returns the updated list."
     )]
-    async fn mail_categories(
+    pub(crate) async fn mail_categories(
         &self,
         Parameters(args): Parameters<CategoriesArgs>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let tc = ToolContext::from_request(&self.state, &ctx).await?;
         let action = args.action.unwrap_or_default();
-        if action == CategoriesAction::List {
-            return Ok(ok(render(&tc.record)));
+        match action {
+            CategoriesAction::List => return Ok(ok(render(&tc.record))),
+            CategoriesAction::SortMail => {
+                return self
+                    .sort_mail(&tc, args.days.unwrap_or(1), args.account.as_deref())
+                    .await
+                    .map(ok);
+            }
+            CategoriesAction::MailboxSync => return self.mailbox_sync(&tc, &args).await.map(ok),
+            _ => {}
+        }
+        let syncing = tc.record.review.mailbox_sync.enabled;
+        if action == CategoriesAction::Remove && syncing && args.remove_from_mail.is_none() {
+            let name = args.name.as_deref().map(one_line).unwrap_or_default();
+            return Ok(ok(format!(
+                "Nothing changed yet. Ask the user whether {name} should also come off the mail in their mailboxes, then call again with remove_from_mail=true or remove_from_mail=false."
+            )));
         }
 
-        // An example is read before the record is changed, so a missing
+        // Examples are read before the record is changed, so a missing
         // message changes nothing.
-        let example = match action {
-            CategoriesAction::AddExample => {
-                let id = args
-                    .id
-                    .as_deref()
-                    .ok_or_else(|| tool_error("add_example needs `id`"))?;
-                check_id(id)?;
-                let m = self.find_message(&tc.accounts(None)?, id).await?;
-                Some(Example::new(&who(&m.from), &m.subject))
-            }
-            _ => None,
+        let ids: Vec<String> = match action {
+            CategoriesAction::AddExample => vec![
+                args.id
+                    .clone()
+                    .ok_or_else(|| tool_error("add_example needs `id`"))?,
+            ],
+            CategoriesAction::Add => args.example_ids.clone().unwrap_or_default(),
+            _ => Vec::new(),
         };
+        if ids.len() > MAX_EXAMPLES {
+            return Err(tool_error(format!(
+                "At most {MAX_EXAMPLES} examples per category"
+            )));
+        }
+        let mut examples = Vec::new();
+        for id in &ids {
+            let (accounts, full) = self.message_target(&tc, id, args.session.as_deref())?;
+            let m = self.find_message(&accounts, &full).await?;
+            examples.push(Example::new(&who(&m.from), &m.subject));
+        }
 
         let signin = tc.record.signin.clone();
         let mut record = self
@@ -117,12 +185,37 @@ impl PidgeMcp {
             .map_err(|e| store_error("loading user record", &signin, e))?
             .unwrap_or_else(|| tc.record.clone());
         let mut list = record.review.categories();
-        let receipt = edit(&mut list, action, &args, example)?;
+        let before: Vec<String> = list.iter().map(|c| c.name.clone()).collect();
+        let receipt = edit(&mut list, action, &args, examples)?;
+        // An update keeps the category's place, so a rename shows there.
+        let renamed = (action == CategoriesAction::Update)
+            .then(|| {
+                before
+                    .iter()
+                    .zip(&list)
+                    .find(|(b, c)| **b != c.name)
+                    .map(|(b, c)| (b.clone(), c.name.clone()))
+            })
+            .flatten();
+        let removed: Vec<String> = if action == CategoriesAction::Remove {
+            before
+                .iter()
+                .filter(|b| !list.iter().any(|c| &c.name == *b))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         record.review.categories = match action {
             CategoriesAction::UseDefaults => None,
             _ => Some(list),
         };
         record.review.confirmed = true;
+        // Once, while sync is off: the categories can go on the mail too.
+        let offer = !syncing && !record.review.mailbox_sync.offered;
+        if offer {
+            record.review.mailbox_sync.offered = true;
+        }
         let size = serde_json::to_string(&record).map(|s| s.len()).unwrap_or(0);
         if size > MAX_RECORD_BYTES {
             return Err(tool_error(
@@ -136,8 +229,208 @@ impl PidgeMcp {
             .map_err(|e| store_error("saving categories", &signin, e))?;
         self.state.cache.invalidate_user(&signin);
         tracing::info!(user = %user_hash(&signin), action = ?action, "categories updated");
-        Ok(ok(format!("{receipt}\n\n{}", render(&record))))
+
+        let mut out = format!("{receipt}\n\n{}", render(&record));
+        if syncing {
+            // The mailboxes follow in the background: a rename or removal
+            // can retag hundreds of messages.
+            let state = self.state.clone();
+            let from_mail = args.remove_from_mail.unwrap_or(false);
+            let user = signin.clone();
+            tokio::spawn(async move {
+                let lock = state.review.sync_locks.for_user(&user);
+                let _guard = lock.lock().await;
+                if let Some((old, new)) = &renamed {
+                    sync::rename(&state, &user, old, new).await;
+                }
+                for name in &removed {
+                    sync::remove(&state, &user, name, from_mail).await;
+                }
+                sync::sync(&state, &user, true, None).await;
+            });
+            out.push_str("\nThe mailboxes are being updated in the background.");
+        } else if offer {
+            out.push_str(
+                "\nnote (mention once): pidge can also put these categories on the mail in the user's mailboxes, so they show in their mail app; if they want that: mail_categories action=mailbox_sync enabled=true.",
+            );
+        }
+        Ok(ok(out))
     }
+}
+
+impl PidgeMcp {
+    /// The mailboxes to look in and the full id for a message id from the
+    /// harness: a review's short id (`r3`), or a full id in any of the
+    /// user's mailboxes.
+    fn message_target(
+        &self,
+        tc: &ToolContext,
+        id: &str,
+        session: Option<&str>,
+    ) -> Result<(Vec<String>, String), McpError> {
+        check_id(id)?;
+        if parse_short(id).is_none() {
+            return Ok((tc.accounts(None)?, id.to_string()));
+        }
+        let sessions = &self.state.review.sessions;
+        let s = match session {
+            Some(s) => sessions.get(&tc.user.email, s.trim()),
+            None => sessions.latest(&tc.user.email),
+        };
+        let (account, full) = s
+            .and_then(|s| s.index_of(id).and_then(|i| s.message_ref(i)))
+            .ok_or_else(|| {
+                tool_error(format!(
+                    "{id} is not in a running review; pass the message's full id"
+                ))
+            })?;
+        Ok((tc.accounts(Some(&account))?, full))
+    }
+
+    /// `mail_categories action=mailbox_sync`.
+    async fn mailbox_sync(
+        &self,
+        tc: &ToolContext,
+        args: &CategoriesArgs,
+    ) -> Result<String, McpError> {
+        let signin = tc.record.signin.clone();
+        let account = args
+            .account
+            .as_deref()
+            .map(|a| tc.accounts(Some(a)).map(|mut v| v.remove(0)))
+            .transpose()?;
+        let restore = args
+            .restore
+            .as_deref()
+            .map(|n| {
+                let account = account
+                    .clone()
+                    .ok_or_else(|| tool_error("restore needs `account`"))?;
+                let list = tc.record.review.categories();
+                let i = cats::position(&list, n)
+                    .ok_or_else(|| tool_error(format!("No category named {}", one_line(n))))?;
+                Ok::<_, McpError>((account, list[i].name.clone()))
+            })
+            .transpose()?;
+        let was_on = tc.record.review.mailbox_sync.enabled;
+        let mut record = self
+            .state
+            .users
+            .load(&signin)
+            .await
+            .map_err(|e| store_error("loading user record", &signin, e))?
+            .unwrap_or_else(|| tc.record.clone());
+        let ms = &mut record.review.mailbox_sync;
+        let mut receipt = String::new();
+        match (args.enabled, &account) {
+            (Some(on), Some(a)) => {
+                ms.excluded.retain(|m| !m.eq_ignore_ascii_case(a));
+                if !on {
+                    ms.excluded.push(a.clone());
+                }
+                receipt = format!("{a}: {}.", if on { "included" } else { "left out" });
+            }
+            (Some(on), None) => {
+                ms.enabled = on;
+                ms.offered = true;
+                receipt = format!(
+                    "Mailbox categories are {}.",
+                    if on {
+                        "on"
+                    } else {
+                        "off (the mailboxes keep what is there)"
+                    }
+                );
+            }
+            (None, _) => {}
+        }
+        if let Some((a, name)) = &restore {
+            if let Some(st) = ms.mailboxes.get_mut(a) {
+                st.removed.retain(|r| r != name);
+            }
+            receipt = format!("{name} will be written to {a} again.");
+        }
+        let changed = args.enabled.is_some() || restore.is_some();
+        if changed {
+            self.state
+                .users
+                .save(&record)
+                .await
+                .map_err(|e| store_error("saving mailbox sync", &signin, e))?;
+            self.state.cache.invalidate_user(&signin);
+            tracing::info!(user = %user_hash(&signin), "mailbox sync changed");
+        }
+
+        let mut out = receipt;
+        if record.review.mailbox_sync.enabled {
+            let lock = self.state.review.sync_locks.for_user(&signin);
+            let report = {
+                let _guard = lock.lock().await;
+                sync::sync(&self.state, &signin, changed, None).await
+            };
+            if report.created + report.linked > 0 {
+                out.push_str(&format!(
+                    "\nIn the mailboxes: {} created, {} of the user's own linked by name.",
+                    report.created, report.linked
+                ));
+            }
+            // First time on: the user's own named categories, to adopt.
+            if !was_on && !report.own.is_empty() {
+                let own: Vec<String> = report
+                    .own
+                    .iter()
+                    .map(|(m, n)| format!("{} ({m})", one_line(n)))
+                    .collect();
+                out.push_str(&format!(
+                    "\nThe user's mailboxes have their own categories: {}. pidge leaves them alone; offer to adopt any as a pidge category (mail_categories action=add name=<name>), so reviews sort into it.",
+                    own.join(", ")
+                ));
+            }
+            for note in sync::take_notes(&self.state, &signin).await {
+                out.push('\n');
+                out.push_str(&note);
+            }
+            let rec = self
+                .state
+                .users
+                .load(&signin)
+                .await
+                .map_err(|e| store_error("loading user record", &signin, e))?
+                .unwrap_or(record);
+            out.push('\n');
+            out.push_str(&sync_status(&rec));
+        } else {
+            out.push('\n');
+            out.push_str(&sync_status(&record));
+        }
+        Ok(out.trim_start().to_string())
+    }
+}
+
+/// The mailbox-sync state, one line per mailbox.
+fn sync_status(record: &UserRecord) -> String {
+    let ms = &record.review.mailbox_sync;
+    if !ms.enabled {
+        return "Mailbox categories: off (turn on with mail_categories action=mailbox_sync enabled=true).".into();
+    }
+    let mut out = String::from("Mailbox categories: on");
+    for m in &record.mailboxes {
+        let state = if !ms.active(m) {
+            "left out".to_string()
+        } else if let Some(note) = ms.account_note(m) {
+            note.to_string()
+        } else {
+            match ms.mailboxes.get(m) {
+                Some(st) if !st.removed.is_empty() => {
+                    format!("ok; removed there by the user: {}", st.removed.join(", "))
+                }
+                Some(st) if st.synced_at.is_some() => "ok".to_string(),
+                _ => "not synced yet".to_string(),
+            }
+        };
+        out.push_str(&format!("\n  - {m}: {state}"));
+    }
+    out
 }
 
 /// Applies one edit to `list`; returns a one-line receipt.
@@ -145,7 +438,7 @@ fn edit(
     list: &mut Vec<Category>,
     action: CategoriesAction,
     args: &CategoriesArgs,
-    example: Option<Example>,
+    examples: Vec<Example>,
 ) -> Result<String, McpError> {
     let name = || {
         args.name
@@ -169,7 +462,9 @@ fn edit(
         .transpose()
         .map_err(tool_error)?;
     Ok(match action {
-        CategoriesAction::List => String::new(),
+        CategoriesAction::List | CategoriesAction::MailboxSync | CategoriesAction::SortMail => {
+            String::new()
+        }
         CategoriesAction::Confirm => "Confirmed.".into(),
         CategoriesAction::UseDefaults => "Back to the default categories.".into(),
         CategoriesAction::Add => {
@@ -184,12 +479,42 @@ fn edit(
                     "At most {MAX_CATEGORIES} categories; remove one first"
                 )));
             }
+            let rules = args
+                .rules
+                .iter()
+                .flatten()
+                .map(|r| cats::parse_rule(r))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(tool_error)?;
+            if rules.len() > MAX_RULES {
+                return Err(tool_error(format!(
+                    "At most {MAX_RULES} rules per category"
+                )));
+            }
+            // A sender or domain belongs to one category only.
+            for c in list.iter_mut() {
+                c.rules.retain(|r| !rules.contains(r));
+            }
             let mut c: Category = serde_json::from_value(serde_json::json!({ "name": n }))
                 .expect("a name-only category deserializes");
             c.description = description.unwrap_or_default();
             c.bulk_suggestion = args.bulk_suggestion.unwrap_or(false);
-            list.push(c);
-            format!("Added {n}.")
+            c.rules = rules;
+            c.examples = examples;
+            let at = args
+                .position
+                .map_or(list.len(), |p| p.saturating_sub(1).min(list.len()));
+            let mut receipt = format!("Added {n}");
+            if !c.rules.is_empty() || !c.examples.is_empty() {
+                receipt.push_str(&format!(
+                    " with {} and {}",
+                    count(c.rules.len(), "rule"),
+                    count(c.examples.len(), "example")
+                ));
+            }
+            list.insert(at, c);
+            receipt.push('.');
+            receipt
         }
         CategoriesAction::Update => {
             let i = find(list, name()?)?;
@@ -239,12 +564,13 @@ fn edit(
         }
         CategoriesAction::AddExample => {
             let i = find(list, name()?)?;
-            let example = example.expect("read before editing");
             let c = &mut list[i];
-            if c.examples.len() >= MAX_EXAMPLES {
-                c.examples.remove(0);
+            for example in examples {
+                if c.examples.len() >= MAX_EXAMPLES {
+                    c.examples.remove(0);
+                }
+                c.examples.push(example);
             }
-            c.examples.push(example);
             format!("Added the example to {}.", c.name)
         }
         CategoriesAction::RemoveExample => {
@@ -275,6 +601,14 @@ fn edit(
     })
 }
 
+fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
 fn render(record: &UserRecord) -> String {
     let list = record.review.categories();
     let state = match (&record.review.categories, record.review.confirmed) {
@@ -301,6 +635,11 @@ fn render(record: &UserRecord) -> String {
     out.push_str(&format!(
         "\n{OTHER}: whatever fits no other category (built in)"
     ));
+    if record.review.mailbox_sync.enabled {
+        out.push_str(
+            "\nAlso written to the mailboxes (mail_categories action=mailbox_sync for details).",
+        );
+    }
     // Examples are copied from received mail: third-party text.
     let examples: Vec<String> = list
         .iter()
