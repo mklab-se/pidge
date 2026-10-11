@@ -45,14 +45,14 @@ pub struct UpdateArgs {
     /// `true` revokes every access and refresh token issued to this user,
     /// including the one making this call: every client (this one too)
     /// must sign in again.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub sign_out_everywhere: Option<bool>,
     /// `off` removes the user's AI key: reviews are then sorted by
     /// Outlook's own signals.
     #[serde(default)]
     pub ai: Option<AiSwitch>,
     /// `false` stops pidge suggesting an AI key; `true` allows it again.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub ai_hints: Option<bool>,
 }
 

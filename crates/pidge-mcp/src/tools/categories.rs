@@ -96,24 +96,24 @@ pub struct CategoriesArgs {
     #[serde(default)]
     pub session: Option<String>,
     /// For `remove_example`: the example's number as listed.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub example: Option<usize>,
     /// For `add`/`update`: offer "archive all of these" at review start.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub bulk_suggestion: Option<bool>,
     /// For `add`: where the new category goes in the list (1 = first);
     /// last when absent.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub position: Option<usize>,
     /// For `reorder`: category names in the new order.
     #[serde(default)]
     pub order: Option<Vec<String>>,
     /// For `remove` with mailbox sync on: also take the category off the
     /// mail in the mailboxes. Ask the user.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub remove_from_mail: Option<bool>,
     /// For `mailbox_sync`: on or off.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub enabled: Option<bool>,
     /// For `mailbox_sync`: the one mailbox `enabled` or `restore` is about.
     /// For `sort_mail`: only this mailbox.
@@ -124,10 +124,10 @@ pub struct CategoriesArgs {
     #[serde(default)]
     pub restore: Option<String>,
     /// For `sort_mail`: how many days back, today included (1-31).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub days: Option<u32>,
     /// For `prune_mailboxes`: really delete (after the user has seen the list).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub apply: Option<bool>,
 }
 

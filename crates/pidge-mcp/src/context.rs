@@ -405,3 +405,76 @@ mod tests {
         assert!(h.state.cache.get("jane@example.com", "other").is_none());
     }
 }
+
+/// For optional scalar tool inputs: the value itself, or the same value as
+/// a string (`"true"`, `"3"`). A client holding a stale tool schema sends
+/// parameters it doesn't know about as strings; refusing them would make
+/// every new parameter unusable there until the client refreshes.
+pub fn lenient<'de, D, T>(d: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + std::str::FromStr,
+{
+    use serde::Deserialize;
+    use serde::de::Error;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Either<T> {
+        Value(T),
+        Text(String),
+    }
+    match Option::<Either<T>>::deserialize(d)? {
+        None => Ok(None),
+        Some(Either::Value(v)) => Ok(Some(v)),
+        Some(Either::Text(t)) => t
+            .trim()
+            .parse()
+            .map(Some)
+            .map_err(|_| D::Error::custom(format!("{t:?} is not a valid value here"))),
+    }
+}
+
+#[cfg(test)]
+mod lenient_tests {
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    struct Args {
+        #[serde(default, deserialize_with = "super::lenient")]
+        flag: Option<bool>,
+        #[serde(default, deserialize_with = "super::lenient")]
+        days: Option<u32>,
+    }
+
+    #[test]
+    fn scalars_may_arrive_as_strings() {
+        let parse = |j: &str| serde_json::from_str::<Args>(j);
+        assert_eq!(
+            parse(r#"{"flag": true, "days": 3}"#).unwrap(),
+            Args {
+                flag: Some(true),
+                days: Some(3)
+            }
+        );
+        assert_eq!(
+            parse(r#"{"flag": "true", "days": "3"}"#).unwrap(),
+            Args {
+                flag: Some(true),
+                days: Some(3)
+            }
+        );
+        assert_eq!(
+            parse(r#"{}"#).unwrap(),
+            Args {
+                flag: None,
+                days: None
+            }
+        );
+        assert_eq!(
+            parse(r#"{"flag": null}"#).unwrap(),
+            Args {
+                flag: None,
+                days: None
+            }
+        );
+        assert!(parse(r#"{"flag": "maybe"}"#).is_err());
+    }
+}

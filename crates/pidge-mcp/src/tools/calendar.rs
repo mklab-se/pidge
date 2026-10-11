@@ -60,7 +60,7 @@ pub struct AgendaArgs {
     #[serde(default)]
     pub to: Option<String>,
     /// Only invites the user has not answered yet.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub pending_only: Option<bool>,
     /// One of the user's mailboxes; all of them when absent.
     #[serde(default)]
@@ -83,10 +83,10 @@ pub struct AvailabilityArgs {
     #[serde(default)]
     pub to: Option<String>,
     /// Start of the working day, local hour 0–23 (default 8).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub start_hour: Option<u32>,
     /// End of the working day, local hour 1–24 (default 18).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub end_hour: Option<u32>,
     /// One of the user's mailboxes; all of them when absent.
     #[serde(default)]
@@ -125,7 +125,7 @@ pub struct RespondArgs {
     #[serde(default)]
     pub message: Option<String>,
     /// Whether the organizer is sent the answer (default true).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub send_response: Option<bool>,
     /// A new time to suggest; only with `tentative` or `decline`.
     #[serde(default)]
@@ -166,7 +166,7 @@ pub struct EventArgs {
     #[serde(default)]
     pub end: Option<String>,
     /// A whole-day event; `start` and `end` are then dates.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub all_day: Option<bool>,
     /// People to invite: e-mail addresses or names of people the user mails
     /// with. On update, replaces the attendee list and drops any room or
@@ -180,7 +180,7 @@ pub struct EventArgs {
     #[serde(default)]
     pub body: Option<String>,
     /// Add a Teams meeting link.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub online_meeting: Option<bool>,
     /// A note sent to attendees with a cancellation (action=cancel only).
     #[serde(default)]

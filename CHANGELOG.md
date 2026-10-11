@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.4] - 2026-10-11
+
+### Fixed
+
+- Hosted MCP server: yes/no and number parameters also accept the value as a string (`"true"`,
+  `"3"`). Clients that cache an older tool list send parameters they don't know about as strings,
+  which made new parameters such as `apply`, `enabled` or `days` unusable there until the client
+  refreshed
+
 ## [1.7.3] - 2026-10-11
 
 ### Added

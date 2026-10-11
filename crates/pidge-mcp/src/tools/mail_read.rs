@@ -32,7 +32,7 @@ pub struct OverviewArgs {
     #[serde(default)]
     pub since: Option<String>,
     /// Only unread messages.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub unread_only: Option<bool>,
     /// `inbox` (default), `drafts`, `sent`, `archive`, `deleted`, or a folder
     /// id from mail_folders.
@@ -46,7 +46,7 @@ pub struct OverviewArgs {
     #[serde(default)]
     pub category: Option<String>,
     /// Maximum items (default 20, max 50).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub limit: Option<u32>,
 }
 
@@ -67,7 +67,7 @@ pub struct SearchArgs {
     #[serde(default)]
     pub before: Option<String>,
     /// Only messages with attachments.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub has_attachments: Option<bool>,
     /// Restrict to one folder (same names as mail_overview); all folders when absent.
     #[serde(default)]
@@ -79,7 +79,7 @@ pub struct SearchArgs {
     #[serde(default)]
     pub category: Option<String>,
     /// Maximum items (default 20, max 50).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub limit: Option<u32>,
 }
 
@@ -89,7 +89,7 @@ pub struct ReadArgs {
     pub id: String,
     /// Return the whole conversation, newest first, each message trimmed to
     /// its own contribution.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub thread: Option<bool>,
     /// The mailbox holding the message; found automatically when absent.
     #[serde(default)]

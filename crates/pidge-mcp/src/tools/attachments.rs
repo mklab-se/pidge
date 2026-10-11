@@ -59,7 +59,7 @@ pub struct AttachmentArgs {
     pub mode: Option<AttachmentMode>,
     /// For `read` of a long document: the character offset to continue
     /// from, as given in the previous call's `next:` line.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub offset: Option<usize>,
     /// The mailbox holding the message; found automatically when absent.
     #[serde(default)]

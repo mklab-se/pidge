@@ -80,7 +80,7 @@ pub struct StartArgs {
     #[serde(default)]
     pub scope: Option<ScopeKind>,
     /// For scope `days`: how many days back, today included (1-30).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::context::lenient")]
     pub days: Option<u32>,
     /// One of the user's mailboxes; all of them when absent.
     #[serde(default)]
