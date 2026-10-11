@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.7] - 2026-10-11
+
+### Changed
+
+- Releases deploy faster: the `Deploy MCP` job no longer builds the server image a second time in
+  Azure, it copies the image the release just published to GHCR into the Azure registry
+  (`az acr import`). The GHCR image is also tagged with the git tag (`v1.2.3`). A manual redeploy
+  without a release still builds in Azure
+
 ## [1.7.6] - 2026-10-11
 
 ### Added
