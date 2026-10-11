@@ -252,10 +252,26 @@ impl Signer {
         Ok(claims)
     }
 
+    /// A refresh token with a random id, outside any chain (tests stand in
+    /// for tokens issued before rotation with it).
+    #[cfg(test)]
     pub fn issue_refresh(&self, sub: &str, client_id: &str, generation: u32) -> Result<String> {
+        self.issue_refresh_with_jti(sub, client_id, generation, &random_id())
+    }
+
+    /// A refresh token with the given id, so the token endpoint can record
+    /// it as the client's current one (or, in the grace window, answer a
+    /// duplicate refresh with another token of the same chain position).
+    pub fn issue_refresh_with_jti(
+        &self,
+        sub: &str,
+        client_id: &str,
+        generation: u32,
+        jti: &str,
+    ) -> Result<String> {
         self.sign(&RefreshClaims {
             typ: "refresh".into(),
-            jti: random_id(),
+            jti: jti.into(),
             sub: sub.into(),
             client_id: client_id.into(),
             exp: (Utc::now() + REFRESH_TOKEN_TTL).timestamp(),

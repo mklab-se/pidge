@@ -277,6 +277,7 @@ pub(crate) mod tests {
             alt_hosts: Vec::new(),
             legacy_issuers: Vec::new(),
             log_format: crate::config::LogFormat::Text,
+            redirect_hosts: Vec::new(),
         };
         let signer = Signer::new(&random_bytes(32), PUBLIC, format!("{PUBLIC}/mcp"));
         let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));

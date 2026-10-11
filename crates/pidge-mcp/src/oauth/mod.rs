@@ -22,7 +22,14 @@
 //!
 //! No database: clients, codes and tokens are all signed JWTs (see [`jwt`]).
 //! The only in-memory state is the minutes-long window between `/authorize`
-//! and `/callback`, and the set of already-redeemed codes.
+//! and `/callback`, and the set of already-redeemed codes. Refresh tokens
+//! rotate: the user record keeps each client's current refresh token id,
+//! and a retired one presented again signs the user out everywhere (see
+//! [`rotate_refresh`]).
+//!
+//! Redirect URIs are limited to an allowlist of hosts
+//! ([`crate::config::Config::redirect_uri_allowed`]), and nothing redirects
+//! to the client before the user has seen the consent page.
 
 pub mod bearer;
 #[cfg(test)]
@@ -43,7 +50,7 @@ use pidge_client::auth::TokenSet;
 
 use crate::state::{PENDING_TTL, PendingAuthorization, PendingKind, SharedState};
 use crate::users::{
-    Identity, MailboxRecord, OwnershipError, UserRecord, log_store_error, user_hash,
+    Identity, MailboxRecord, OwnershipError, RefreshCheck, UserRecord, log_store_error, user_hash,
 };
 
 pub const SCOPE: &str = "mail";
@@ -152,20 +159,22 @@ fn oauth_error(status: StatusCode, error: &str, description: impl Into<String>) 
         .into_response()
 }
 
-/// Loopback redirects are allowed over plain http (Claude Code, MCP
-/// Inspector); anything else must be https.
-fn redirect_uri_is_acceptable(uri: &str) -> bool {
-    let Ok(url) = Url::parse(uri) else {
-        return false;
-    };
-    if url.fragment().is_some() {
-        return false;
-    }
-    match url.scheme() {
-        "https" => url.host_str().is_some(),
-        "http" => matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
-        _ => false,
-    }
+/// Most redirect URIs one client may register.
+const MAX_REDIRECT_URIS: usize = 10;
+/// Characters of a client's self-chosen name that reach the log.
+const LOGGED_NAME_CHARS: usize = 80;
+
+/// Client-chosen text as it may appear in a log line: one line, capped.
+fn logged(text: &str) -> String {
+    crate::render::cap_inline(&crate::render::one_line(text), LOGGED_NAME_CHARS)
+}
+
+/// The host of `uri`, for logs and the consent page; empty if it has none.
+fn redirect_host(uri: &str) -> String {
+    Url::parse(uri)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
+        .unwrap_or_default()
 }
 
 async fn register(State(state): State<SharedState>, Json(req): Json<RegisterRequest>) -> Response {
@@ -176,15 +185,28 @@ async fn register(State(state): State<SharedState>, Json(req): Json<RegisterRequ
             "redirect_uris is required",
         );
     }
-    if let Some(bad) = req
-        .redirect_uris
-        .iter()
-        .find(|u| !redirect_uri_is_acceptable(u))
-    {
+    if req.redirect_uris.len() > MAX_REDIRECT_URIS {
         return oauth_error(
             StatusCode::BAD_REQUEST,
             "invalid_redirect_uri",
-            format!("redirect URI not acceptable: {bad}"),
+            format!("at most {MAX_REDIRECT_URIS} redirect URIs"),
+        );
+    }
+    // Anyone may register, so only redirects to the known clients' hosts
+    // (and loopback) are accepted: a sign-in can't be sent anywhere else.
+    if let Some(bad) = req
+        .redirect_uris
+        .iter()
+        .find(|u| !state.config.redirect_uri_allowed(u))
+    {
+        tracing::info!(
+            host = %logged(&redirect_host(bad)),
+            "registration refused: redirect host not allowed"
+        );
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_redirect_uri",
+            "redirect URI not allowed: this server accepts redirects only to the hosts it knows (and loopback)",
         );
     }
 
@@ -203,7 +225,16 @@ async fn register(State(state): State<SharedState>, Json(req): Json<RegisterRequ
         }
     };
 
-    tracing::info!(client_name = ?req.client_name, redirect_uris = ?req.redirect_uris, "registered client");
+    let hosts: Vec<String> = req.redirect_uris.iter().map(|u| redirect_host(u)).collect();
+    tracing::info!(
+        client_name = ?req
+            .client_name
+            .as_deref()
+            .map(logged),
+        redirect_uris = req.redirect_uris.len(),
+        hosts = ?hosts,
+        "registered client"
+    );
 
     (
         StatusCode::CREATED,
@@ -277,40 +308,47 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
             "redirect_uri is not registered for this client.",
         );
     }
+    // Clients registered before the redirect allowlist carry their URIs in
+    // a signed client id that still verifies: check again here.
+    if !state.config.redirect_uri_allowed(redirect_uri) {
+        tracing::info!(
+            host = %logged(&redirect_host(redirect_uri)),
+            "authorization refused: redirect host not allowed"
+        );
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "This app's redirect address is not allowed on this pidge server.",
+        );
+    }
 
+    // Nothing is redirected before the user has seen the consent page: a
+    // request crafted to fail here would otherwise bounce the browser
+    // straight to whatever URI the (self-registered) client named.
     let client_state = p.state.as_deref();
     if p.response_type.as_deref() != Some("code") {
-        return redirect_with_error(
-            redirect_uri,
-            client_state,
-            "unsupported_response_type",
-            "only response_type=code is supported",
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "The app asked for an unsupported response_type (only code is supported).",
         );
     }
     let Some(code_challenge) = p.code_challenge.as_deref().filter(|c| !c.is_empty()) else {
-        return redirect_with_error(
-            redirect_uri,
-            client_state,
-            "invalid_request",
-            "PKCE code_challenge is required",
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "The app did not send a PKCE code_challenge.",
         );
     };
     if p.code_challenge_method.as_deref().unwrap_or("plain") != "S256" {
-        return redirect_with_error(
-            redirect_uri,
-            client_state,
-            "invalid_request",
-            "only code_challenge_method=S256 is supported",
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "The app asked for an unsupported code_challenge_method (only S256 is supported).",
         );
     }
     if let Some(resource) = p.resource.as_deref()
         && !state.config.accepts_resource(resource)
     {
-        return redirect_with_error(
-            redirect_uri,
-            client_state,
-            "invalid_target",
-            "unknown resource",
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "The app asked for a resource this server does not serve.",
         );
     }
 
@@ -335,10 +373,7 @@ async fn authorize(State(state): State<SharedState>, Query(p): Query<AuthorizePa
         },
     );
 
-    let redirect_host = Url::parse(redirect_uri)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
-        .unwrap_or_default();
+    let redirect_host = redirect_host(redirect_uri);
     let go = format!(
         "{}/authorize/go?state={}",
         state.config.base_url(),
@@ -367,7 +402,7 @@ async fn authorize_go(
             "This sign-in link has expired or is not valid. Start again from your AI client.",
         );
     };
-    let presented = consent_nonce_from(&headers, &SIGN_IN_CONSENT);
+    let presented = consent_nonce_from(&headers, &SIGN_IN_CONSENT, &state);
     if pending.consent_nonce.is_none() || presented != pending.consent_nonce {
         return pages::error(
             StatusCode::BAD_REQUEST,
@@ -487,7 +522,7 @@ async fn callback(
     // bind their mailbox to the starter's account). The pending entry is
     // already consumed, so the lifted URL is burnt either way. Nothing is
     // redirected to the waiting client: it may be the attacker's.
-    let presented = consent_nonce_from(&headers, &CALLBACK_COOKIE);
+    let presented = consent_nonce_from(&headers, &CALLBACK_COOKIE, &state);
     if pending.callback_nonce.is_none() || presented != pending.callback_nonce {
         tracing::warn!(
             kind = %pending.kind_name(),
@@ -820,6 +855,13 @@ fn connect_pending(
     }
 }
 
+fn already_opened_connect_link() -> Response {
+    pages::error(
+        StatusCode::BAD_REQUEST,
+        "This connect link was already opened in another browser. Continue there, or ask your AI client for a new link.",
+    )
+}
+
 fn expired_connect_link() -> Response {
     pages::error(
         StatusCode::BAD_REQUEST,
@@ -854,16 +896,39 @@ const CALLBACK_COOKIE: ConsentCookie = ConsentCookie {
     path: "/callback",
 };
 
-/// `Set-Cookie` value for a consent nonce: scoped to the flow's path, gone
-/// with the pending entry's lifetime, `Secure` whenever we're served over https.
+impl ConsentCookie {
+    /// The name on the wire. Over https it carries the `__Host-` prefix, so
+    /// the browser only accepts it `Secure`, for `Path=/` and without a
+    /// `Domain`: nothing on a sibling or parent domain can plant or shadow
+    /// it. Plain http (loopback development) can't use the prefix, so the
+    /// bare name is kept there. Each flow's cookie has its own name either
+    /// way, since with `Path=/` they all reach every path.
+    fn wire_name(&self, secure: bool) -> String {
+        if secure {
+            format!("__Host-{}", self.name)
+        } else {
+            self.name.to_string()
+        }
+    }
+}
+
+/// `Set-Cookie` value for a consent nonce, gone with the pending entry's
+/// lifetime. Over https: `__Host-` name, `Secure`, `Path=/`. Over plain
+/// http (loopback development): the bare name, scoped to the flow's path.
 fn consent_cookie(cookie: &ConsentCookie, nonce: &str, secure: bool) -> String {
     format!(
         "{}={nonce}; HttpOnly;{} SameSite=Lax; Max-Age={}; Path={}",
-        cookie.name,
+        cookie.wire_name(secure),
         if secure { " Secure;" } else { "" },
         PENDING_TTL.num_seconds(),
-        cookie.path
+        if secure { "/" } else { cookie.path }
     )
+}
+
+/// Whether cookies are set `Secure` (with `__Host-` names): whenever the
+/// server is reached over https.
+fn secure_cookies(state: &SharedState) -> bool {
+    state.config.public_url.scheme() == "https"
 }
 
 /// `resp` with the consent cookie set.
@@ -873,10 +938,9 @@ fn with_consent_cookie(
     nonce: &str,
     state: &SharedState,
 ) -> Response {
-    let secure = state.config.public_url.scheme() == "https";
     resp.headers_mut().insert(
         header::SET_COOKIE,
-        consent_cookie(cookie, nonce, secure)
+        consent_cookie(cookie, nonce, secure_cookies(state))
             .parse()
             .expect("cookie is ASCII"),
     );
@@ -884,14 +948,24 @@ fn with_consent_cookie(
 }
 
 /// The consent nonce from the request's `Cookie` header(s), if any.
-fn consent_nonce_from(headers: &HeaderMap, cookie: &ConsentCookie) -> Option<String> {
+fn consent_nonce_from(
+    headers: &HeaderMap,
+    cookie: &ConsentCookie,
+    state: &SharedState,
+) -> Option<String> {
+    cookie_value(headers, &cookie.wire_name(secure_cookies(state)))
+}
+
+/// The value of the cookie called `name` in the request's `Cookie`
+/// header(s), if any.
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(name, _)| *name == cookie.name)
+        .find(|(n, _)| *n == name)
         .map(|(_, value)| value.to_string())
 }
 
@@ -899,12 +973,40 @@ fn consent_nonce_from(headers: &HeaderMap, cookie: &ConsentCookie) -> Option<Str
 /// mailbox will be bound to before anything happens, so someone handed a
 /// stranger's link doesn't connect their mailbox to it unawares, and binds
 /// the Continue step to this browser with a cookie nonce.
-async fn connect(State(state): State<SharedState>, Query(p): Query<ConnectParams>) -> Response {
-    let Some((key, owner, mailbox, _)) = connect_pending(&state, &p) else {
+///
+/// A link that names its mailbox can be reopened, each time binding the
+/// newest browser: the callback refuses any other account anyway. A link
+/// without one would connect whichever account signs in, so it binds to the
+/// first browser that opens it; another browser is told it was already
+/// opened (the first one can still reload it).
+async fn connect(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(p): Query<ConnectParams>,
+) -> Response {
+    let Some((key, owner, mailbox, pending)) = connect_pending(&state, &p) else {
         return expired_connect_link();
     };
-    let nonce = jwt::random_id();
-    state.set_consent_nonce(&key, nonce.clone());
+    let nonce = match (&mailbox, pending.consent_nonce) {
+        (Some(_), _) => {
+            let nonce = jwt::random_id();
+            state.set_consent_nonce(&key, nonce.clone());
+            nonce
+        }
+        (None, Some(set))
+            if consent_nonce_from(&headers, &CONNECT_CONSENT, &state) == Some(set.clone()) =>
+        {
+            set
+        }
+        (None, Some(_)) => return already_opened_connect_link(),
+        (None, None) => {
+            let nonce = jwt::random_id();
+            if !state.claim_consent_nonce(&key, nonce.clone()) {
+                return already_opened_connect_link();
+            }
+            nonce
+        }
+    };
     let go = format!(
         "{}/connect/go?state={}",
         state.config.base_url(),
@@ -928,7 +1030,7 @@ async fn connect_go(
     let Some((key, _, mailbox, pending)) = connect_pending(&state, &p) else {
         return expired_connect_link();
     };
-    let presented = consent_nonce_from(&headers, &CONNECT_CONSENT);
+    let presented = consent_nonce_from(&headers, &CONNECT_CONSENT, &state);
     if pending.consent_nonce.is_none() || presented != pending.consent_nonce {
         return pages::error(
             StatusCode::BAD_REQUEST,
@@ -988,10 +1090,20 @@ fn percent_encoding_decode(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Issues an access/refresh pair stamped with the user's current token `generation`.
-fn token_response(state: &SharedState, sub: &str, client_id: &str, generation: u32) -> Response {
+/// Issues an access/refresh pair stamped with the user's current token
+/// `generation`; the refresh token's id is `refresh_jti`, as recorded in
+/// the user's refresh chain for `client_id`.
+fn token_response(
+    state: &SharedState,
+    sub: &str,
+    client_id: &str,
+    generation: u32,
+    refresh_jti: &str,
+) -> Response {
     let access = state.signer.issue_access(sub, SCOPE, generation);
-    let refresh = state.signer.issue_refresh(sub, client_id, generation);
+    let refresh = state
+        .signer
+        .issue_refresh_with_jti(sub, client_id, generation, refresh_jti);
     match (access, refresh) {
         (Ok(access_token), Ok(refresh_token)) => (
             StatusCode::OK,
@@ -1015,6 +1127,97 @@ fn token_response(state: &SharedState, sub: &str, client_id: &str, generation: u
                 "server_error",
                 "could not issue tokens",
             )
+        }
+    }
+}
+
+/// `sub`'s user record for a refresh-chain update; a user with a token but
+/// no record (from before records existed) gets a fresh one, as tools do.
+async fn chain_record(state: &SharedState, sub: &str) -> Result<UserRecord, ()> {
+    match state.users.load(sub).await {
+        Ok(rec) => Ok(rec.unwrap_or_else(|| UserRecord::new(sub))),
+        Err(e) => {
+            log_store_error("loading refresh chain", sub, &e);
+            Err(())
+        }
+    }
+}
+
+/// Records `jti` as `client_id`'s current refresh token after a sign-in.
+/// The caller holds [`crate::state::AppState::refresh_lock`].
+async fn start_refresh_chain(
+    state: &SharedState,
+    sub: &str,
+    client_id: &str,
+    jti: &str,
+) -> Result<(), ()> {
+    let mut record = chain_record(state, sub).await?;
+    record.set_refresh(client_id, jti, None, chrono::Utc::now());
+    state.users.save(&record).await.map(|_| ()).map_err(|e| {
+        log_store_error("saving refresh chain", sub, &e);
+    })
+}
+
+/// Checks a refresh token against its client's chain and returns the id
+/// the new refresh token gets. The caller holds
+/// [`crate::state::AppState::refresh_lock`], so concurrent grants are
+/// judged against what the previous one stored.
+///
+/// - The client's current token (or one from before rotation, which has no
+///   chain yet): a new id becomes current and the presented one is kept as
+///   `previous`.
+/// - The previous token within [`crate::users::REFRESH_GRACE`]: a client that sent the
+///   same refresh twice at once (two tabs, a retry after a lost response).
+///   It gets a fresh pair whose refresh token carries the *current* id, so
+///   whichever response the client keeps continues the one chain; nothing
+///   is stored. Someone replaying a stolen token inside those 30 seconds
+///   gets a valid pair too, but no more than the token was already worth.
+/// - Anything else is a retired token used again: someone else holds a
+///   copy. The user is signed out everywhere (as `sign_out_everywhere`
+///   does) and the grant refused.
+///
+/// Store failures refuse with 503 and store nothing, so the presented token
+/// stays current and the client can retry.
+async fn rotate_refresh(
+    state: &SharedState,
+    claims: &jwt::RefreshClaims,
+    client_id: &str,
+) -> Result<String, Box<Response>> {
+    let sub = claims.sub.as_str();
+    let mut record = chain_record(state, sub)
+        .await
+        .map_err(|()| Box::new(store_unavailable()))?;
+    let now = chrono::Utc::now();
+    match record.refresh_check(client_id, &claims.jti, now) {
+        RefreshCheck::Current | RefreshCheck::Unchained => {
+            let jti = jwt::random_id();
+            record.set_refresh(client_id, &jti, Some(&claims.jti), now);
+            state.users.save(&record).await.map_err(|e| {
+                log_store_error("saving refresh chain", sub, &e);
+                Box::new(store_unavailable())
+            })?;
+            Ok(jti)
+        }
+        RefreshCheck::Grace(current) => {
+            tracing::info!(user = %user_hash(sub), "repeated refresh inside the grace window");
+            Ok(current)
+        }
+        RefreshCheck::Reused => {
+            record.token_generation += 1;
+            match state.users.save(&record).await {
+                Ok(generation) => state.set_generation(sub, generation),
+                Err(e) => log_store_error("signing out after refresh token reuse", sub, &e),
+            }
+            state.cache.invalidate_user(sub);
+            tracing::warn!(
+                user = %user_hash(sub),
+                "refresh token reused: signed out everywhere"
+            );
+            Err(Box::new(oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "refresh token was already used; every session was signed out, sign in again",
+            )))
         }
     }
 }
@@ -1108,8 +1311,18 @@ async fn token(
                     "code already used",
                 );
             }
+            // A fresh sign-in starts the client's refresh chain over.
+            let jti = jwt::random_id();
+            let started = {
+                let _chain = state.refresh_lock.lock().await;
+                start_refresh_chain(&state, &claims.sub, &client_id, &jti).await
+            };
+            if started.is_err() {
+                state.unmark_code_used(&claims.jti);
+                return store_unavailable();
+            }
             tracing::info!(user = %user_hash(&claims.sub), "issued tokens (authorization_code)");
-            token_response(&state, &claims.sub, &client_id, generation)
+            token_response(&state, &claims.sub, &client_id, generation, &jti)
         }
         Some("refresh_token") => {
             let Some(refresh) = p.refresh_token.as_deref() else {
@@ -1156,8 +1369,15 @@ async fn token(
                     "session was signed out",
                 );
             }
+            let jti = {
+                let _chain = state.refresh_lock.lock().await;
+                match rotate_refresh(&state, &claims, &client_id).await {
+                    Ok(jti) => jti,
+                    Err(resp) => return *resp,
+                }
+            };
             tracing::info!(user = %user_hash(&claims.sub), "issued tokens (refresh_token)");
-            token_response(&state, &claims.sub, &client_id, generation)
+            token_response(&state, &claims.sub, &client_id, generation, &jti)
         }
         _ => oauth_error(
             StatusCode::BAD_REQUEST,
@@ -1172,58 +1392,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn redirect_uri_policy() {
-        assert!(redirect_uri_is_acceptable(
-            "https://claude.ai/api/mcp/auth_callback"
-        ));
-        assert!(redirect_uri_is_acceptable(
-            "http://localhost:6274/oauth/callback"
-        ));
-        assert!(redirect_uri_is_acceptable("http://127.0.0.1:8123/cb"));
-        assert!(!redirect_uri_is_acceptable("http://evil.example/cb"));
-        assert!(!redirect_uri_is_acceptable("https://claude.ai/cb#frag"));
-        assert!(!redirect_uri_is_acceptable("myapp://callback"));
-        assert!(!redirect_uri_is_acceptable("not a url"));
-    }
-
-    #[test]
     fn consent_cookie_attributes_and_parsing() {
+        // Plain http (loopback development): bare names, per-flow paths.
         let c = consent_cookie(&CONNECT_CONSENT, "abc_-1", false);
         assert_eq!(
             c,
             "pidge_connect=abc_-1; HttpOnly; SameSite=Lax; Max-Age=600; Path=/connect"
         );
-        assert!(consent_cookie(&CONNECT_CONSENT, "abc", true).contains("; Secure;"));
+        // https: `__Host-` names, which require Secure, Path=/ and no Domain.
+        assert_eq!(
+            consent_cookie(&CONNECT_CONSENT, "n", true),
+            "__Host-pidge_connect=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/"
+        );
         assert_eq!(
             consent_cookie(&SIGN_IN_CONSENT, "n", true),
-            "pidge_authorize=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/authorize"
+            "__Host-pidge_authorize=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/"
         );
         assert_eq!(
             consent_cookie(&CALLBACK_COOKIE, "n", true),
-            "pidge_callback=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/callback"
+            "__Host-pidge_callback=n; HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/"
         );
+        for secure in [false, true] {
+            assert!(!consent_cookie(&CALLBACK_COOKIE, "n", secure).contains("Domain"));
+        }
+        // Each flow keeps its own name, so sharing Path=/ mixes nothing up.
+        let names: std::collections::HashSet<String> =
+            [&CONNECT_CONSENT, &SIGN_IN_CONSENT, &CALLBACK_COOKIE]
+                .iter()
+                .map(|c| c.wire_name(true))
+                .collect();
+        assert_eq!(names.len(), 3);
 
         let mut headers = HeaderMap::new();
-        assert_eq!(consent_nonce_from(&headers, &CONNECT_CONSENT), None);
+        assert_eq!(cookie_value(&headers, "pidge_connect"), None);
         headers.append(
             header::COOKIE,
-            "other=1; pidge_connect=n1; pidge_authorize=s1"
+            "other=1; pidge_connect=n1; __Host-pidge_authorize=s1"
                 .parse()
                 .unwrap(),
         );
         assert_eq!(
-            consent_nonce_from(&headers, &CONNECT_CONSENT).as_deref(),
+            cookie_value(&headers, &CONNECT_CONSENT.wire_name(false)).as_deref(),
             Some("n1")
         );
         assert_eq!(
-            consent_nonce_from(&headers, &SIGN_IN_CONSENT).as_deref(),
+            cookie_value(&headers, &SIGN_IN_CONSENT.wire_name(true)).as_deref(),
             Some("s1")
+        );
+        assert_eq!(
+            cookie_value(&headers, &SIGN_IN_CONSENT.wire_name(false)),
+            None,
+            "the bare name is not the prefixed one"
         );
         let mut headers = HeaderMap::new();
         headers.append(header::COOKIE, "a=b".parse().unwrap());
         headers.append(header::COOKIE, "pidge_connect=n2".parse().unwrap());
         assert_eq!(
-            consent_nonce_from(&headers, &CONNECT_CONSENT).as_deref(),
+            cookie_value(&headers, "pidge_connect").as_deref(),
             Some("n2")
         );
     }

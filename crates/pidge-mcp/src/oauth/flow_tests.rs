@@ -108,6 +108,7 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
         alt_hosts: Vec::new(),
         legacy_issuers: Vec::new(),
         log_format: crate::config::LogFormat::Text,
+        redirect_hosts: Vec::new(),
     };
     let key = random_bytes(32);
     let signer = Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp"));
@@ -159,6 +160,7 @@ async fn harness_with_hosts(alt_hosts: Vec<String>, legacy_issuers: Vec<String>)
         alt_hosts,
         legacy_issuers: legacy_issuers.clone(),
         log_format: crate::config::LogFormat::Text,
+        redirect_hosts: Vec::new(),
     };
     let key = random_bytes(32);
     let signer =
@@ -1511,9 +1513,11 @@ async fn legacy_issuer_tokens_and_resource_keep_working_after_cutover() {
         urlenc("https://evil.test/mcp")
     );
     let resp = get(&h, &uri).await;
-    assert_eq!(resp.status(), StatusCode::SEE_OTHER);
-    let location = resp.headers()[header::LOCATION].to_str().unwrap();
-    assert_eq!(query(location, "error").as_deref(), Some("invalid_target"));
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        resp.headers().get(header::LOCATION).is_none(),
+        "no redirect before consent"
+    );
 }
 
 #[tokio::test]
@@ -1937,4 +1941,306 @@ async fn a_callback_for_a_flow_that_never_went_through_continue_is_refused() {
             .unwrap()
             .is_none()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Redirect allowlist, no redirect before consent, connect links
+// ---------------------------------------------------------------------------
+
+async fn register_uris(app: &Router, uris: &[&str]) -> (StatusCode, serde_json::Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::post("/register")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    serde_json::json!({"redirect_uris": uris, "client_name": "x"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    (status, body_json(resp).await)
+}
+
+#[tokio::test]
+async fn register_accepts_only_allowlisted_redirect_hosts() {
+    let h = harness("jane@example.com").await;
+    for ok in [
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+        "http://127.0.0.1:33418/callback",
+        "http://[::1]:9000/cb",
+    ] {
+        let (status, body) = register_uris(&h.app, &[ok]).await;
+        assert_eq!(status, StatusCode::CREATED, "{ok}: {body}");
+    }
+    for bad in [
+        "https://evil.example/cb",
+        "https://claude.ai.evil.example/cb",
+        "http://claude.ai/cb",
+    ] {
+        let (status, body) = register_uris(&h.app, &[CLIENT_REDIRECT, bad]).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(body["error"], "invalid_redirect_uri");
+    }
+    let many: Vec<String> = (0..11)
+        .map(|i| format!("http://localhost:{}/cb", 9000 + i))
+        .collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let (status, body) = register_uris(&h.app, &many).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_redirect_uri");
+    let (status, _) = register_uris(&h.app, &many[..10]).await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_client_registered_before_the_allowlist_cannot_authorize() {
+    let h = harness("jane@example.com").await;
+    // Signed by this server before the allowlist existed: still verifies.
+    let evil = "https://evil.example/cb";
+    let client_id = h
+        .state
+        .signer
+        .issue_client(vec![evil.into()], Some("Old".into()))
+        .unwrap();
+    let uri = format!(
+        "/authorize?response_type=code&client_id={}&redirect_uri={}&state=s&code_challenge=abc&code_challenge_method=S256",
+        urlenc(&client_id),
+        urlenc(evil)
+    );
+    let resp = get(&h, &uri).await;
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert!(resp.headers().get(header::LOCATION).is_none());
+    assert!(resp.headers().get(header::SET_COOKIE).is_none());
+    assert!(body_text(resp).await.contains("not allowed"));
+}
+
+#[tokio::test]
+async fn authorize_errors_render_a_page_instead_of_redirecting() {
+    let h = harness("jane@example.com").await;
+    let client_id = register(&h.app).await;
+    let base = format!(
+        "/authorize?client_id={}&redirect_uri={}&state=s",
+        urlenc(&client_id),
+        urlenc(CLIENT_REDIRECT)
+    );
+    for rest in [
+        "&response_type=token&code_challenge=abc&code_challenge_method=S256",
+        "&response_type=code",
+        "&response_type=code&code_challenge=abc",
+        "&response_type=code&code_challenge=abc&code_challenge_method=plain",
+        "&response_type=code&code_challenge=abc&code_challenge_method=S256&resource=https%3A%2F%2Fevil.test%2Fmcp",
+    ] {
+        let resp = get(&h, &format!("{base}{rest}")).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{rest}");
+        assert!(resp.headers().get(header::LOCATION).is_none(), "{rest}");
+        assert_eq!(
+            resp.headers()[header::CONTENT_SECURITY_POLICY],
+            crate::oauth::pages::CONTENT_SECURITY_POLICY,
+            "{rest}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn consent_and_error_pages_carry_the_security_headers() {
+    let h = harness("jane@example.com").await;
+    let client_id = register(&h.app).await;
+    let consent = get(&h, &authorize_uri(&client_id, "verifier-verifier")).await;
+    let expired = get(&h, "/connect?state=nope").await;
+    let dl = get(&h, "/dl/not-a-token").await;
+    for resp in [consent, expired, dl] {
+        let headers = resp.headers();
+        assert_eq!(
+            headers[header::CONTENT_SECURITY_POLICY],
+            "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'"
+        );
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+        assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+    }
+}
+
+#[tokio::test]
+async fn a_connect_link_without_a_mailbox_binds_to_the_first_browser() {
+    let h = harness("second@example.com").await;
+    h.state
+        .insert_pending("s1".into(), connect_pending("jane@example.com"));
+    let first = get(&h, "/connect?state=s1").await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let cookie = set_cookie(&first);
+
+    // Another browser is told the link was already opened.
+    let other = get(&h, "/connect?state=s1").await;
+    assert_eq!(other.status(), StatusCode::BAD_REQUEST);
+    assert!(other.headers().get(header::SET_COOKIE).is_none());
+    assert!(body_text(other).await.contains("already opened"));
+
+    // The first browser can reload it, keeping its nonce, and continue.
+    let again = get_with_cookie(&h, "/connect?state=s1", &cookie).await;
+    assert_eq!(again.status(), StatusCode::OK);
+    assert_eq!(set_cookie(&again), cookie);
+    let go = get_with_cookie(&h, "/connect/go?state=s1", &cookie).await;
+    assert_eq!(go.status(), StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn a_connect_link_naming_its_mailbox_can_be_reopened_elsewhere() {
+    let h = harness("second@example.com").await;
+    h.state.insert_pending(
+        "s1".into(),
+        connect_pending_for("jane@example.com", "second@example.com"),
+    );
+    let first = set_cookie(&get(&h, "/connect?state=s1").await);
+    let second = get(&h, "/connect?state=s1").await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second = set_cookie(&second);
+    assert_ne!(first, second);
+    // The newest browser is the one that may continue.
+    let go = get_with_cookie(&h, "/connect/go?state=s1", &second).await;
+    assert_eq!(go.status(), StatusCode::SEE_OTHER);
+}
+
+// ---------------------------------------------------------------------------
+// Refresh-token rotation and reuse detection
+// ---------------------------------------------------------------------------
+
+fn refresh_jti(h: &Harness, token: &str) -> String {
+    h.state.signer.verify_refresh(token).unwrap().jti
+}
+
+#[tokio::test]
+async fn refresh_tokens_rotate_and_a_reused_one_signs_the_user_out() {
+    let h = harness("jane@example.com").await;
+    let (client_id, access, r1) = sign_in_and_redeem(&h).await;
+
+    let (status, body) = refresh_grant(&h, &client_id, &r1).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let r2 = body["refresh_token"].as_str().unwrap().to_string();
+    assert_ne!(refresh_jti(&h, &r1), refresh_jti(&h, &r2), "rotated");
+    let (status, body) = refresh_grant(&h, &client_id, &r2).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let r3 = body["refresh_token"].as_str().unwrap().to_string();
+    let access3 = body["access_token"].as_str().unwrap().to_string();
+
+    // r1 is two rotations old: someone else has a copy of it.
+    let (status, body) = refresh_grant(&h, &client_id, &r1).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], "invalid_grant");
+    assert!(body.get("access_token").is_none());
+
+    // Every session of the user is gone, the legitimate chain included.
+    let rec = UserStore::new(h.secrets.clone())
+        .load("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.token_generation, 1);
+    for token in [&access, &access3] {
+        assert_eq!(
+            mcp_initialize(&h.app, Some(token)).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let (status, body) = refresh_grant(&h, &client_id, &r3).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error_description"], "session was signed out");
+
+    // A new sign-in works again.
+    let (client_id, access, refresh) = sign_in_and_redeem(&h).await;
+    assert_eq!(mcp_initialize(&h.app, Some(&access)).await, StatusCode::OK);
+    let (status, body) = refresh_grant(&h, &client_id, &refresh).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn the_same_refresh_sent_twice_at_once_continues_one_chain() {
+    let h = harness("jane@example.com").await;
+    let (client_id, _, r1) = sign_in_and_redeem(&h).await;
+    let (a, b) = tokio::join!(
+        refresh_grant(&h, &client_id, &r1),
+        refresh_grant(&h, &client_id, &r1)
+    );
+    assert_eq!(a.0, StatusCode::OK, "{}", a.1);
+    assert_eq!(b.0, StatusCode::OK, "{}", b.1);
+    let (ra, rb) = (
+        a.1["refresh_token"].as_str().unwrap().to_string(),
+        b.1["refresh_token"].as_str().unwrap().to_string(),
+    );
+    assert_eq!(
+        refresh_jti(&h, &ra),
+        refresh_jti(&h, &rb),
+        "both answers carry the chain's current id"
+    );
+    // Whichever copy the client kept, its next refresh works.
+    let (status, body) = refresh_grant(&h, &client_id, &rb).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rec = UserStore::new(h.secrets.clone())
+        .load("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.token_generation, 0, "nobody was signed out");
+}
+
+#[tokio::test]
+async fn a_refresh_token_from_before_rotation_is_accepted_once() {
+    let h = harness("jane@example.com").await;
+    UserStore::new(h.secrets.clone())
+        .save(&UserRecord::new("jane@example.com"))
+        .await
+        .unwrap();
+    let client_id = register(&h.app).await;
+    // No chain is stored for this client: as issued by the previous release.
+    let old = h
+        .state
+        .signer
+        .issue_refresh("jane@example.com", &client_id, 0)
+        .unwrap();
+    let (status, body) = refresh_grant(&h, &client_id, &old).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let new = body["refresh_token"].as_str().unwrap().to_string();
+
+    // The chain has started: the new token rotates; the old one, presented
+    // again after the grace window, is reuse.
+    let mut rec = UserStore::new(h.secrets.clone())
+        .load("jane@example.com")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rec.refresh_chains.len(), 1);
+    rec.refresh_chains[0].rotated_at -= crate::users::REFRESH_GRACE;
+    // Written raw: `save` would keep the newer stored chain.
+    h.secrets
+        .set(
+            &crate::users::user_secret_name("jane@example.com"),
+            &serde_json::to_string(&rec).unwrap(),
+        )
+        .await
+        .unwrap();
+    let (status, _) = refresh_grant(&h, &client_id, &old).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, body) = refresh_grant(&h, &client_id, &new).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "signed out: {body}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_refresh_the_store_cannot_record_keeps_the_presented_token_current() {
+    let (logs, _guard) = crate::test_support::LogCapture::start();
+    let h = harness("jane@example.com").await;
+    let (client_id, _, r1) = sign_in_and_redeem(&h).await;
+    h.flaky
+        .fail_writes_to(Some(crate::users::user_secret_name("jane@example.com")));
+    let (status, body) = refresh_grant(&h, &client_id, &r1).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(body.get("refresh_token").is_none());
+    h.flaky.fail_writes_to(None);
+    let (status, body) = refresh_grant(&h, &client_id, &r1).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let logged = logs.text();
+    assert!(logged.contains("saving refresh chain"), "{logged}");
+    crate::test_support::assert_no_address("log", &logged);
 }

@@ -119,7 +119,7 @@ async fn show(
         return expired();
     };
     // A browser that already has a form for this link keeps its nonce.
-    let nonce = match cookie_nonce(&headers) {
+    let nonce = match cookie_nonce(&headers, &state) {
         Some(c) if link.nonces.contains(&c) => c,
         _ => {
             let nonce = random_id();
@@ -152,7 +152,7 @@ async fn submit(
     let Some(link) = state.review.ai_links.peek(&form.state) else {
         return expired();
     };
-    let presented = cookie_nonce(&headers);
+    let presented = cookie_nonce(&headers, &state);
     if presented.as_deref() != Some(form.token.as_str()) || !link.nonces.contains(&form.token) {
         return pages::ai_error(
             StatusCode::BAD_REQUEST,
@@ -256,14 +256,30 @@ fn expired() -> Response {
     )
 }
 
-fn with_cookie(mut resp: Response, nonce: &str, state: &SharedState) -> Response {
-    let secure = if state.config.public_url.scheme() == "https" {
-        " Secure;"
+/// Over https the cookie is `__Host-` prefixed, `Secure` and `Path=/` (like
+/// the sign-in flows' cookies); over plain http (loopback development) it
+/// keeps the bare name and `Path=/ai`.
+fn secure(state: &SharedState) -> bool {
+    state.config.public_url.scheme() == "https"
+}
+
+fn cookie_name(state: &SharedState) -> String {
+    if secure(state) {
+        format!("__Host-{COOKIE}")
     } else {
-        ""
+        COOKIE.to_string()
+    }
+}
+
+fn with_cookie(mut resp: Response, nonce: &str, state: &SharedState) -> Response {
+    let (flag, path) = if secure(state) {
+        (" Secure;", "/")
+    } else {
+        ("", "/ai")
     };
     let cookie = format!(
-        "{COOKIE}={nonce}; HttpOnly;{secure} SameSite=Strict; Max-Age={}; Path=/ai",
+        "{}={nonce}; HttpOnly;{flag} SameSite=Strict; Max-Age={}; Path={path}",
+        cookie_name(state),
         LINK_TTL.num_seconds()
     );
     resp.headers_mut()
@@ -271,14 +287,15 @@ fn with_cookie(mut resp: Response, nonce: &str, state: &SharedState) -> Response
     resp
 }
 
-fn cookie_nonce(headers: &HeaderMap) -> Option<String> {
+fn cookie_nonce(headers: &HeaderMap, state: &SharedState) -> Option<String> {
+    let name = cookie_name(state);
     headers
         .get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(name, _)| *name == COOKIE)
+        .find(|(n, _)| *n == name)
         .map(|(_, value)| value.to_string())
 }
 
@@ -316,6 +333,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()[header::CONTENT_SECURITY_POLICY],
+            pages::CONTENT_SECURITY_POLICY
+        );
+        assert_eq!(resp.headers()[header::CACHE_CONTROL], "no-store");
         let cookie = resp.headers()[header::SET_COOKIE]
             .to_str()
             .unwrap()

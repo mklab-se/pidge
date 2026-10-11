@@ -3,7 +3,7 @@
 //! after connecting an extra mailbox. A sign-in's success never renders
 //! here: it redirects back to the MCP client.
 
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 
 pub fn error(status: StatusCode, message: &str) -> Response {
@@ -136,12 +136,59 @@ fn render(status: StatusCode, heading: &str, message: &str, extra_html: &str) ->
         html_escape(message),
         extra_html
     );
-    (status, Html(body)).into_response()
+    (status, SECURITY_HEADERS, Html(body)).into_response()
 }
+
+/// The policy every page is served with. No scripts, images, fonts or
+/// frames load at all (`default-src 'none'`), only the inline stylesheet;
+/// forms post only back here; no other site may frame the page. Plain links
+/// (Continue to Microsoft) are navigation, which CSP leaves alone.
+pub const CONTENT_SECURITY_POLICY: &str =
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'";
+
+/// Sent with every page: the CSP above, framing refused for older
+/// browsers too, nothing cached (pages carry one-time links and nonces),
+/// and no `Referer` (their URLs carry flow state) on the way out.
+const SECURITY_HEADERS: [(header::HeaderName, &str); 4] = [
+    (header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY),
+    (header::X_FRAME_OPTIONS, "DENY"),
+    (header::CACHE_CONTROL, "no-store"),
+    (header::REFERRER_POLICY, "no-referrer"),
+];
 
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_page_is_sent_with_the_security_headers() {
+        for resp in [
+            error(StatusCode::BAD_REQUEST, "no"),
+            ai_error(StatusCode::BAD_REQUEST, "no"),
+            link_unavailable(),
+            done("ok"),
+            confirm_connect("jane@example.com", None, "https://x.test/connect/go"),
+            confirm_sign_in(Some("App"), "claude.ai", "https://x.test/authorize/go"),
+            ai_form("jane@example.com", "s", "t", None),
+        ] {
+            let h = resp.headers();
+            assert_eq!(h[header::CONTENT_SECURITY_POLICY], CONTENT_SECURITY_POLICY);
+            assert_eq!(h[header::X_FRAME_OPTIONS], "DENY");
+            assert_eq!(h[header::CACHE_CONTROL], "no-store");
+            assert_eq!(h[header::REFERRER_POLICY], "no-referrer");
+            assert!(
+                h[header::CONTENT_TYPE]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("text/html")
+            );
+        }
+    }
 }

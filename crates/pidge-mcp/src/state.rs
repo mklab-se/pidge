@@ -118,6 +118,12 @@ pub struct AppState {
     /// was last read from (or written to) the store; see
     /// [`Self::generation_for`].
     generations: Mutex<HashMap<String, CachedGeneration>>,
+    /// Held across the read-check-write of a user's refresh chain by the
+    /// token endpoint, so two grants (a client sending the same refresh
+    /// twice at once, say) are judged one after the other against what the
+    /// first one stored. One lock for all users: grants are rare (about one
+    /// per client per hour) and the store round trips are short.
+    pub refresh_lock: tokio::sync::Mutex<()>,
     /// Inbox-review sessions, classifications and AI clients.
     pub review: crate::review::ReviewState,
 }
@@ -162,6 +168,7 @@ impl AppState {
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
+            refresh_lock: tokio::sync::Mutex::new(()),
             review: Default::default(),
         }
     }
@@ -201,6 +208,23 @@ impl AppState {
             .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
         {
             p.consent_nonce = Some(nonce);
+        }
+    }
+
+    /// Records the confirmation page's cookie nonce on a live pending entry
+    /// that has none yet; `false` (and no change) if one is already set or
+    /// the entry is gone or expired.
+    pub fn claim_consent_nonce(&self, state: &str, nonce: String) -> bool {
+        let mut map = self.pending.lock().expect("pending lock");
+        match map
+            .get_mut(state)
+            .filter(|p| p.created_at > Utc::now() - PENDING_TTL)
+        {
+            Some(p) if p.consent_nonce.is_none() => {
+                p.consent_nonce = Some(nonce);
+                true
+            }
+            _ => false,
         }
     }
 
@@ -301,6 +325,13 @@ impl AppState {
         let now = Utc::now().timestamp();
         map.retain(|_, e| *e > now);
         map.insert(jti.to_string(), exp).is_none()
+    }
+
+    /// Undoes [`Self::mark_code_used`] for a code whose redemption failed
+    /// afterwards (the store couldn't record the new refresh chain), so the
+    /// client can retry it.
+    pub fn unmark_code_used(&self, jti: &str) {
+        self.used_codes.lock().expect("used codes lock").remove(jti);
     }
 }
 
