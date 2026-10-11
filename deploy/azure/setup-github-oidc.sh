@@ -118,11 +118,12 @@ else
 fi
 
 log "GitHub environment '$GITHUB_ENVIRONMENT'"
-# Deploys only from main or a v* tag, and only after the owner approves:
-# the environment is what the Azure federated credential trusts.
-GITHUB_REVIEWER_ID="$(gh api user --jq .id)"
+# Deploys only from main or a v* tag: the environment is what the Azure
+# federated credential trusts. No required reviewer: a v* tag (admin-only,
+# see the ruleset below) is the deploy decision. Add one here once others
+# can push to the repository.
 gh api -X PUT "repos/${REPO}/environments/${GITHUB_ENVIRONMENT}" --input - >/dev/null <<JSON
-{"reviewers":[{"type":"User","id":${GITHUB_REVIEWER_ID}}],"prevent_self_review":false,
+{"reviewers":[],
  "deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
 JSON
 existing_policies="$(gh api "repos/${REPO}/environments/${GITHUB_ENVIRONMENT}/deployment-branch-policies" --jq '[.branch_policies[] | "\(.type):\(.name)"] | join(",")')"
@@ -141,7 +142,7 @@ if ! gh api "repos/${REPO}/rulesets" --jq '.[].name' | grep -qx "release tags: a
  "bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}
 JSON
 fi
-log "  present (main and v* tags only, owner approval, admin-only v* tags)"
+log "  present (main and v* tags only, admin-only v* tags)"
 
 SCOPE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}"
 

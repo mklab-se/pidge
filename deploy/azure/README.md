@@ -175,9 +175,10 @@ published.
 
 The deploy is the one job that can reach the server's secrets, so it is
 gated three ways. The `production` environment (which the Azure federated
-credential trusts) accepts deployments only from `main` and `v*` tags, and
-each one waits for the owner's approval in the Actions tab ("Review
-deployments"). A tag ruleset lets only repository admins create, move or
+credential trusts) accepts deployments only from `main` and `v*` tags. It has
+no required reviewer while the owner is the only one who can push: the
+admin-only `v*` tag is the deploy decision (add a reviewer once others
+contribute). A tag ruleset lets only repository admins create, move or
 delete `v*` tags. And the deploy identity's RBAC Administrator grant is
 conditioned to assign only AcrPull and Key Vault Secrets Officer, and only
 to the server's own identity. `setup-github-oidc.sh` sets all three. The
