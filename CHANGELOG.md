@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Hands-free inbox review in the hosted MCP server**, built for voice harnesses (ChatGPT voice
+  mode, Claude). `mail_review_start` picks the range itself (since the last review, narrowed to
+  today when there is a lot, widened a few days back when there is little), sorts unread mail into
+  the user's categories with the most important first, suggests a bulk clean-up of newsletters and
+  promotions, and returns the first message. `mail_review_next` takes the decision on the current
+  message (read, archive, delete, flag, keep unread, undo, or a whole category), applies it in the
+  background and returns the next message in the same call: one tool call per message instead of
+  three
+- **Categories the user can talk through**: `mail_categories` lists, confirms, adds, renames,
+  removes and reorders them, pins a sender or domain to one (rules), and learns from a real message
+  (examples). Default categories are offered on first use
+- **Sorting with the user's own AI key**: `accounts_connect_ai` returns a link to a page where the
+  user enters a TypeSafe (Jev), OpenAI or Anthropic key; it is tested, stored in its own secret and
+  never passes through the harness. One request per message carries every question, results are
+  cached for a day, and without a key pidge sorts by mailing-list headers and automated senders
+- **AI status that tells the user what to fix**: out of credits, a rejected key or a failing setup
+  is reported once per review (and in `accounts_list`), and the provider is retried at most hourly.
+  A tip about adding a key appears at most once per 90 days, only when a large review sorted poorly,
+  and `accounts_update ai_hints=false` turns it off
+- The `triage_inbox` prompt now runs a review
+
+### Changed
+
+- Ailloy 3.1 (typed error kinds tell out-of-credits from bad keys and rate limits). The server
+  depends on Ailloy without its config TUI; the CLI keeps it
+
 ## [1.6.0] - 2026-10-08
 
 ### Changed

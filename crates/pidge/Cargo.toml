@@ -16,7 +16,7 @@ name = "pidge"
 path = "src/main.rs"
 
 [dependencies]
-ailloy.workspace = true
+ailloy = { workspace = true, features = ["config-tui"] }
 clap.workspace = true
 clap_complete.workspace = true
 tokio.workspace = true

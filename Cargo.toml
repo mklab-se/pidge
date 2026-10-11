@@ -55,7 +55,7 @@ iana-time-zone = "0.1"
 dirs = "7.0"
 
 # AI integration
-ailloy = { version = "3.0", default-features = false, features = ["config-tui"] }
+ailloy = { version = "3.1", default-features = false }
 
 # Keychain
 # keyring 4 `v1` mode: macOS Keychain, Windows Credential Manager, Secret Service on Linux

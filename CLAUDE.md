@@ -48,8 +48,10 @@ crates/
       markitdown.rs     # Hardened markitdown subprocess: attachment → Markdown
       download.rs       # GET /dl/{token}: signed, 15-minute attachment download links
       prompts.rs        # MCP prompts: triage_inbox, reply_to, cleanup_inbox
+      review/           # Inbox review: scope, categories, classify (rules, user's AI via Ailloy, signals), sessions + background worker, per-user AI key/status
+      ai_page.rs        # GET/POST /ai: the page where a user enters their own AI key (link from accounts_connect_ai)
       tools/            # One file per tool family (accounts, mail_read, mail_write, mail_act,
-                        # calendar, attachments); mod.rs composes routers + server instructions
+                        # calendar, attachments, review, categories); mod.rs composes routers + server instructions
 deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Container Apps
 ```
 
@@ -66,6 +68,7 @@ deploy/azure/           # Bicep + deploy.sh + Dockerfile for pidge-mcp on Contai
 - **Untrusted content:** third-party text (bodies, previews, event text, converted attachments) goes out inside `<untrusted-email-content>` via `render::untrusted`; header fields go through `render::one_line` so they cannot start a line of their own.
 - **Cache invalidation:** every mutating tool (draft, send, act, calendar writes, account changes) calls `cache.invalidate_user` for the caller; reads are cached per user for 60 s.
 - **Sending:** only `mail_send` sends, only by draft id, at most 30 per hour per user. Unsubscribe e-mails, calendar invitations, attendee changes, cancellation notes and RSVP messages are charged against the same cap.
+- **Inbox review:** `mail_review_start`/`mail_review_next` keep a per-user, in-memory session (60 min idle, 3 per user, ids bound to the caller); actions run on a per-session worker in order and failures surface on the next call. Classification order: the user's rules, their own AI key (Ailloy `eval`, one request per message, cached 24 h), then mailbox signals. The AI key lives in its own secret (`ai-<hash>`), is entered only on `/ai`, and only fixed-endpoint providers are allowed (no URL from input). Design: `docs/superpowers/specs/2026-10-11-mcp-inbox-review-design.md`.
 - **markitdown hardening:** scrubbed environment; a fresh per-conversion work dir as `HOME`/`TMPDIR`, removed on every path; 30 s timeout with kill-on-drop; 4 GB address-space limit on Linux; 2 MB output cap; stderr discarded (it can quote the document); at most 2 concurrent conversions. The server marks itself non-dumpable on Linux so the child cannot read its environment.
 - **Deploy:** the `deploy` job of `.github/workflows/release.yml` deploys on every `v*` tag (the same trigger that releases the CLI) and on a manual dispatch, never on a push to `main`; every env var the running server reads is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs`; `deploy/azure/deploy.sh` and the deploy job also read some deploy-time-only vars (`PIDGE_RG`, `PIDGE_CLIENT_ID`, `IMAGE_TAG`, `PIDGE_MCP_CUSTOM_DOMAIN`, `PIDGE_MCP_CUTOVER`) that `deploy.sh` translates into the vars `Config::from_env` actually sees.
 - **CLI side:** `pidge mcp connect/status/logout` (`crates/pidge/src/commands/mcp*.rs`) sign a local user into a hosted `pidge-mcp` server and migrate their local accounts onto it, via the client-side protocol in `crates/pidge-client/src/mcp/`; user guide: `docs/mcp.md`.

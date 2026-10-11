@@ -68,6 +68,47 @@ pub fn confirm_sign_in(client_name: Option<&str>, redirect_host: &str, go_url: &
     render(StatusCode::OK, "Sign in to pidge", &message, &action)
 }
 
+/// The form for a user's own AI key, bound to `state` and `token` (the
+/// cookie nonce, repeated as a field). `error` is shown above the form when
+/// a previous attempt was refused.
+pub fn ai_form(owner: &str, state: &str, token: &str, error: Option<&str>) -> Response {
+    let message = format!(
+        "Set the AI key pidge uses to sort mail for the pidge account {owner}. \
+         The key is stored only for this account and never shown to your assistant. \
+         Continue only if {owner} is your pidge account."
+    );
+    let error = error
+        .map(|e| format!(r#"<p class="err">{}</p>"#, html_escape(e)))
+        .unwrap_or_default();
+    let options: String = crate::review::ai::AiProvider::ALL
+        .iter()
+        .map(|p| {
+            let value = serde_json::to_value(p)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            format!(
+                r#"<option value="{}">{} (default model {})</option>"#,
+                html_escape(&value),
+                html_escape(p.label()),
+                html_escape(p.default_model())
+            )
+        })
+        .collect();
+    let form = format!(
+        r#"{error}<form method="post" action="/ai">
+<input type="hidden" name="state" value="{}"><input type="hidden" name="token" value="{}">
+<label>Provider<select name="provider">{options}</select></label>
+<label>Model (optional)<input name="model" autocomplete="off" placeholder="leave empty for the default"></label>
+<label>API key<input name="key" type="password" autocomplete="off" required></label>
+<p><button class="go" type="submit">Test and save</button></p>
+</form>"#,
+        html_escape(state),
+        html_escape(token)
+    );
+    render(StatusCode::OK, "Set up AI sorting", &message, &form)
+}
+
 fn page(status: StatusCode, heading: &str, message: &str) -> Response {
     render(status, heading, message, "")
 }
@@ -81,7 +122,9 @@ fn render(status: StatusCode, heading: &str, message: &str, extra_html: &str) ->
 <style>
   body{{font-family:-apple-system,system-ui,sans-serif;background:#111;color:#eee;display:grid;place-items:center;min-height:100vh;margin:0;padding:16px}}
   main{{max-width:28rem}} h1{{font-size:1.25rem;margin:0 0 .5rem}} p{{color:#bbb;line-height:1.5}}
-  a.go{{display:inline-block;background:#eee;color:#111;padding:.5rem 1rem;border-radius:6px;text-decoration:none}}
+  a.go,button.go{{display:inline-block;background:#eee;color:#111;padding:.5rem 1rem;border-radius:6px;text-decoration:none;border:0;font:inherit;cursor:pointer}}
+  label{{display:block;margin:.75rem 0;color:#bbb}} input,select{{display:block;width:100%;box-sizing:border-box;margin-top:.25rem;padding:.4rem;border-radius:6px;border:1px solid #444;background:#1c1c1c;color:#eee;font:inherit}}
+  p.err{{color:#ff8a65}}
 </style></head>
 <body><main><h1>{}</h1><p>{}</p>{}</main></body></html>"#,
         html_escape(heading),

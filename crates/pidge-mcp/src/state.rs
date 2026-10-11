@@ -98,6 +98,8 @@ pub struct AppState {
     /// connect can evict its cached tokens.
     pub token_backend: Arc<SecretTokenBackend>,
     pub users: UserStore,
+    /// The secret store `users` reads; also holds each user's AI key.
+    pub secrets: SharedSecrets,
     /// Per-user, 60 s, LRU-bounded cache for read tools; see [`crate::cache`].
     pub cache: ReadCache,
     /// Per-user, 24 h contact caches for recipient-name resolution.
@@ -116,6 +118,8 @@ pub struct AppState {
     /// was last read from (or written to) the store; see
     /// [`Self::generation_for`].
     generations: Mutex<HashMap<String, CachedGeneration>>,
+    /// Inbox-review sessions, classifications and AI clients.
+    pub review: crate::review::ReviewState,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -148,7 +152,8 @@ impl AppState {
             signer,
             graph,
             token_backend,
-            users: UserStore::new(secrets),
+            users: UserStore::new(secrets.clone()),
+            secrets,
             cache: ReadCache::new(CACHE_TTL, CACHE_PER_USER),
             contacts: ContactCaches::default(),
             sends: Mutex::new(HashMap::new()),
@@ -157,6 +162,7 @@ impl AppState {
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
+            review: Default::default(),
         }
     }
 

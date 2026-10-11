@@ -1,7 +1,7 @@
 # pidge MCP: hands-free inbox review
 
 **Date:** 2026-10-11
-**Status:** approved in discussion, awaiting spec review
+**Status:** approved in discussion; implemented in pidge 1.7.0
 **Crates:** `crates/pidge-mcp` (main), `crates/pidge-core` (shared classification types), `ailloy` (typed error kinds)
 **Builds on:** `2026-09-22-remote-mcp-full-feature-design.md`, `2026-06-15-ai-classification-design.md`
 
@@ -337,7 +337,7 @@ can have any name.
 
 ### 8.1 Storage
 
-A separate secret per user, `ai-<sanitized signin>-<hash8>`, holding
+A separate secret per user, `ai-<16 hex of the SHA-256 of the sign-in>` (hashed like the user record, so no address appears in the vault's listing), holding
 `{ provider, model, api_key, updated_at }`. Kept out of `UserRecord` because
 `UserRecord` is rendered by `accounts_list`. Removing AI writes an empty value
 (the store has no delete; empty already reads as absent).

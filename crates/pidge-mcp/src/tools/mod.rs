@@ -7,9 +7,11 @@
 pub(crate) mod accounts;
 pub(crate) mod attachments;
 mod calendar;
+mod categories;
 mod mail_act;
-mod mail_read;
+pub(crate) mod mail_read;
 mod mail_write;
+mod review;
 
 use std::time::Instant;
 
@@ -46,7 +48,12 @@ same approval as a send. \
 mail_read thread=true shows the requested message and the older messages of its conversation, \
 newest first and capped, with a pointer to any newer ones; to read a whole thread start from its \
 newest message. \
-Nothing is deleted permanently: delete moves to Deleted Items, cancel uses the calendar's own cancel.";
+Nothing is deleted permanently: delete moves to Deleted Items, cancel uses the calendar's own cancel. \
+When the user wants to go through their mail (\"let's go through my e-mail\", \"read me my mail\"), \
+call mail_review_start, without a range unless they named one. After each decision, call \
+mail_review_next with the action at once; confirm in a word or two and read the next message, \
+without waiting to be asked. A plain \"next\" is action=read. Mention a review's notes once, \
+when they appear.";
 
 #[derive(Clone)]
 pub struct PidgeMcp {
@@ -64,7 +71,9 @@ impl PidgeMcp {
                 + Self::calendar_router()
                 + Self::mail_act_router()
                 + Self::mail_read_router()
-                + Self::mail_write_router(),
+                + Self::mail_write_router()
+                + Self::review_router()
+                + Self::categories_router(),
             prompt_router: Self::prompt_router(),
         }
     }
@@ -273,13 +282,9 @@ pub(crate) mod tests {
         let token_backend = Arc::new(SecretTokenBackend::new(secrets.clone()));
         let auth = AuthClient::for_test("cid", mock_uri).with_backend(token_backend.clone());
         let client = GraphClient::for_test(auth, format!("{mock_uri}/v1.0"));
-        Arc::new(AppState::new(
-            config,
-            signer,
-            client,
-            token_backend,
-            secrets,
-        ))
+        let mut state = AppState::new(config, signer, client, token_backend, secrets);
+        state.review.ai_endpoint = Some(mock_uri.to_string());
+        Arc::new(state)
     }
 
     /// The access token [`ToolHarness::new`] stores for `mailbox`.

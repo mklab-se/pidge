@@ -37,6 +37,18 @@ pub struct UserRecord {
     pub trusted_senders: Vec<String>,
     #[serde(default)]
     pub token_generation: u32,
+    /// Inbox-review categories and the last review time.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::review::ReviewSettings::is_default"
+    )]
+    pub review: crate::review::ReviewSettings,
+    /// The user's AI sorting status (the key itself is a separate secret).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::review::ai::AiSettings::is_default"
+    )]
+    pub ai: crate::review::ai::AiSettings,
 }
 
 impl UserRecord {
@@ -51,6 +63,8 @@ impl UserRecord {
             identity: None,
             trusted_senders: Vec::new(),
             token_generation: 0,
+            review: Default::default(),
+            ai: Default::default(),
         }
     }
 

@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 pidge-core.workspace = true
 pidge-client.workspace = true
+ailloy.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true

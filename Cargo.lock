@@ -30,9 +30,9 @@ dependencies = [
 
 [[package]]
 name = "ailloy"
-version = "3.0.1"
+version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0fd684cc4029fb03a7496166b3261b9a51dba4ad5106a70b629b8df589517ea"
+checksum = "69b2e92ef3c6ca38f1a3aeaa069cf9a971feb6d89a2765cce25481f4c8799151"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2815,6 +2815,7 @@ dependencies = [
 name = "pidge-mcp"
 version = "1.6.0"
 dependencies = [
+ "ailloy",
  "anyhow",
  "async-trait",
  "axum",

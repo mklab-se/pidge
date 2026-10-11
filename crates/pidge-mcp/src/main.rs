@@ -5,6 +5,7 @@
 //! `/mcp` (`tools`), and a secret store for the signing key and per-mailbox
 //! refresh tokens (`secrets`). See `deploy/azure/` for hosting.
 
+mod ai_page;
 mod app;
 mod cache;
 mod config;
@@ -17,6 +18,7 @@ mod markitdown;
 mod oauth;
 mod prompts;
 mod render;
+mod review;
 mod secrets;
 mod state;
 #[cfg(test)]

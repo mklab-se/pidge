@@ -148,9 +148,13 @@ all of their connected mailboxes unless a call names one with `account`.
 
 | Tool | What it does |
 |---|---|
-| `accounts_list` | Connected mailboxes and their health, sign-in address, default sender, timezone, trusted senders. |
+| `accounts_list` | Connected mailboxes and their health, sign-in address, default sender, timezone, trusted senders, AI sorting status. |
 | `accounts_connect` | Returns a link (valid 10 minutes) to connect another mailbox. |
-| `accounts_update` | Default sender, timezone, disconnect a mailbox, trust or untrust a sender. |
+| `accounts_connect_ai` | Returns a link (valid 10 minutes) to a page where the user enters their own AI key (TypeSafe, OpenAI or Anthropic) for sorting mail. |
+| `accounts_update` | Default sender, timezone, disconnect a mailbox, trust or untrust a sender, remove the AI key (`ai=off`), stop AI tips (`ai_hints=false`). |
+| `mail_review_start` | Starts going through unread mail: picks the range (since the last review, adjusted to a sensible amount), sorts into the user's categories, suggests a bulk clean-up, returns a session and the first message. |
+| `mail_review_next` | The decision on the current message (read, archive, delete, flag, keep unread, undo, or a whole category) applied in the background, and the next message, in one call. |
+| `mail_categories` | The review categories: list, confirm, add, update, remove, reorder, rules (sender or domain) and examples (a real message by id). |
 | `mail_overview` | Recent mail, newest first, with ids and triage flags. |
 | `mail_search` | Free-text search plus from, subject, date range, attachments and folder filters. |
 | `mail_read` | One message, or its conversation with `thread=true`. |

@@ -1,5 +1,5 @@
 //! `accounts_*` tools: which mailboxes the user has, their health, and the
-//! per-user settings (default sender, timezone, trusted senders).
+//! per-user settings (default sender, timezone, trusted senders, AI sorting).
 
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
@@ -47,12 +47,25 @@ pub struct UpdateArgs {
     /// must sign in again.
     #[serde(default)]
     pub sign_out_everywhere: Option<bool>,
+    /// `off` removes the user's AI key: reviews are then sorted by
+    /// Outlook's own signals.
+    #[serde(default)]
+    pub ai: Option<AiSwitch>,
+    /// `false` stops pidge suggesting an AI key; `true` allows it again.
+    #[serde(default)]
+    pub ai_hints: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AiSwitch {
+    Off,
 }
 
 #[tool_router(router = accounts_router, vis = "pub(crate)")]
 impl PidgeMcp {
     #[tool(
-        description = "E-mail accounts: the user's connected mailboxes with their health (ok / needs reconnect), the sign-in address, the default sender for new mail and events, the timezone, and trusted senders."
+        description = "E-mail accounts: the user's connected mailboxes with their health (ok / needs reconnect), the sign-in address, the default sender for new mail and events, the timezone, trusted senders, and the status of AI sorting."
     )]
     async fn accounts_list(
         &self,
@@ -108,7 +121,26 @@ impl PidgeMcp {
     }
 
     #[tool(
-        description = "E-mail accounts: change settings: default_sender, timezone, disconnect a mailbox, or trust/untrust a sender. Returns the updated accounts_list. With sign_out_everywhere=true, any other settings in the same call are applied and saved first; then every session of the user is revoked, including this one, and every client (this one too) must sign in again."
+        description = "E-mail accounts: set up AI sorting with the user's own provider key (TypeSafe's Jev, OpenAI or Anthropic), or replace a key that stopped working. Returns a link, valid 10 minutes, for the user to open in a browser; the key is typed there, never in this chat. Afterwards accounts_list shows the AI status."
+    )]
+    async fn accounts_connect_ai(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let tc = ToolContext::from_request(&self.state, &ctx).await?;
+        let key = self.state.review.ai_links.issue(&tc.record.signin);
+        tracing::info!(user = %user_hash(&tc.record.signin), "ai link issued");
+        Ok(ok(format!(
+            "Set up AI sorting by opening: {}/ai?state={key}  (valid {} minutes)\n\
+             The user picks the provider and pastes their API key on that page; never ask for the key in the chat.\n\
+             next: accounts_list once they have finished",
+            self.state.config.base_url(),
+            crate::ai_page::LINK_TTL.num_minutes(),
+        )))
+    }
+
+    #[tool(
+        description = "E-mail accounts: change settings: default_sender, timezone, disconnect a mailbox, trust/untrust a sender, ai=off (remove the AI key) or ai_hints=false (no more tips about AI sorting). Returns the updated accounts_list. With sign_out_everywhere=true, any other settings in the same call are applied and saved first; then every session of the user is revoked, including this one, and every client (this one too) must sign in again."
     )]
     pub(crate) async fn accounts_update(
         &self,
@@ -180,6 +212,21 @@ impl PidgeMcp {
                 record.default_sender = record.signin.clone();
             }
         }
+        let ai_off = args.ai == Some(AiSwitch::Off);
+        if ai_off {
+            crate::review::ai::clear(&self.state.secrets, &signin)
+                .await
+                .map_err(|e| store_error("removing ai key", &signin, e))?;
+            self.state.review.ai_clients.forget(&signin);
+            record
+                .ai
+                .set_status(crate::review::ai::AiStatus::Off, Utc::now());
+            record.ai.provider = None;
+            record.ai.last_attempt_at = None;
+        }
+        if let Some(hints) = args.ai_hints {
+            record.ai.hints_off = !hints;
+        }
         let sign_out = args.sign_out_everywhere == Some(true);
         if sign_out {
             record.token_generation += 1;
@@ -248,6 +295,8 @@ impl PidgeMcp {
             record.trusted_senders.join(", ")
         };
         out.push_str(&format!("trusted senders: {trusted}\n"));
+        out.push_str(&record.ai.line());
+        out.push('\n');
         out.push_str(if any_broken {
             "next: accounts_connect email=<mailbox> to reconnect"
         } else {
