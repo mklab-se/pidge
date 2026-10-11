@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.5] - 2026-10-11
+
+### Fixed
+
+- Hosted MCP server: `/mcp` and the OAuth discovery, registration and token endpoints answer
+  browsers cross-origin (CORS, with `WWW-Authenticate` exposed), so claude.ai's "Checking the
+  server" step succeeds instead of "Couldn't check the server". The consent pages stay
+  same-origin; none of these endpoints uses cookies
+
 ## [1.7.4] - 2026-10-11
 
 ### Fixed
