@@ -669,8 +669,7 @@ async fn decide(
         other => other,
     }
     .to_string();
-    let said;
-    match action.as_str() {
+    let said = match action.as_str() {
         "one_by_one" => {
             let singles: Vec<Step> = stored(user, &step.targets)
                 .iter()
@@ -687,24 +686,24 @@ async fn decide(
             return Ok(Output::new(text, json!({ "session": s.id })));
         }
         "keep" => {
-            said = if decision == "skip" || decision == "later" {
-                "Skipped.".into()
+            if decision == "skip" || decision == "later" {
+                "Skipped.".to_string()
             } else {
-                "Left as it is.".into()
-            };
+                "Left as it is.".to_string()
+            }
         }
         "archive" | "delete" | "read" | "flag" | "file" | "unsubscribe" | "done" => {
             let targets = targets_minus(user, &step, input.except.as_deref().unwrap_or_default());
             let n = apply(user, &targets, &action).await?;
             s.handled += 1;
-            said = past_tense(&action, n);
+            past_tense(&action, n)
         }
         other => {
             return Err(OpError::usage(format!(
                 "unknown decision {other:?}; use yes, archive, delete, read, keep, flag, file, unsubscribe, done, skip, one_by_one, undo or stop"
             )));
         }
-    }
+    };
     s.pos += 1;
     if s.pos >= s.steps.len() {
         user.store.delete_doc("triage", &s.id)?;

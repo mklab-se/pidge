@@ -134,6 +134,8 @@ pidge ai config      # provider and model, through Ailloy (shared with rigg, mde
 pidge ai enable
 ```
 
+Set `PIDGE_NO_AI=1` to run with rules and signals only, whatever is configured.
+
 ## For agents
 
 ```bash

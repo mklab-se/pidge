@@ -468,16 +468,26 @@ pub(crate) fn item_from_value(v: &Value, account: &str, folder: Folder) -> Optio
 
 /// KQL for Graph `$search` from a provider-neutral query.
 pub(crate) fn kql(q: &SearchQuery) -> String {
+    // The whole query travels inside `$search="..."`, so a quoted phrase in
+    // it needs backslash-escaped quotes; a single word needs none.
+    fn term(key: &str, value: &str) -> String {
+        let value = value.replace(['"', '\\'], " ");
+        let value = value.trim();
+        if value.contains(char::is_whitespace) {
+            format!("{key}:\\\"{value}\\\"")
+        } else {
+            format!("{key}:{value}")
+        }
+    }
     let mut parts: Vec<String> = Vec::new();
-    let quote = |s: &str| s.replace(['"', '\\'], " ");
     if let Some(t) = q.text.as_deref().filter(|t| !t.trim().is_empty()) {
-        parts.push(quote(t.trim()));
+        parts.push(t.replace(['"', '\\'], " ").trim().to_string());
     }
     if let Some(f) = q.from.as_deref().filter(|t| !t.trim().is_empty()) {
-        parts.push(format!("from:\"{}\"", quote(f.trim())));
+        parts.push(term("from", f));
     }
     if let Some(s) = q.subject.as_deref().filter(|t| !t.trim().is_empty()) {
-        parts.push(format!("subject:\"{}\"", quote(s.trim())));
+        parts.push(term("subject", s));
     }
     if let Some(d) = q.after {
         parts.push(format!("received>={}", d.format("%Y-%m-%d")));
@@ -1339,7 +1349,7 @@ mod tests {
         };
         assert_eq!(
             kql(&q),
-            "avtal AND from:\"Anna  B \" AND received>=2026-10-01 AND hasattachments:true"
+            "avtal AND from:\\\"Anna  B\\\" AND received>=2026-10-01 AND hasattachments:true"
         );
     }
 

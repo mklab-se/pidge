@@ -15,8 +15,11 @@ use crate::ctx::User;
 
 /// A mailbox synced this recently is not asked again.
 const FRESH: chrono::Duration = chrono::Duration::seconds(15);
-/// Time the AI may take on new mail before an answer goes out anyway.
+/// Time the AI may take on new mail before an answer goes out anyway. A
+/// server's requests carry on in the background; a CLI process would kill
+/// them on exit, so it waits for them.
 const CLASSIFY_BUDGET: Duration = Duration::from_secs(4);
+const CLASSIFY_BUDGET_CLI: Duration = Duration::from_secs(30);
 
 /// What a read should mention about the index.
 #[derive(Debug, Default, Clone)]
@@ -152,7 +155,11 @@ pub async fn ensure(
             Err(_) => report.loading.push(account),
         }
     }
-    classify_pending(user, CLASSIFY_BUDGET).await;
+    let classify = match user.frontend() {
+        crate::ctx::Frontend::Cli => CLASSIFY_BUDGET_CLI,
+        crate::ctx::Frontend::Mcp => CLASSIFY_BUDGET,
+    };
+    classify_pending(user, classify).await;
     report
 }
 

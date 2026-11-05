@@ -84,7 +84,10 @@ pub async fn open_user(frontend: Frontend) -> Result<Arc<User>> {
         providers(&config, &graph),
         Arc::new(LocalHost { frontend, graph }),
     );
-    if let Some(ai) = crate::commands::ai::client() {
+    // `PIDGE_NO_AI=1`: rules and signals only, nothing spent on a model.
+    if std::env::var_os("PIDGE_NO_AI").is_none()
+        && let Some(ai) = crate::commands::ai::client()
+    {
         user.set_ai(Some(Arc::new(ai)));
     }
     Ok(user)

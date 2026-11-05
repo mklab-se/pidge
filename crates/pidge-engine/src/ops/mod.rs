@@ -353,13 +353,17 @@ pub fn item_line(user: &User, s: &Stored, tz: Tz, now: DateTime<Utc>, preview: b
             facts.push(r.clone());
         }
     }
+    let facts = if facts.is_empty() {
+        String::new()
+    } else {
+        format!("  [{}]", facts.join(", "))
+    };
     let mut line = format!(
-        "{} {}  {}: {}  [{}]{}",
+        "{} {}  {}: {}{facts}{}",
         s.handle,
         render::when(i.received_at, tz, now),
         render::name_of(&i.from),
         render::cap_inline(&render::one_line(&i.subject), 100),
-        facts.join(", "),
         account_tag(user, &i.account),
     );
     if preview {

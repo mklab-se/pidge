@@ -93,9 +93,6 @@ const RECEIPT_WORDS: &[&str] = &[
     "invoice",
     "orderbekräftelse",
     "order confirmation",
-    "your order",
-    "din order",
-    "din beställning",
     "betalningsbekräftelse",
     "payment confirmation",
     "payment received",
@@ -165,6 +162,10 @@ const NEWSLETTER_WORDS: &[&str] = &[
 ];
 
 const NOTIFY_WORDS: &[&str] = &[
+    "your order",
+    "din order",
+    "din beställning",
+    "tracking",
     "verification code",
     "verifieringskod",
     "engångskod",
@@ -203,6 +204,7 @@ fn automated_sender(address: &str) -> bool {
     [
         "noreply",
         "no-reply",
+        "no_reply",
         "donotreply",
         "do-not-reply",
         "notifications",
@@ -226,8 +228,63 @@ fn automated_sender(address: &str) -> bool {
             || local.starts_with(&format!("{w}."))
             || local.starts_with(&format!("{w}-"))
             || local.starts_with(&format!("{w}+"))
-            || local.contains("noreply")
-            || local.contains("no-reply")
+            || is_notice_local(&local)
+    })
+}
+
+/// A sender address nobody reads: `no_reply@`, `donotreply@`, `x-noreply@`.
+fn is_notice_local(local: &str) -> bool {
+    [
+        "noreply",
+        "no-reply",
+        "no_reply",
+        "donotreply",
+        "do-not-reply",
+    ]
+    .iter()
+    .any(|w| local.contains(w))
+}
+
+/// Mass-mail sending domains: `mail.leica-camera.com`, `msg.flysas.com`,
+/// `rides-marketing.bolt.eu`, `trx.mail2.disneyplus.com`.
+fn bulk_domain(domain: &str) -> bool {
+    let first = domain.split('.').next().unwrap_or("");
+    let is_bulk_label = |l: &str| {
+        matches!(
+            l,
+            "mail"
+                | "mail2"
+                | "email"
+                | "em"
+                | "news"
+                | "newsletter"
+                | "nyhetsbrev"
+                | "mkt"
+                | "msg"
+                | "trx"
+                | "send"
+                | "mailer"
+                | "mailing"
+                | "updates"
+                | "comms"
+        )
+    };
+    domain.matches('.').count() >= 2 && (is_bulk_label(first) || first.contains("marketing"))
+}
+
+/// The sender's local part says it is a mailing, not a person.
+fn mailing_local(local: &str) -> bool {
+    [
+        "news",
+        "newsletter",
+        "nyhetsbrev",
+        "marketing",
+        "kampanj",
+        "info",
+    ]
+    .iter()
+    .any(|w| {
+        local == *w || local.starts_with(&format!("{w}.")) || local.starts_with(&format!("{w}-"))
     })
 }
 
@@ -253,7 +310,8 @@ pub fn signal_kind(m: &MailItem, knows_sender: bool) -> Option<Kind> {
     let text = format!("{subject} {preview}");
     let from = m.from.address.to_ascii_lowercase();
     let domain = from.rsplit('@').next().unwrap_or("");
-    let automated = automated_sender(&from);
+    let local = from.split('@').next().unwrap_or("");
+    let automated = automated_sender(&from) || bulk_domain(domain);
 
     if has_any(&subject, RECEIPT_WORDS)
         || (RECEIPT_SENDERS.iter().any(|s| from.contains(s)) && has_any(&text, RECEIPT_WORDS))
@@ -290,14 +348,19 @@ pub fn signal_kind(m: &MailItem, knows_sender: bool) -> Option<Kind> {
     if m.bulk_hint == Some(BulkHint::Updates) && automated {
         return Some(Kind::Notification);
     }
-    if m.list_unsubscribe && m.bulk_hint == Some(BulkHint::Other) {
-        // A list in Other: bulk for sure, newsletter vs promotion unclear;
-        // promotion-like when the sender is a marketing address.
-        return Some(if from.contains("news") || from.contains("letter") {
-            Kind::Newsletter
+    // Whatever else it is, a mailing list or a mass-mail domain is bulk.
+    if m.list_unsubscribe || bulk_domain(domain) {
+        return Some(if is_notice_local(local) {
+            Kind::Notification
         } else {
-            Kind::Promotion
+            Kind::Newsletter
         });
+    }
+    if is_notice_local(local) {
+        return Some(Kind::Notification);
+    }
+    if m.bulk_hint == Some(BulkHint::Other) && mailing_local(local) {
+        return Some(Kind::Newsletter);
     }
     None
 }
@@ -417,6 +480,46 @@ mod tests {
                 false
             ),
             Some(Kind::Social)
+        );
+    }
+
+    #[test]
+    fn mailings_are_bulk_without_any_subject_word() {
+        let focused = Some(BulkHint::Focused);
+        assert_eq!(
+            signal_kind(
+                &m("magnum@magnumphotos.com", "New prints", focused, true),
+                false
+            ),
+            Some(Kind::Newsletter)
+        );
+        assert_eq!(
+            signal_kind(
+                &m("news@mail.leica-camera.com", "The M11", focused, false),
+                false
+            ),
+            Some(Kind::Newsletter)
+        );
+        assert_eq!(
+            signal_kind(
+                &m(
+                    "no_reply@email.apple.com",
+                    "Your subscription",
+                    focused,
+                    false
+                ),
+                false
+            ),
+            Some(Kind::Notification)
+        );
+        assert_eq!(
+            signal_kind(&m("noreply@verisure.se", "Larmet", focused, false), false),
+            Some(Kind::Notification)
+        );
+        // A person at an ordinary domain stays open for the agent or AI.
+        assert_eq!(
+            signal_kind(&m("anna@mail.se", "Hej", focused, false), false),
+            None
         );
     }
 

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ailloy::{EvalResponse, Question, Questions};
-use pidge_core::provider::{BulkHint, MailItem};
+use pidge_core::provider::{BulkHint, Folder, MailItem, ProviderKind};
 use pidge_store::{Classification, Filter, Stored};
 use serde_json::{Value, json};
 
@@ -172,6 +172,14 @@ pub fn judge_without_ai(m: &MailItem, prefs: &Prefs, known: &Known) -> Classific
 // ---- the user's own AI ------------------------------------------------------
 
 const AI_CONCURRENCY: usize = 4;
+/// AI requests per classification round, at most.
+const AI_MAX_PER_RUN: usize = 40;
+/// Senders asked about `List-Unsubscribe` per round, at most.
+const MAX_SENDER_LOOKUPS: usize = 200;
+/// A voice harness cannot wait: on a server, what does not fit is picked up
+/// on the next call (answers are remembered, so each round gets further).
+const SENDER_LOOKUP_BUDGET: Duration = Duration::from_secs(25);
+const SENDER_LOOKUP_BUDGET_MCP: Duration = Duration::from_secs(3);
 const AI_TIMEOUT: Duration = Duration::from_secs(20);
 /// A category or kind the model is less sure of than this is left open.
 const MIN_PROBABILITY: f64 = 0.6;
@@ -283,6 +291,23 @@ fn merge_ai(mut c: Classification, resp: &EvalResponse, categories: &[Category])
         .get("importance")
         .and_then(|a| a.normalized_score())
         .unwrap_or(0.5);
+    // Bulk is bulk: a model reading "book now" as a request changes nothing.
+    let bulk_kind = c
+        .kind
+        .as_deref()
+        .and_then(Kind::parse)
+        .is_some_and(Kind::is_bulk);
+    let bulk_category = c
+        .category
+        .as_ref()
+        .and_then(|n| categories.iter().find(|x| &x.name == n))
+        .is_some_and(|x| x.sweep);
+    if bulk_kind || bulk_category {
+        if c.reasons.is_empty() {
+            c.importance = 0;
+        }
+        return c;
+    }
     if needs_reply >= 0.7 && !c.reasons.iter().any(|r| r == "needs-reply") {
         c.reasons.push("needs-reply".into());
     }
@@ -294,6 +319,78 @@ fn merge_ai(mut c: Classification, resp: &EvalResponse, categories: &[Category])
         }
     }
     c
+}
+
+/// Providers whose lists do not carry `List-Unsubscribe` (Graph) are asked
+/// once per sender, from one message, and the answer is remembered: it tells
+/// mailing lists from people better than anything else in a list row.
+async fn learn_list_senders(user: &Arc<User>, pending: &[Stored], known: &Known) {
+    let mut seen = HashSet::new();
+    let mut ask = Vec::new();
+    for s in pending {
+        let from = s.item.from.address.to_ascii_lowercase();
+        if from.is_empty() || s.item.folder != Folder::Inbox || known.own.contains(&from) {
+            continue;
+        }
+        let Ok(p) = user.provider(&s.item.account) else {
+            continue;
+        };
+        if p.kind() != ProviderKind::Microsoft || ask.len() >= MAX_SENDER_LOOKUPS {
+            continue;
+        }
+        // Someone the user writes to can also send newsletters from the same
+        // address: judge each message outside the shared conversations.
+        if known.written_to.contains(&from) {
+            if !known.threads_with_sent.contains(&s.item.thread_id) {
+                ask.push((p, s.item.account.clone(), s.item.id.clone(), None));
+            }
+            continue;
+        }
+        if !seen.insert(from.clone()) {
+            continue;
+        }
+        match user.store.get_doc::<bool>("listsender", &from) {
+            Ok(Some(true)) => {
+                let _ = user.store.mark_list_sender(&from);
+            }
+            Ok(Some(false)) => {}
+            _ => ask.push((p, s.item.account.clone(), s.item.id.clone(), Some(from))),
+        }
+    }
+    let gate = Arc::new(tokio::sync::Semaphore::new(8));
+    let mut tasks = tokio::task::JoinSet::new();
+    for (p, account, id, sender) in ask {
+        let gate = gate.clone();
+        tasks.spawn(async move {
+            let _permit = gate.acquire_owned().await;
+            let headers = p.unsubscribe_headers(&id).await;
+            (account, id, sender, headers)
+        });
+    }
+    let until = chrono::Utc::now() + chrono::Duration::days(60);
+    let collect = async {
+        while let Some(Ok((account, id, sender, headers))) = tasks.join_next().await {
+            let Ok(h) = headers else { continue };
+            let list = h.list_unsubscribe.is_some();
+            match sender {
+                Some(from) => {
+                    let _ = user.store.put_doc("listsender", &from, &list, Some(until));
+                    if list {
+                        let _ = user.store.mark_list_sender(&from);
+                    }
+                }
+                None if list => {
+                    let _ = user.store.mark_list_message(&account, &id);
+                }
+                None => {}
+            }
+        }
+    };
+    let budget = match user.frontend() {
+        crate::ctx::Frontend::Cli => SENDER_LOOKUP_BUDGET,
+        crate::ctx::Frontend::Mcp => SENDER_LOOKUP_BUDGET_MCP,
+    };
+    let _ = tokio::time::timeout(budget, collect).await;
 }
 
 /// Classify every unclassified message in the index: rules and signals at
@@ -315,6 +412,15 @@ pub async fn classify_pending(user: &Arc<User>, budget: Duration) {
     if pending.is_empty() {
         return;
     }
+    learn_list_senders(user, &pending, &known).await;
+    // Read again: what was just learned is on the rows now.
+    let pending = user
+        .store
+        .query(&Filter {
+            unclassified: true,
+            ..Default::default()
+        })
+        .unwrap_or(pending);
     let ai = user.ai().filter(|_| {
         !matches!(
             prefs.ai.status.as_str(),
@@ -325,9 +431,10 @@ pub async fn classify_pending(user: &Arc<User>, budget: Duration) {
     for s in pending {
         let c = judge_without_ai(&s.item, &prefs, &known);
         let open = c.kind.is_none() || c.category.is_none();
-        let worth_asking = s.item.folder == pidge_core::provider::Folder::Inbox
+        let worth_asking = s.item.folder == Folder::Inbox
             && (chrono::Utc::now() - s.item.received_at).num_days() <= 14;
-        if ai.is_some() && open && worth_asking {
+        // Newest first, and bounded: the AI is an accelerator, not a cost.
+        if ai.is_some() && open && worth_asking && ask.len() < AI_MAX_PER_RUN {
             ask.push((s, c));
         } else {
             let _ = user

@@ -55,6 +55,8 @@ fn is_filler(c: char) -> bool {
             | '\u{180E}'
             | '\u{200B}'
             | '\u{200C}'
+            | '\u{200E}'
+            | '\u{200F}'
             | '\u{2060}'
             | '\u{2800}'
             | '\u{FEFF}'
@@ -66,7 +68,8 @@ fn is_filler(c: char) -> bool {
 /// own.
 pub fn one_line(text: &str) -> String {
     text.split(|c: char| c.is_whitespace() || c.is_control() || is_filler(c))
-        .filter(|w| !w.is_empty())
+        // A word of nothing but joiners is padding too.
+        .filter(|w| w.chars().any(|c| c != '\u{200D}'))
         .collect::<Vec<_>>()
         .join(" ")
 }

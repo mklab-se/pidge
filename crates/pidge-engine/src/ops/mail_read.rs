@@ -357,7 +357,7 @@ async fn run_find(user: Arc<User>, input: FindInput) -> OpResult<Output> {
     }
     let total = found.len();
     if input.count_only.unwrap_or(false) {
-        let text = format!("{total} messages match: {}.", sel.describe());
+        let text = format!("{total} messages match: {}.", everywhere(&sel));
         return Ok(Output::new(text, json!({ "count": total })));
     }
     found.truncate(limit);
@@ -366,12 +366,16 @@ async fn run_find(user: Arc<User>, input: FindInput) -> OpResult<Output> {
         text.push_str(&format!("Note: {n}\n"));
     }
     if found.is_empty() {
-        text.push_str(&format!("No {} found.", sel.describe()));
+        text.push_str(&format!("No {} found.", everywhere(&sel)));
         if !searched && !searchable {
             text.push_str(" Try text= or from= to search the whole mailbox.");
         }
     } else {
-        text.push_str(&format!("{} of {total}: {}\n", found.len(), sel.describe()));
+        text.push_str(&format!(
+            "{} of {total}: {}\n",
+            found.len(),
+            everywhere(&sel)
+        ));
         for s in &found {
             text.push_str(&item_line(&user, s, tz, now, true));
             text.push('\n');
@@ -382,6 +386,11 @@ async fn run_find(user: Arc<User>, input: FindInput) -> OpResult<Output> {
         text,
         json!({ "total": total, "items": found.iter().map(item_json).collect::<Vec<_>>() }),
     ))
+}
+
+/// `mail_find` covers every folder unless told otherwise.
+fn everywhere(sel: &Selector) -> String {
+    sel.describe().replace(" in the inbox", "")
 }
 
 // ---- mail_read --------------------------------------------------------------

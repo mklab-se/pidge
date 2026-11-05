@@ -762,6 +762,24 @@ impl Store {
         Ok(())
     }
 
+    /// This sender is a mailing list: true for all their messages.
+    pub fn mark_list_sender(&self, address: &str) -> StoreResult<()> {
+        self.conn().execute(
+            "UPDATE messages SET list_unsubscribe = 1 WHERE from_addr = ?1",
+            [address.to_ascii_lowercase()],
+        )?;
+        Ok(())
+    }
+
+    /// This one message came through a mailing list.
+    pub fn mark_list_message(&self, account: &str, id: &str) -> StoreResult<()> {
+        self.conn().execute(
+            "UPDATE messages SET list_unsubscribe = 1 WHERE account = ?1 AND id = ?2",
+            params![account, id],
+        )?;
+        Ok(())
+    }
+
     /// Forget every classification (the user's categories or rules changed).
     pub fn reset_classifications(&self) -> StoreResult<()> {
         self.conn()
