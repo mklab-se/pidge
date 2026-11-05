@@ -7,6 +7,7 @@ pub mod events;
 mod mail;
 mod me;
 mod people;
+pub mod provider;
 
 pub use calendars::list_calendars;
 pub use events::{
@@ -59,7 +60,10 @@ pub(crate) async fn send_with_retry(
             Some(clone) => clone,
             None => return Ok(req.send().await?),
         };
-        let resp = this_try.send().await?;
+        let (client, built) = this_try.build_split();
+        let mut built = built?;
+        with_immutable_ids(&mut built);
+        let resp = client.execute(built).await?;
         let status = resp.status();
         if !is_transient(status) {
             return Ok(resp);
@@ -87,6 +91,17 @@ pub(crate) async fn send_with_retry(
         );
         tokio::time::sleep(backoff).await;
     }
+}
+
+/// Ask Graph for immutable ids on every call (`Prefer: IdType="ImmutableId"`),
+/// so a message keeps its id when it moves between folders: an archive, a
+/// move or an undo never invalidates an id pidge has handed out. Added as its
+/// own `Prefer` header next to any other preference the call sets.
+fn with_immutable_ids(req: &mut reqwest::Request) {
+    req.headers_mut().append(
+        "Prefer",
+        reqwest::header::HeaderValue::from_static("IdType=\"ImmutableId\""),
+    );
 }
 
 /// Refuses a continuation link (`@odata.nextLink`) that doesn't lead back to

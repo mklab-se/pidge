@@ -183,11 +183,17 @@ pub struct SearchQuery {
 pub enum MailChange {
     MarkRead,
     MarkUnread,
-    Flag { due: Option<NaiveDate> },
+    Flag {
+        due: Option<NaiveDate>,
+    },
     Unflag,
-    Move { to: Folder },
+    Move {
+        to: Folder,
+    },
     /// Replace the message's categories (labels) with exactly these names.
-    SetCategories { categories: Vec<String> },
+    SetCategories {
+        categories: Vec<String>,
+    },
     /// To Deleted Items / Trash. Never permanent.
     Delete,
 }
@@ -405,8 +411,11 @@ pub trait Provider: Send + Sync {
     // ---- calendar ---------------------------------------------------------
 
     /// Events overlapping `[from, to)`, recurring events expanded.
-    async fn list_events(&self, from: DateTime<Utc>, to: DateTime<Utc>)
-    -> ProviderResult<Vec<Event>>;
+    async fn list_events(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> ProviderResult<Vec<Event>>;
 
     async fn get_event(&self, id: &str) -> ProviderResult<Event>;
 
@@ -476,7 +485,10 @@ mod tests {
 
     #[test]
     fn mail_change_serializes_tagged() {
-        let j = serde_json::to_string(&MailChange::Move { to: Folder::Archive }).unwrap();
+        let j = serde_json::to_string(&MailChange::Move {
+            to: Folder::Archive,
+        })
+        .unwrap();
         assert_eq!(j, r#"{"op":"move","to":"archive"}"#);
     }
 }

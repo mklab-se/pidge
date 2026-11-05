@@ -301,6 +301,7 @@ mod tests {
             home_account_id: "home".into(),
             added_at: chrono::Utc.with_ymd_and_hms(2026, 5, 13, 22, 0, 0).unwrap(),
             storage: crate::TokenStorage::default(),
+            provider: Default::default(),
         }
     }
 

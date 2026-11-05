@@ -13,6 +13,7 @@ pub mod unsubscribe;
 
 pub use auth::AuthClient;
 pub use error::ClientError;
+pub use graph::provider::GraphProvider;
 pub use graph::{GraphClient, MailFolder, Outgoing};
 pub use unsubscribe::{UnsubscribeMethod, mailto_subject, parse_unsubscribe};
 

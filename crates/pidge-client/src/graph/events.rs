@@ -784,7 +784,9 @@ fn parse_recurrence(g: GraphRecurrence) -> RecurrencePattern {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{body_partial_json, header, method, path, path_regex, query_param};
+    use wiremock::matchers::{
+        body_partial_json, header, headers, method, path, path_regex, query_param,
+    };
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn sample_event(tz: &str) -> NewEvent {
@@ -917,7 +919,10 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/me/calendarView"))
             .and(header("authorization", "Bearer AT"))
-            .and(header("prefer", "outlook.timezone=\"UTC\""))
+            .and(headers(
+                "prefer",
+                vec!["outlook.timezone=\"UTC\"", "IdType=\"ImmutableId\""],
+            ))
             .and(query_param("$orderby", "start/dateTime"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "value": [

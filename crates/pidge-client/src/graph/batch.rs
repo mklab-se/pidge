@@ -99,7 +99,18 @@ pub async fn batch_all(
     access_token: &str,
     requests: Vec<BatchRequest>,
 ) -> Result<Vec<BatchResponse>, ClientError> {
-    let mut pending = requests;
+    // Each sub-request carries its own headers: ask for immutable ids on
+    // every one, as the top-level request does (see `with_immutable_ids`).
+    let mut pending: Vec<BatchRequest> = requests
+        .into_iter()
+        .map(|mut r| {
+            let headers = r.headers.get_or_insert_with(serde_json::Map::new);
+            headers
+                .entry("Prefer")
+                .or_insert_with(|| Value::String("IdType=\"ImmutableId\"".into()));
+            r
+        })
+        .collect();
     let mut done: Vec<BatchResponse> = Vec::new();
 
     for round in 0..MAX_ROUNDS {
