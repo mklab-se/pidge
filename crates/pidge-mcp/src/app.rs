@@ -16,15 +16,20 @@ use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, Stream
 use tokio_util::sync::CancellationToken;
 
 use crate::download;
+use crate::engine::HttpSource;
 use crate::oauth;
 use crate::state::SharedState;
-use crate::tools::PidgeMcp;
+use pidge_engine::mcp::PidgeServer;
 
 pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
     let mcp_service = StreamableHttpService::new(
         {
             let state = state.clone();
-            move || Ok(PidgeMcp::new(state.clone()))
+            move || {
+                Ok(PidgeServer::new(HttpSource {
+                    state: state.clone(),
+                }))
+            }
         },
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default()

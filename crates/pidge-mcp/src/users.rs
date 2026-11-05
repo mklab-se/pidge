@@ -37,18 +37,13 @@ pub struct UserRecord {
     pub trusted_senders: Vec<String>,
     #[serde(default)]
     pub token_generation: u32,
-    /// Inbox-review categories and the last review time.
-    #[serde(
-        default,
-        skip_serializing_if = "crate::review::ReviewSettings::is_default"
-    )]
-    pub review: crate::review::ReviewSettings,
+    /// The inbox-review settings of pidge 1.x (categories, rules), read once
+    /// to seed the user's pidge 2 preferences; kept as stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<serde_json::Value>,
     /// The user's AI sorting status (the key itself is a separate secret).
-    #[serde(
-        default,
-        skip_serializing_if = "crate::review::ai::AiSettings::is_default"
-    )]
-    pub ai: crate::review::ai::AiSettings,
+    #[serde(default, skip_serializing_if = "crate::ai::AiSettings::is_default")]
+    pub ai: crate::ai::AiSettings,
     /// The current refresh token of each OAuth client the user signed in
     /// with, at most [`MAX_REFRESH_CHAINS`]; see [`Self::refresh_check`].
     /// Records from before rotation have none.
@@ -188,14 +183,6 @@ impl UserRecord {
             .iter()
             .any(|m| m.eq_ignore_ascii_case(mailbox))
     }
-
-    /// The user's timezone, falling back to Stockholm if `timezone` doesn't
-    /// parse as an IANA zone.
-    pub fn tz(&self) -> chrono_tz::Tz {
-        self.timezone
-            .parse()
-            .unwrap_or(chrono_tz::Europe::Stockholm)
-    }
 }
 
 /// A mailbox's stored tokens plus the sign-in address that owns it.
@@ -207,6 +194,9 @@ pub struct MailboxRecord {
     /// before identities were pinned (pinned at the next bind).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<Identity>,
+    /// Where the mailbox is (Microsoft when absent).
+    #[serde(default)]
+    pub provider: pidge_core::provider::ProviderKind,
 }
 
 /// Backward-compatible shape for reading a mailbox secret: either the
@@ -307,6 +297,7 @@ impl UserStore {
                 owner: mailbox.to_ascii_lowercase(),
                 tokens,
                 identity: None,
+                provider: Default::default(),
             },
         }))
     }
@@ -591,6 +582,7 @@ mod tests {
             owner: "jane@example.com".into(),
             tokens,
             identity: None,
+            provider: Default::default(),
         };
         store.save_mailbox(&rec, "jane@example.com").await.unwrap();
         // Unpinned: any identity passes.
@@ -696,6 +688,7 @@ mod tests {
                     owner: "jane.doe@example.com".into(),
                     tokens: tokens.clone(),
                     identity: None,
+                    provider: Default::default(),
                 },
                 "jane.doe@example.com",
             )
@@ -722,6 +715,7 @@ mod tests {
                     owner: "mallory@example.com".into(),
                     tokens,
                     identity: None,
+                    provider: Default::default(),
                 },
                 "jane-doe@example.com",
             )

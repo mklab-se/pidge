@@ -27,6 +27,10 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    pub fn is_microsoft(&self) -> bool {
+        *self == Self::Microsoft
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Microsoft => "microsoft",

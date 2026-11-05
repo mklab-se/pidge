@@ -68,13 +68,21 @@ pub async fn download(State(state): State<SharedState>, Path(token): Path<String
         Err(_) => return refuse("user store unavailable"),
     }
     // The error is not logged: Graph failures can name the mailbox.
-    let bytes = match state
-        .graph
-        .get_attachment_bytes(&account, &claims.message_id, &claims.attachment_id)
+    // Through the user's engine: it holds only mailboxes the user owns, and
+    // knows whether this one is at Microsoft or Google.
+    let provider = match state.engines.user(&state, &signin).await {
+        Ok(user) => match user.provider(&account) {
+            Ok(p) => p,
+            Err(_) => return refuse("mailbox not owned"),
+        },
+        Err(_) => return refuse("user store unavailable"),
+    };
+    let bytes = match provider
+        .attachment_bytes(&claims.message_id, &claims.attachment_id)
         .await
     {
         Ok(bytes) => bytes,
-        Err(_) => return refuse("graph fetch failed"),
+        Err(_) => return refuse("mailbox fetch failed"),
     };
 
     tracing::info!(%user, outcome = "served", "download");
@@ -151,9 +159,8 @@ pub(crate) mod tests {
     use super::*;
     use crate::app::build_router;
     use crate::state::DOWNLOADS_PER_HOUR;
+    use crate::test_support::{JANE, ToolHarness, WORK, mount_bytes};
     use crate::test_support::{LogCapture, assert_no_address};
-    use crate::tools::attachments::tests::{JANE, WORK, mount_bytes};
-    use crate::tools::tests::ToolHarness;
 
     const PDF: &[u8] = b"%PDF-1.7 fake";
 
@@ -255,10 +262,11 @@ pub(crate) mod tests {
                     owner: "mallory@example.com".into(),
                     // Working tokens: only the owner check stands in the way.
                     tokens: pidge_client::auth::TokenSet {
-                        access_token: crate::tools::tests::access_token(WORK),
-                        ..crate::tools::tests::fresh_tokens()
+                        access_token: crate::test_support::access_token(WORK),
+                        ..crate::test_support::fresh_tokens()
                     },
                     identity: None,
+                    provider: Default::default(),
                 },
                 WORK,
             )

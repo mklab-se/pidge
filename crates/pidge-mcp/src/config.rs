@@ -82,6 +82,45 @@ pub struct Config {
     /// `PIDGE_MCP_REDIRECT_HOSTS`, comma-separated host names matched
     /// exactly (no scheme, port, path or wildcard), default empty.
     pub redirect_hosts: Vec<String>,
+    /// Where the engine keeps each user's index and preferences, and the
+    /// Google OAuth client for Gmail mailboxes.
+    pub engine: EngineConfig,
+}
+
+/// Where a user's preferences (categories, rules, policy: small JSON) live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrefsBackend {
+    /// An Azure Blob container, authenticated with the ambient Azure
+    /// identity. `PIDGE_MCP_PREFS_URL`, e.g. `https://<account>.blob.core.windows.net/prefs`.
+    Blob(Url),
+    /// One file per user under a directory (development).
+    /// `PIDGE_MCP_PREFS_DIR`.
+    Dir(PathBuf),
+}
+
+/// The engine's storage and the Google client.
+#[derive(Debug, Clone)]
+pub struct EngineConfig {
+    /// Per-user index files (a cache, rebuilt from the mailboxes when lost).
+    /// `PIDGE_MCP_INDEX_DIR`, default `<temp>/pidge-index`.
+    pub index_dir: PathBuf,
+    pub prefs: PrefsBackend,
+    /// A Google Cloud "Web application" OAuth client whose redirect URI is
+    /// `<public url>/callback/google`. `PIDGE_GOOGLE_CLIENT_ID` and
+    /// `PIDGE_GOOGLE_CLIENT_SECRET`; Gmail mailboxes cannot be connected
+    /// without them.
+    pub google: Option<(String, String)>,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        let tmp = std::env::temp_dir();
+        Self {
+            index_dir: tmp.join("pidge-index"),
+            prefs: PrefsBackend::Dir(tmp.join("pidge-prefs")),
+            google: None,
+        }
+    }
 }
 
 /// The hosts OAuth clients may redirect to over https with no
@@ -206,7 +245,47 @@ impl Config {
             );
         }
 
+        let mut engine = EngineConfig::default();
+        if let Some(dir) = vars.get("PIDGE_MCP_INDEX_DIR").filter(|v| !v.is_empty()) {
+            engine.index_dir = PathBuf::from(dir);
+        }
+        match (
+            vars.get("PIDGE_MCP_PREFS_URL"),
+            vars.get("PIDGE_MCP_PREFS_DIR"),
+        ) {
+            (Some(url), None) => {
+                let url: Url = url
+                    .trim_end_matches('/')
+                    .parse()
+                    .context("PIDGE_MCP_PREFS_URL must be an absolute URL")?;
+                if url.scheme() != "https" {
+                    bail!("PIDGE_MCP_PREFS_URL must use https");
+                }
+                engine.prefs = PrefsBackend::Blob(url);
+            }
+            (None, Some(dir)) => engine.prefs = PrefsBackend::Dir(PathBuf::from(dir)),
+            (Some(_), Some(_)) => {
+                bail!("set only one of PIDGE_MCP_PREFS_URL and PIDGE_MCP_PREFS_DIR")
+            }
+            (None, None) => {
+                if let SecretsBackend::File { dir } = &secrets {
+                    engine.prefs = PrefsBackend::Dir(dir.join("prefs"));
+                }
+            }
+        }
+        engine.google = match (
+            vars.get("PIDGE_GOOGLE_CLIENT_ID").filter(|v| !v.is_empty()),
+            vars.get("PIDGE_GOOGLE_CLIENT_SECRET")
+                .filter(|v| !v.is_empty()),
+        ) {
+            (Some(id), Some(secret)) => Some((id.clone(), secret.clone())),
+            (None, None) => None,
+            _ => {
+                bail!("set both PIDGE_GOOGLE_CLIENT_ID and PIDGE_GOOGLE_CLIENT_SECRET, or neither")
+            }
+        };
         Ok(Self {
+            engine,
             markitdown,
             port,
             public_url,
@@ -246,6 +325,11 @@ impl Config {
     /// Where Microsoft sends the user back after sign-in.
     pub fn microsoft_callback_url(&self) -> String {
         format!("{}/callback", self.base_url())
+    }
+
+    /// The redirect URI registered on the Google OAuth client.
+    pub fn google_callback_url(&self) -> String {
+        format!("{}/callback/google", self.base_url())
     }
 
     pub fn is_allowed(&self, email: &str) -> bool {

@@ -32,8 +32,12 @@ pub struct Account {
     pub added_at: DateTime<Utc>,
     #[serde(default)]
     pub storage: TokenStorage,
-    /// Which service the account lives at (Microsoft when absent).
-    #[serde(default)]
+    /// Which service the account lives at (Microsoft when absent, and not
+    /// written for Microsoft so existing config files stay as they are).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::ProviderKind::is_microsoft"
+    )]
     pub provider: crate::provider::ProviderKind,
 }
 

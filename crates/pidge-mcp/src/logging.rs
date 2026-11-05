@@ -54,7 +54,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::LogCapture;
-    use crate::tools::tests::ToolHarness;
+    use crate::test_support::ToolHarness;
 
     /// The top-level keys of the one JSON line whose `message` is `event`.
     fn line_for(logged: &str, event: &str) -> serde_json::Map<String, serde_json::Value> {
@@ -85,8 +85,8 @@ mod tests {
         let _guard = LogCapture::install(json_subscriber(EnvFilter::new("info"), capture.clone()));
 
         let h = ToolHarness::new(&["jane@example.com"]).await;
-        let request = rmcp::model::CallToolRequestParams::new("accounts_list");
-        h.mcp.call_tool(request, h.ctx()).await.unwrap();
+        let request = rmcp::model::CallToolRequestParams::new("accounts");
+        h.mcp().call_tool(request, h.ctx()).await.unwrap();
         let status = crate::app::build_router(h.state.clone(), CancellationToken::new())
             .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
             .await
@@ -97,7 +97,7 @@ mod tests {
         let logged = capture.text();
         let tool = line_for(&logged, "tool_call");
         assert_flat(&tool, &["tool", "user", "duration_ms", "outcome"]);
-        assert_eq!(tool["tool"], "accounts_list");
+        assert_eq!(tool["tool"], "accounts");
         assert_eq!(tool["outcome"], "ok");
         assert_eq!(tool["level"], "INFO");
 

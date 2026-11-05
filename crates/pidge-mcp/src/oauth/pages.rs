@@ -143,7 +143,7 @@ pub fn ai_form(owner: &str, state: &str, token: &str, error: Option<&str>) -> Re
     let error = error
         .map(|e| format!(r#"<p class="err">{}</p>"#, html_escape(e)))
         .unwrap_or_default();
-    let options: String = crate::review::ai::AiProvider::ALL
+    let options: String = crate::ai::AiProvider::ALL
         .iter()
         .map(|p| {
             let value = serde_json::to_value(p)

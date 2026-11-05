@@ -7,20 +7,12 @@ use std::time::{Duration as StdDuration, Instant};
 use chrono::{DateTime, Duration, Utc};
 use pidge_client::GraphClient;
 
-use crate::cache::ReadCache;
 use crate::config::Config;
-use crate::contacts::ContactCaches;
 use crate::mailbox::SecretTokenBackend;
 use crate::oauth::jwt::Signer;
 use crate::secrets::SharedSecrets;
 use crate::users::{UserStore, log_store_error};
 
-/// The read cache's TTL and per-user LRU bound (spec §1.9).
-const CACHE_TTL: StdDuration = StdDuration::from_secs(60);
-const CACHE_PER_USER: usize = 256;
-
-/// Sends allowed per user in any rolling hour (spec §1.3, `mail_send`).
-pub const SENDS_PER_HOUR: usize = 30;
 /// Attachment downloads (`GET /dl/…`) allowed per user in any rolling hour.
 pub const DOWNLOADS_PER_HOUR: usize = 60;
 /// markitdown processes allowed to run at once, across all users.
@@ -46,6 +38,8 @@ pub enum PendingKind {
     Connect {
         owner: String,
         mailbox: Option<String>,
+        /// Where the mailbox is: Microsoft or Google.
+        provider: pidge_core::provider::ProviderKind,
     },
 }
 
@@ -93,19 +87,21 @@ pub const MAX_PENDING: usize = 1_000;
 pub struct AppState {
     pub config: Config,
     pub signer: Signer,
-    pub graph: GraphClient,
+    pub graph: Arc<GraphClient>,
+    /// For Google's token endpoint and Gmail.
+    pub http: reqwest::Client,
     /// The token backend `graph` uses; held here so a disconnect or a fresh
     /// connect can evict its cached tokens.
     pub token_backend: Arc<SecretTokenBackend>,
     pub users: UserStore,
     /// The secret store `users` reads; also holds each user's AI key.
     pub secrets: SharedSecrets,
-    /// Per-user, 60 s, LRU-bounded cache for read tools; see [`crate::cache`].
-    pub cache: ReadCache,
-    /// Per-user, 24 h contact caches for recipient-name resolution.
-    pub contacts: ContactCaches,
-    /// Sign-in address → instants of that user's sends in the last hour.
-    pub sends: Mutex<HashMap<String, Vec<Instant>>>,
+    /// Every signed-in user's engine (index, worker, outbox).
+    pub engines: crate::engine::Engines,
+    /// Links to the page where a user enters their own AI key.
+    pub ai_links: crate::ai_page::AiLinks,
+    /// A TypeSafe endpoint override: set only by tests (a mock server).
+    pub ai_endpoint: Option<String>,
     /// Sign-in address → instants of that user's downloads in the last hour.
     pub downloads: Mutex<HashMap<String, Vec<Instant>>>,
     /// Bounds concurrent markitdown runs to [`CONVERSION_SLOTS`].
@@ -124,8 +120,6 @@ pub struct AppState {
     /// first one stored. One lock for all users: grants are rare (about one
     /// per client per hour) and the store round trips are short.
     pub refresh_lock: tokio::sync::Mutex<()>,
-    /// Inbox-review sessions, classifications and AI clients.
-    pub review: crate::review::ReviewState,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -156,20 +150,23 @@ impl AppState {
         Self {
             config,
             signer,
-            graph,
+            graph: Arc::new(graph),
+            http: reqwest::Client::builder()
+                .user_agent(format!("pidge-mcp/{}", env!("CARGO_PKG_VERSION")))
+                .build()
+                .unwrap_or_default(),
             token_backend,
             users: UserStore::new(secrets.clone()),
             secrets,
-            cache: ReadCache::new(CACHE_TTL, CACHE_PER_USER),
-            contacts: ContactCaches::default(),
-            sends: Mutex::new(HashMap::new()),
+            engines: Default::default(),
+            ai_links: Default::default(),
+            ai_endpoint: None,
             downloads: Mutex::new(HashMap::new()),
             conversions: tokio::sync::Semaphore::new(CONVERSION_SLOTS),
             pending: Mutex::new(HashMap::new()),
             used_codes: Mutex::new(HashMap::new()),
             generations: Mutex::new(HashMap::new()),
             refresh_lock: tokio::sync::Mutex::new(()),
-            review: Default::default(),
         }
     }
 
@@ -248,26 +245,11 @@ impl AppState {
         (pending.created_at > Utc::now() - PENDING_TTL).then_some(pending)
     }
 
-    /// Claims one of `user`'s [`SENDS_PER_HOUR`] sends in the rolling hour;
-    /// `false` when they are used up. Claiming before sending (rather than
-    /// counting afterwards) keeps concurrent sends from overshooting the cap.
-    pub fn reserve_send(&self, user: &str) -> bool {
-        claim_in_window(&self.sends, user, SENDS_PER_HOUR)
-    }
-
     /// Claims one of `user`'s [`DOWNLOADS_PER_HOUR`] downloads in the
     /// rolling hour; `false` when they are used up. Every attempt with a
     /// valid link counts, served or not.
     pub fn reserve_download(&self, user: &str) -> bool {
         claim_in_window(&self.downloads, user, DOWNLOADS_PER_HOUR)
-    }
-
-    /// Returns the claim [`Self::reserve_send`] made for a send that failed.
-    pub fn release_send(&self, user: &str) {
-        let mut map = self.sends.lock().expect("sends lock");
-        if let Some(sent) = map.get_mut(user) {
-            sent.pop();
-        }
     }
 
     /// `signin`'s current token generation: tokens carrying any other one
@@ -350,7 +332,7 @@ fn claim_in_window(counter: &Mutex<HashMap<String, Vec<Instant>>>, user: &str, c
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::tests::ToolHarness;
+    use crate::test_support::ToolHarness;
 
     use std::time::{Duration, Instant};
 

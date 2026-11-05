@@ -16,6 +16,10 @@ path = "src/main.rs"
 [dependencies]
 pidge-core.workspace = true
 pidge-client.workspace = true
+pidge-gmail.workspace = true
+pidge-store.workspace = true
+pidge-engine = { workspace = true, features = ["mcp"] }
+reqwest.workspace = true
 ailloy.workspace = true
 
 anyhow.workspace = true

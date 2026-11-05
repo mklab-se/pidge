@@ -109,6 +109,7 @@ async fn harness_with(upn: &str, mail: &str, oid: &str) -> Harness {
         legacy_issuers: Vec::new(),
         log_format: crate::config::LogFormat::Text,
         redirect_hosts: Vec::new(),
+        engine: Default::default(),
     };
     let key = random_bytes(32);
     let signer = Signer::new(&key, PUBLIC, format!("{PUBLIC}/mcp"));
@@ -161,6 +162,7 @@ async fn harness_with_hosts(alt_hosts: Vec<String>, legacy_issuers: Vec<String>)
         legacy_issuers: legacy_issuers.clone(),
         log_format: crate::config::LogFormat::Text,
         redirect_hosts: Vec::new(),
+        engine: Default::default(),
     };
     let key = random_bytes(32);
     let signer =
@@ -610,6 +612,7 @@ async fn sign_in_refuses_a_mailbox_another_user_connected() {
                     scope: None,
                 },
                 identity: None,
+                provider: Default::default(),
             },
             "jane@example.com",
         )
@@ -641,6 +644,7 @@ async fn connect_invalidates_the_owners_read_cache() {
             kind: PendingKind::Connect {
                 owner: "jane@example.com".into(),
                 mailbox: None,
+                provider: Default::default(),
             },
             ..pending_stub()
         },
@@ -649,13 +653,9 @@ async fn connect_invalidates_the_owners_read_cache() {
         .save(&UserRecord::new("jane@example.com"))
         .await
         .unwrap();
-    h.state
-        .cache
-        .put("jane@example.com", "k".into(), "v".into());
 
     let resp = callback(&h, "code=x&state=s1").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    assert!(h.state.cache.get("jane@example.com", "k").is_none());
 }
 
 #[tokio::test]
@@ -668,6 +668,7 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
             kind: PendingKind::Connect {
                 owner: "jane@example.com".into(),
                 mailbox: None,
+                provider: Default::default(),
             },
             ..pending_stub()
         },
@@ -712,6 +713,7 @@ async fn connect_binds_second_mailbox_to_owner_and_refuses_foreign_ownership() {
             kind: PendingKind::Connect {
                 owner: "anna@example.com".into(),
                 mailbox: None,
+                provider: Default::default(),
             },
             ..pending_stub()
         },
@@ -731,6 +733,7 @@ fn connect_pending(owner: &str) -> PendingAuthorization {
         kind: PendingKind::Connect {
             owner: owner.into(),
             mailbox: None,
+            provider: Default::default(),
         },
         ..pending_stub()
     }
@@ -1136,6 +1139,7 @@ async fn sign_in_refuses_a_mailbox_pinned_to_a_different_account() {
                     scope: None,
                 },
                 identity: Some(identity_for("jane@example.com")),
+                provider: Default::default(),
             },
             "jane@example.com",
         )
@@ -1354,19 +1358,22 @@ async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
     let (client_id, access, refresh) = sign_in_and_redeem(&h).await;
     assert_eq!(mcp_initialize(&h.app, Some(&access)).await, StatusCode::OK);
 
-    let mcp = crate::tools::PidgeMcp::new(h.state.clone());
-    let out = mcp
-        .accounts_update(
-            rmcp::handler::server::wrapper::Parameters(crate::tools::accounts::UpdateArgs {
-                sign_out_everywhere: Some(true),
-                ..Default::default()
-            }),
-            crate::tools::tests::request_context("jane@example.com"),
-        )
+    let user = h
+        .state
+        .engines
+        .user(&h.state, "jane@example.com")
         .await
         .unwrap();
-    let out = crate::tools::tests::text(&out);
-    assert!(out.contains("All sessions signed out"), "{out}");
+    let op = pidge_engine::registry::find("accounts").unwrap();
+    let out = pidge_engine::registry::run(
+        &user,
+        &op,
+        serde_json::json!({ "action": "sign_out_everywhere" }),
+    )
+    .await
+    .unwrap()
+    .text;
+    assert!(out.contains("All sessions are signed out"), "{out}");
 
     assert_eq!(
         mcp_initialize(&h.app, Some(&access)).await,
@@ -1694,6 +1701,7 @@ fn connect_pending_for(owner: &str, mailbox: &str) -> PendingAuthorization {
         kind: PendingKind::Connect {
             owner: owner.into(),
             mailbox: Some(mailbox.into()),
+            provider: Default::default(),
         },
         ..pending_stub()
     }

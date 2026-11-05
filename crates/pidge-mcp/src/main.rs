@@ -2,28 +2,23 @@
 //!
 //! One binary: an OAuth 2.1 authorization server that delegates sign-in to
 //! Microsoft (`oauth`), a bearer-guarded streamable-HTTP MCP endpoint at
-//! `/mcp` (`tools`), and a secret store for the signing key and per-mailbox
+//! `/mcp` (the engine's operations, see `engine.rs`), and a secret store for the signing key and per-mailbox
 //! refresh tokens (`secrets`). See `deploy/azure/` for hosting.
 
+mod ai;
 mod ai_page;
 mod app;
-mod cache;
 mod config;
-mod contacts;
-mod context;
 mod download;
+mod engine;
 mod logging;
 mod mailbox;
 mod markitdown;
 mod oauth;
-mod prompts;
-mod render;
-mod review;
 mod secrets;
 mod state;
 #[cfg(test)]
 mod test_support;
-mod tools;
 mod users;
 
 use std::sync::Arc;

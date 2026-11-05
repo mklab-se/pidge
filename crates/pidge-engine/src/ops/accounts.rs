@@ -15,8 +15,10 @@ use crate::registry::{Meta, OpDef, Output, op};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AccountsInput {
-    /// `list` (default), `connect` (add a mailbox), `disconnect`, or `ai`
-    /// (how to set up the user's own AI key for sorting and send checks).
+    /// `list` (default), `connect` (add a mailbox), `disconnect`, `ai`
+    /// (how to set up the user's own AI key for sorting and send checks),
+    /// `ai_off` (remove that key), or `sign_out_everywhere` (end every
+    /// session of the user; every client must sign in again).
     pub action: Option<String>,
     /// For `connect`: `microsoft` (default; Outlook.com and Microsoft 365)
     /// or `google` (Gmail).
@@ -131,8 +133,14 @@ async fn run_accounts(user: Arc<User>, input: AccountsInput) -> OpResult<Output>
             Ok(Output::text(text))
         }
         "ai" => Ok(Output::text(user.host.ai_setup().await?)),
+        "ai_off" => {
+            let text = user.host.remove_ai_key().await?;
+            user.set_ai(None);
+            Ok(Output::text(text))
+        }
+        "sign_out_everywhere" => Ok(Output::text(user.host.sign_out_everywhere().await?)),
         other => Err(OpError::usage(format!(
-            "unknown action {other:?}; use list, connect, disconnect or ai"
+            "unknown action {other:?}; use list, connect, disconnect, ai, ai_off or sign_out_everywhere"
         ))),
     }
 }

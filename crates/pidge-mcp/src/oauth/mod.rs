@@ -53,6 +53,7 @@ use crate::state::{PENDING_TTL, PendingAuthorization, PendingKind, SharedState};
 use crate::users::{
     Identity, MailboxRecord, OwnershipError, RefreshCheck, UserRecord, log_store_error, user_hash,
 };
+use pidge_core::provider::ProviderKind;
 
 pub const SCOPE: &str = "mail";
 
@@ -108,6 +109,7 @@ fn consent_router() -> Router<SharedState> {
         .route("/authorize", get(authorize))
         .route("/authorize/go", get(authorize_go))
         .route("/callback", get(callback))
+        .route("/callback/google", get(google_callback))
         .route("/connect", get(connect))
         .route("/connect/go", get(connect_go))
 }
@@ -196,7 +198,7 @@ const LOGGED_NAME_CHARS: usize = 80;
 
 /// Client-chosen text as it may appear in a log line: one line, capped.
 fn logged(text: &str) -> String {
-    crate::render::cap_inline(&crate::render::one_line(text), LOGGED_NAME_CHARS)
+    pidge_engine::render::cap_inline(&pidge_engine::render::one_line(text), LOGGED_NAME_CHARS)
 }
 
 /// The host of `uri`, for logs and the consent page; empty if it has none.
@@ -633,7 +635,18 @@ async fn callback(
         PendingKind::SignIn => {
             sign_in_complete(&state, &pending, &email, &identity, success.tokens).await
         }
-        PendingKind::Connect { owner, mailbox } => {
+        PendingKind::Connect {
+            provider: ProviderKind::Google,
+            ..
+        } => pages::error(
+            StatusCode::BAD_REQUEST,
+            "This sign-in was for a Google mailbox. Start again from your AI client.",
+        ),
+        PendingKind::Connect {
+            owner,
+            mailbox,
+            provider: ProviderKind::Microsoft,
+        } => {
             if let Some(expected) = mailbox
                 && !expected.eq_ignore_ascii_case(&email)
             {
@@ -652,7 +665,16 @@ async fn callback(
                     ),
                 );
             }
-            connect_complete(&state, &pending, owner, &email, &identity, success.tokens).await
+            connect_complete(
+                &state,
+                &pending,
+                owner,
+                &email,
+                &identity,
+                success.tokens,
+                ProviderKind::Microsoft,
+            )
+            .await
         }
     }
 }
@@ -668,6 +690,7 @@ async fn bind_mailbox(
     owner: &str,
     identity: &Identity,
     tokens: TokenSet,
+    provider: ProviderKind,
 ) -> Option<Response> {
     match state
         .users
@@ -704,6 +727,7 @@ async fn bind_mailbox(
         owner: owner.to_string(),
         tokens,
         identity: Some(identity.clone()),
+        provider,
     };
     if let Err(e) = state.users.save_mailbox(&record, mailbox).await {
         log_store_error("storing mailbox tokens", mailbox, &e);
@@ -714,7 +738,7 @@ async fn bind_mailbox(
         ));
     }
     state.token_backend.forget(mailbox);
-    state.cache.invalidate_user(owner);
+    state.engines.forget(owner);
     None
 }
 
@@ -756,7 +780,17 @@ async fn sign_in_complete(
         return unverified_account();
     }
 
-    if let Some(resp) = bind_mailbox(state, pending, email, email, identity, tokens).await {
+    if let Some(resp) = bind_mailbox(
+        state,
+        pending,
+        email,
+        email,
+        identity,
+        tokens,
+        ProviderKind::Microsoft,
+    )
+    .await
+    {
         return resp;
     }
 
@@ -767,7 +801,7 @@ async fn sign_in_complete(
             log_store_error("saving user record", email, &e);
             return callback_failure(pending, "server_error", "could not create the user profile");
         }
-        state.cache.invalidate_user(email);
+        state.engines.forget(email);
     }
 
     let code = match state.signer.issue_code(
@@ -799,6 +833,7 @@ async fn sign_in_complete(
 /// The allowlist governs sign-in identities, so a connected mailbox needn't
 /// be on it; but an identity that *is* on it belongs to its own pidge user
 /// and is never bound to someone else. Stores nothing when refusing.
+#[allow(clippy::too_many_arguments)]
 async fn connect_complete(
     state: &SharedState,
     pending: &PendingAuthorization,
@@ -806,6 +841,7 @@ async fn connect_complete(
     mailbox: &str,
     identity: &Identity,
     tokens: TokenSet,
+    provider: ProviderKind,
 ) -> Response {
     if !state.config.is_allowed(owner) {
         tracing::warn!(user = %user_hash(owner), "connect refused: owner no longer allowed");
@@ -828,7 +864,9 @@ async fn connect_complete(
         );
     }
 
-    if let Some(resp) = bind_mailbox(state, pending, mailbox, owner, identity, tokens).await {
+    if let Some(resp) =
+        bind_mailbox(state, pending, mailbox, owner, identity, tokens, provider).await
+    {
         return resp;
     }
 
@@ -847,7 +885,7 @@ async fn connect_complete(
         log_store_error("saving user record", owner, &e);
         return callback_failure(pending, "server_error", "could not save the user profile");
     }
-    state.cache.invalidate_user(owner);
+    state.engines.forget(owner);
 
     tracing::info!(
         user = %user_hash(owner),
@@ -879,7 +917,7 @@ fn connect_pending(
     let key = p.state.as_deref()?;
     let pending = state.peek_pending(key)?;
     match &pending.kind {
-        PendingKind::Connect { owner, mailbox } => {
+        PendingKind::Connect { owner, mailbox, .. } => {
             Some((key.to_string(), owner.clone(), mailbox.clone(), pending))
         }
         PendingKind::SignIn => None,
@@ -1070,6 +1108,26 @@ async fn connect_go(
             "Open the connect link itself (not this page's address) and confirm the account there.",
         );
     }
+    if let PendingKind::Connect {
+        provider: ProviderKind::Google,
+        ..
+    } = pending.kind
+    {
+        let Some(cfg) = google_config(&state) else {
+            return pages::error(
+                StatusCode::BAD_REQUEST,
+                "This server cannot connect Gmail mailboxes (no Google client is configured).",
+            );
+        };
+        let google_url = pidge_gmail::auth::authorize_url(
+            &cfg,
+            &state.config.google_callback_url(),
+            &jwt::pkce_challenge(&pending.microsoft_verifier),
+            &key,
+            mailbox.as_deref(),
+        );
+        return to_microsoft(&state, &key, &google_url);
+    }
     // The link names the mailbox: preselect it at Microsoft so the account
     // picker's obvious choice is the right one.
     let microsoft_url = state.graph.auth().authorize_url_with_hint(
@@ -1079,6 +1137,108 @@ async fn connect_go(
         mailbox.as_deref(),
     );
     to_microsoft(&state, &key, &microsoft_url)
+}
+
+fn google_config(state: &SharedState) -> Option<pidge_gmail::GoogleOAuthConfig> {
+    state
+        .config
+        .engine
+        .google
+        .as_ref()
+        .map(|(id, secret)| pidge_gmail::GoogleOAuthConfig::new(id.clone(), secret.clone()))
+}
+
+/// Google's redirect after a Gmail connect: the same checks as the
+/// Microsoft callback (one browser per flow, the link's owner still
+/// allowed, the mailbox not another user's), then the mailbox is bound.
+async fn google_callback(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Query(p): Query<CallbackParams>,
+) -> Response {
+    let Some(pending) = p.state.as_deref().and_then(|s| state.take_pending(s)) else {
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "This sign-in link has expired or was already used. Start again from your AI client.",
+        );
+    };
+    let presented = consent_nonce_from(&headers, &CALLBACK_COOKIE, &state);
+    if pending.callback_nonce.is_none() || presented != pending.callback_nonce {
+        tracing::warn!("google callback refused: not from the browser that started it");
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "This sign-in was started in a different browser, so nothing was connected. \
+             Start again from your AI client and finish in the browser it opens.",
+        );
+    }
+    let PendingKind::Connect {
+        owner,
+        mailbox,
+        provider: ProviderKind::Google,
+    } = &pending.kind
+    else {
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            "This was not a Gmail connect link.",
+        );
+    };
+    if let Some(err) = p.error.as_deref() {
+        tracing::warn!(error = %error_code(err), "Google sign-in failed");
+        return callback_failure(
+            &pending,
+            "access_denied",
+            "Google sign-in was not completed",
+        );
+    }
+    let (Some(code), Some(cfg)) = (p.code.as_deref(), google_config(&state)) else {
+        return callback_failure(&pending, "server_error", "Google returned no code");
+    };
+    let (tokens, email) = match pidge_gmail::auth::exchange_code(
+        &state.http,
+        &cfg,
+        code,
+        &pending.microsoft_verifier,
+        &state.config.google_callback_url(),
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            tracing::warn!("redeeming the Google code failed");
+            return callback_failure(
+                &pending,
+                "server_error",
+                "could not complete Google sign-in",
+            );
+        }
+    };
+    let email = email.to_ascii_lowercase();
+    if let Some(expected) = mailbox
+        && !expected.eq_ignore_ascii_case(&email)
+    {
+        return pages::error(
+            StatusCode::BAD_REQUEST,
+            &format!(
+                "This link was for {expected}, but you signed in at Google as {email}. Nothing was connected."
+            ),
+        );
+    }
+    // Google's address is verified and stable for the account: pin it.
+    let identity = Identity {
+        tid: "google".into(),
+        oid: email.clone(),
+    };
+    let owner = owner.clone();
+    connect_complete(
+        &state,
+        &pending,
+        &owner,
+        &email,
+        &identity,
+        tokens,
+        ProviderKind::Google,
+    )
+    .await
 }
 
 fn urlencode(s: &str) -> String {
@@ -1245,7 +1405,7 @@ async fn rotate_refresh(
             if let Err(e) = state.users.save(&record).await {
                 log_store_error("revoking a reused refresh chain", sub, &e);
             }
-            state.cache.invalidate_user(sub);
+            state.engines.forget(sub);
             tracing::warn!(
                 user = %user_hash(sub),
                 "refresh token reused: this client's refresh tokens are revoked"

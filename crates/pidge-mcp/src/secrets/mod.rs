@@ -14,6 +14,7 @@ mod keyvault;
 
 pub use file::FileSecrets;
 pub use keyvault::KeyVaultSecrets;
+pub use keyvault::credential as azure_credential;
 
 pub const SIGNING_KEY_SECRET: &str = "jwt-signing-key";
 

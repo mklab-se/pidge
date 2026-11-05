@@ -85,6 +85,19 @@ pub trait Host: Send + Sync {
     /// POST an RFC 8058 one-click unsubscribe (public https only).
     async fn one_click_unsubscribe(&self, url: &str) -> Result<(), String>;
 
+    /// Revoke every session of the user (hosted only).
+    async fn sign_out_everywhere(&self) -> OpResult<String> {
+        Err(OpError::new(
+            ErrorKind::Unsupported,
+            "there are no server sessions to sign out of here",
+        ))
+    }
+
+    /// Remove the user's own AI key.
+    async fn remove_ai_key(&self) -> OpResult<String> {
+        Ok("Run `pidge ai disable` in a terminal.".into())
+    }
+
     /// The outbox has an entry due at `at`. MCP frontends ignore this (the
     /// engine's own timer sends it); the CLI starts a detached runner.
     fn outbox_due(&self, _at: DateTime<Utc>) {}

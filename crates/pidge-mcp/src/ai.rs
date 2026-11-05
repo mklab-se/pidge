@@ -6,11 +6,6 @@
 //! is built here from provider + model + key: no URL ever comes from
 //! input, so a user can't point the server at an internal address.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration as StdDuration, Instant};
-
-use ailloy::ErrorKind;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rmcp::schemars;
@@ -19,8 +14,6 @@ use sha2::{Digest, Sha256};
 
 use crate::secrets::SharedSecrets;
 
-/// How long a built client is reused before the secret is read again.
-const CLIENT_TTL: StdDuration = StdDuration::from_secs(10 * 60);
 /// Longest key accepted from the form.
 pub const MAX_KEY_LEN: usize = 512;
 
@@ -103,39 +96,7 @@ pub enum AiStatus {
     Unavailable,
 }
 
-impl AiStatus {
-    pub fn from_kind(kind: ErrorKind) -> Self {
-        match kind {
-            ErrorKind::QuotaExhausted => AiStatus::NoCredits,
-            ErrorKind::Auth => AiStatus::KeyRejected,
-            ErrorKind::RateLimited | ErrorKind::Unavailable | ErrorKind::Network => {
-                AiStatus::Unavailable
-            }
-            _ => AiStatus::Failing,
-        }
-    }
-
-    /// Needs the user to act (top up, new key); the provider is not called
-    /// on every review while in this state.
-    pub fn needs_user(self) -> bool {
-        matches!(
-            self,
-            AiStatus::NoCredits | AiStatus::KeyRejected | AiStatus::Failing
-        )
-    }
-
-    /// For `accounts_list`.
-    pub fn describe(self) -> &'static str {
-        match self {
-            AiStatus::Off => "off",
-            AiStatus::Ok => "ok",
-            AiStatus::NoCredits => "out of credits",
-            AiStatus::KeyRejected => "key rejected",
-            AiStatus::Failing => "failing",
-            AiStatus::Unavailable => "temporarily unavailable",
-        }
-    }
-}
+impl AiStatus {}
 
 /// The non-secret AI state kept on the user record.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -167,17 +128,6 @@ impl AiSettings {
             self.status_since = Some(now);
         }
         self.status = status;
-    }
-
-    /// One line for `accounts_list`.
-    pub fn line(&self) -> String {
-        match (self.status, &self.provider) {
-            (AiStatus::Off, _) => {
-                "AI sorting: off (accounts_connect_ai sets up the user's own key)".to_string()
-            }
-            (status, Some(p)) => format!("AI sorting: {} ({p})", status.describe()),
-            (status, None) => format!("AI sorting: {}", status.describe()),
-        }
     }
 }
 
@@ -259,35 +209,6 @@ pub fn build_client(secret: &AiSecret, endpoint: Option<&str>) -> Result<ailloy:
 }
 
 /// A cached client: when it was built, the client, and its label.
-type CachedClient = (Instant, Arc<ailloy::Client>, String);
-
-/// Built clients per user, reused for [`CLIENT_TTL`] and dropped whenever
-/// the user's key changes.
-#[derive(Default)]
-pub struct AiClients {
-    clients: Mutex<HashMap<String, CachedClient>>,
-}
-
-impl AiClients {
-    pub fn get(&self, user: &str) -> Option<(Arc<ailloy::Client>, String)> {
-        let map = self.clients.lock().expect("ai clients lock");
-        map.get(user)
-            .filter(|(at, _, _)| at.elapsed() < CLIENT_TTL)
-            .map(|(_, c, label)| (c.clone(), label.clone()))
-    }
-
-    pub fn put(&self, user: &str, client: Arc<ailloy::Client>, label: String) {
-        let mut map = self.clients.lock().expect("ai clients lock");
-        map.retain(|_, (at, _, _)| at.elapsed() < CLIENT_TTL);
-        map.insert(user.to_string(), (Instant::now(), client, label));
-    }
-
-    pub fn forget(&self, user: &str) {
-        self.clients.lock().expect("ai clients lock").remove(user);
-    }
-}
-
-/// The label stored on the record and used in cache keys: `TypeSafe jev-latest`.
 pub fn label(secret: &AiSecret) -> String {
     format!("{} {}", secret.provider.label(), secret.model)
 }
@@ -313,29 +234,6 @@ mod tests {
         assert!(n.starts_with("ai-") && n.len() == 19, "{n}");
         assert!(!n.contains("jane"));
         assert_eq!(n, secret_name("jane@example.com"));
-    }
-
-    #[test]
-    fn error_kinds_map_to_statuses() {
-        assert_eq!(
-            AiStatus::from_kind(ErrorKind::QuotaExhausted),
-            AiStatus::NoCredits
-        );
-        assert_eq!(AiStatus::from_kind(ErrorKind::Auth), AiStatus::KeyRejected);
-        assert_eq!(
-            AiStatus::from_kind(ErrorKind::RateLimited),
-            AiStatus::Unavailable
-        );
-        assert_eq!(
-            AiStatus::from_kind(ErrorKind::Network),
-            AiStatus::Unavailable
-        );
-        assert_eq!(
-            AiStatus::from_kind(ErrorKind::InvalidRequest),
-            AiStatus::Failing
-        );
-        assert!(AiStatus::NoCredits.needs_user());
-        assert!(!AiStatus::Unavailable.needs_user());
     }
 
     #[test]

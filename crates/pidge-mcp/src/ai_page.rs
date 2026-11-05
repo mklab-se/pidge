@@ -22,9 +22,9 @@ use axum::{Form, Router};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 
+use crate::ai::{self, AiProvider, AiSecret, AiStatus};
 use crate::oauth::jwt::random_id;
 use crate::oauth::pages;
-use crate::review::ai::{self, AiProvider, AiSecret, AiStatus};
 use crate::state::SharedState;
 use crate::users::user_hash;
 
@@ -114,7 +114,7 @@ async fn show(
 ) -> Response {
     let Some((key, link)) = p
         .state
-        .and_then(|k| state.review.ai_links.peek(&k).map(|l| (k, l)))
+        .and_then(|k| state.ai_links.peek(&k).map(|l| (k, l)))
     else {
         return expired();
     };
@@ -123,7 +123,7 @@ async fn show(
         Some(c) if link.nonces.contains(&c) => c,
         _ => {
             let nonce = random_id();
-            state.review.ai_links.add_nonce(&key, nonce.clone());
+            state.ai_links.add_nonce(&key, nonce.clone());
             nonce
         }
     };
@@ -149,7 +149,7 @@ async fn submit(
     headers: HeaderMap,
     Form(form): Form<SubmitForm>,
 ) -> Response {
-    let Some(link) = state.review.ai_links.peek(&form.state) else {
+    let Some(link) = state.ai_links.peek(&form.state) else {
         return expired();
     };
     let presented = cookie_nonce(&headers, &state);
@@ -203,7 +203,7 @@ async fn submit(
             "pidge could not save the key right now. Try again in a minute.",
         );
     }
-    state.review.ai_clients.forget(&link.owner);
+    state.engines.forget(&link.owner);
     let label = ai::label(&secret);
     let saved = async {
         let mut rec = state
@@ -223,8 +223,7 @@ async fn submit(
     if let Err(e) = saved {
         crate::users::log_store_error("saving ai status", &link.owner, &e);
     }
-    state.cache.invalidate_user(&link.owner);
-    state.review.ai_links.take(&form.state);
+    state.ai_links.take(&form.state);
     tracing::info!(user = %user_hash(&link.owner), provider = ?secret.provider, "ai key saved");
     pages::done(
         &link.owner,
@@ -237,7 +236,7 @@ async fn submit(
 
 /// One tiny request (a single yes/no on a one-line text) to check the key.
 async fn try_key(state: &SharedState, secret: &AiSecret) -> Result<(), ErrorKind> {
-    let client = ai::build_client(secret, state.review.ai_endpoint.as_deref())
+    let client = ai::build_client(secret, state.ai_endpoint.as_deref())
         .map_err(|_| ErrorKind::InvalidRequest)?;
     let q = Question::yes_no("Is this a greeting?");
     match tokio::time::timeout(
@@ -311,7 +310,7 @@ mod tests {
     use wiremock::{Mock, ResponseTemplate};
 
     use super::*;
-    use crate::tools::tests::ToolHarness;
+    use crate::test_support::ToolHarness;
 
     fn app(h: &ToolHarness) -> Router {
         router().with_state(h.state.clone())
@@ -393,7 +392,7 @@ mod tests {
     async fn a_tested_key_is_saved_and_the_status_turns_ok() {
         let h = ToolHarness::new(&["jane@example.com"]).await;
         mount_typesafe(&h, 200).await;
-        let key = h.state.review.ai_links.issue(&h.signin);
+        let key = h.state.ai_links.issue(&h.signin);
         let nonce = open(&h, &key).await;
         let resp = submit(&h, &key, Some(&nonce), &nonce).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -415,7 +414,7 @@ mod tests {
     async fn a_rejected_key_is_not_saved_and_the_form_says_why() {
         let h = ToolHarness::new(&["jane@example.com"]).await;
         mount_typesafe(&h, 401).await;
-        let key = h.state.review.ai_links.issue(&h.signin);
+        let key = h.state.ai_links.issue(&h.signin);
         let nonce = open(&h, &key).await;
         let page = body(submit(&h, &key, Some(&nonce), &nonce).await).await;
         assert!(page.contains("rejected this key"), "{page}");
@@ -426,7 +425,7 @@ mod tests {
     async fn a_link_preview_fetched_first_does_not_lock_the_user_out() {
         let h = ToolHarness::new(&["jane@example.com"]).await;
         mount_typesafe(&h, 200).await;
-        let key = h.state.review.ai_links.issue(&h.signin);
+        let key = h.state.ai_links.issue(&h.signin);
         // The chat app's link preview, then the user's own browser.
         open(&h, &key).await;
         let nonce = open(&h, &key).await;
@@ -439,7 +438,7 @@ mod tests {
     async fn the_form_only_works_in_the_browser_that_opened_the_link() {
         let h = ToolHarness::new(&["jane@example.com"]).await;
         mount_typesafe(&h, 200).await;
-        let key = h.state.review.ai_links.issue(&h.signin);
+        let key = h.state.ai_links.issue(&h.signin);
         let nonce = open(&h, &key).await;
         for (cookie, token) in [
             (None, nonce.as_str()),

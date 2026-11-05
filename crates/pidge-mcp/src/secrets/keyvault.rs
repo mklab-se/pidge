@@ -33,7 +33,10 @@ impl KeyVaultSecrets {
 
 /// Managed identity when one is configured for the process, developer
 /// tooling (`az login`) otherwise.
-fn credential() -> Result<Arc<dyn TokenCredential>> {
+/// The ambient Azure identity: the user-assigned managed identity named by
+/// `AZURE_CLIENT_ID` on Azure, `az login` on a workstation. Key Vault and the
+/// preferences container both use it.
+pub fn credential() -> Result<Arc<dyn TokenCredential>> {
     match std::env::var("AZURE_CLIENT_ID") {
         Ok(client_id) if !client_id.is_empty() => {
             tracing::info!("Key Vault: using user-assigned managed identity");
