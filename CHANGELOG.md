@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.0.0] - 2026-11-06
 
 pidge 2.0: a ground-up rebuild around one engine. Design and reasoning:
 `docs/superpowers/specs/2026-11-05-pidge-2-ground-up-rethink-design.md`. There is no compatibility
