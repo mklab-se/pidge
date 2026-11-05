@@ -12,6 +12,9 @@ pub enum ClientError {
     #[error("OS keychain unavailable: {0}")]
     Keychain(#[from] keyring::Error),
 
+    #[error("the keychain did not give pidge the sign-in for {email}; try again in a few minutes")]
+    KeychainRefused { email: String },
+
     #[error("could not determine the user config directory")]
     NoConfigDir,
 

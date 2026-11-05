@@ -20,6 +20,7 @@ pub use store::KeychainStore;
 pub use token_store::TokenStore;
 pub use tokens::TokenSet;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::error::ClientError;
@@ -33,6 +34,9 @@ pub struct AuthClient {
     authority_base: String,
     scope: String,
     backend: Arc<dyn TokenBackend>,
+    /// One per mailbox: parallel calls that find an expired token wait for
+    /// the one refresh instead of each reading the store and refreshing.
+    token_gates: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl AuthClient {
@@ -49,6 +53,7 @@ impl AuthClient {
             authority_base: config::AUTHORITY.to_string(),
             scope: config::scope_string(),
             backend: Arc::new(LocalBackend),
+            token_gates: Default::default(),
         })
     }
 
@@ -143,6 +148,7 @@ impl AuthClient {
             authority_base: authority_base.into(),
             scope: config::scope_string(),
             backend: Arc::new(LocalBackend),
+            token_gates: Default::default(),
         }
     }
 
@@ -184,6 +190,15 @@ impl AuthClient {
     /// config entry and falls back to the OS keychain if the email has no
     /// entry in `config.yaml` yet (e.g. mid-login).
     pub async fn get_valid_token(&self, email: &str) -> Result<String, ClientError> {
+        let gate = self
+            .token_gates
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(email.to_string())
+            .or_default()
+            .clone();
+        let _one_at_a_time = gate.lock().await;
+
         let tokens =
             self.backend
                 .load(email)

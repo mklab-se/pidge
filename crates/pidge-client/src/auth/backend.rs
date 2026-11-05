@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use pidge_core::TokenStorage;
@@ -63,7 +64,19 @@ fn token_cache() -> &'static Mutex<HashMap<String, TokenSet>> {
     CACHE.get_or_init(Mutex::default)
 }
 
-/// `read` only when `email` has nothing fresh in the cache.
+/// How long a refused or failed store read stands before pidge asks again.
+/// `pidge mcp serve` runs for hours, so a mistaken Deny must not last forever.
+const REFUSAL_STANDS: Duration = Duration::from_secs(300);
+
+/// Mailboxes whose store read just failed, and when. A dialog the user
+/// answered with Deny must not come straight back for the next call.
+fn refusals() -> &'static Mutex<HashMap<String, Instant>> {
+    static REFUSALS: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    REFUSALS.get_or_init(Mutex::default)
+}
+
+/// `read` only when `email` has nothing fresh in the cache and no recent
+/// refusal.
 fn load_cached(
     email: &str,
     read: impl FnOnce() -> Result<Option<TokenSet>, ClientError>,
@@ -74,7 +87,19 @@ fn load_cached(
     {
         return Ok(Some(tokens.clone()));
     }
-    let tokens = read()?;
+    let mut refused = refusals().lock().unwrap_or_else(|p| p.into_inner());
+    if refused
+        .get(email)
+        .is_some_and(|at| at.elapsed() < REFUSAL_STANDS)
+    {
+        return Err(ClientError::KeychainRefused {
+            email: email.to_string(),
+        });
+    }
+    let tokens = read().inspect_err(|_| {
+        refused.insert(email.to_string(), Instant::now());
+    })?;
+    refused.remove(email);
     match &tokens {
         Some(t) => cache.insert(email.to_string(), t.clone()),
         None => cache.remove(email),
@@ -284,6 +309,97 @@ mod tests {
         assert_eq!(asked.len(), 3);
         assert!(!asked[0].contains("MailboxSettings") && !asked[1].contains("MailboxSettings"));
         assert!(asked[2].contains("MailboxSettings"));
+    }
+
+    /// Reads like the keychain does: through the cache, counting each real
+    /// read, because on macOS each one can put a dialog in front of the user.
+    #[derive(Default)]
+    struct KeychainLike {
+        stored: Mutex<HashMap<String, TokenSet>>,
+        reads: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl TokenBackend for KeychainLike {
+        async fn load(&self, email: &str) -> Result<Option<TokenSet>, ClientError> {
+            load_cached(email, || {
+                *self.reads.lock().unwrap() += 1;
+                Ok(self.stored.lock().unwrap().get(email).cloned())
+            })
+        }
+
+        async fn save(&self, email: &str, tokens: &TokenSet) -> Result<(), ClientError> {
+            self.stored
+                .lock()
+                .unwrap()
+                .insert(email.to_string(), tokens.clone());
+            token_cache()
+                .lock()
+                .unwrap()
+                .insert(email.to_string(), tokens.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_calls_with_an_expired_token_read_and_refresh_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/v2.0/token"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_millis(50))
+                    .set_body_json(serde_json::json!({
+                        "access_token": "NEW_AT",
+                        "refresh_token": "NEW_RT",
+                        "expires_in": 3600
+                    })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let email = "parallel@example.com";
+        let backend = Arc::new(KeychainLike::default());
+        backend.stored.lock().unwrap().insert(
+            email.to_string(),
+            TokenSet {
+                access_token: "OLD_AT".into(),
+                refresh_token: "OLD_RT".into(),
+                expires_at: Utc::now() - Duration::seconds(60),
+                scope: None,
+            },
+        );
+        let auth = AuthClient::for_test("cid", server.uri()).with_backend(backend.clone());
+
+        let (a, b, c, d) = tokio::join!(
+            auth.get_valid_token(email),
+            auth.get_valid_token(email),
+            auth.get_valid_token(email),
+            auth.get_valid_token(email),
+        );
+
+        for token in [a, b, c, d] {
+            assert_eq!(token.unwrap(), "NEW_AT");
+        }
+        assert_eq!(*backend.reads.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_refused_keychain_is_not_asked_again() {
+        let reads = Mutex::new(0);
+        let read = || {
+            *reads.lock().unwrap() += 1;
+            Err(ClientError::Keychain(keyring::Error::Invalid(
+                "user".into(),
+                "canceled".into(),
+            )))
+        };
+
+        assert!(load_cached("refused@example.com", read).is_err());
+        assert!(load_cached("refused@example.com", read).is_err());
+
+        assert_eq!(*reads.lock().unwrap(), 1);
     }
 
     #[tokio::test]
