@@ -378,6 +378,10 @@ pub trait Provider: Send + Sync {
 
     async fn unsubscribe_headers(&self, id: &str) -> ProviderResult<UnsubscribeHeaders>;
 
+    /// Every internet header of a message, in the order the service gives
+    /// them.
+    async fn message_headers(&self, id: &str) -> ProviderResult<Vec<(String, String)>>;
+
     /// Apply one change to many messages; one result per id, in order.
     async fn apply(&self, ids: &[String], change: &MailChange) -> Vec<ProviderResult<()>>;
 

@@ -6,7 +6,9 @@ use pidge_core::provider::{
 };
 use pidge_core::{MessageFrom, ResponseStatus};
 use serde_json::{Value, json};
-use wiremock::matchers::{body_json, body_partial_json, header, method, path, query_param};
+use wiremock::matchers::{
+    body_json, body_partial_json, header, method, path, query_param, query_param_is_missing,
+};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::mime::{decode_b64url, encode_b64url};
@@ -430,6 +432,37 @@ async fn send_draft_posts_the_draft_id() {
         .mount(&server)
         .await;
     provider(&server).send_draft("r-42").await.unwrap();
+}
+
+#[tokio::test]
+async fn message_headers_ask_for_all_of_them() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/gmail/messages/m1"))
+        .and(query_param("format", "metadata"))
+        .and(query_param_is_missing("metadataHeaders"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "m1",
+            "payload": { "headers": [
+                { "name": "Received", "value": "from a" },
+                { "name": "Authentication-Results", "value": "dkim=pass" },
+            ]}
+        })))
+        .mount(&server)
+        .await;
+
+    let headers = provider(&server).message_headers("m1").await.unwrap();
+
+    assert_eq!(
+        headers,
+        vec![
+            ("Received".to_string(), "from a".to_string()),
+            (
+                "Authentication-Results".to_string(),
+                "dkim=pass".to_string()
+            ),
+        ]
+    );
 }
 
 #[tokio::test]

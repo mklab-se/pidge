@@ -204,7 +204,7 @@ all appointments today", ...).
 |---|---|
 | `mail_brief` | "Any new e-mail?": an inbox map and the mail that matters since the user last looked, with a reason each, and counts for the bulk. Moves "last seen" unless `mark_seen=false`; `importance=high` for "anything important?". |
 | `mail_find` | Find mail by words, sender, time (`since`, `before`), folder, kind (`receipt`, `newsletter`, `promotion`, ...), category, importance, unread, flagged or attachments; `count_only` for "how many". |
-| `mail_read` | One message, or its conversation with `thread=true`; shows attachments and, for invitations, the event id. |
+| `mail_read` | One message, or its conversation with `thread=true`, its internet headers with `headers=true`; shows attachments and, for invitations, the event id. |
 | `mail_triage` | Goes through the inbox with the user: sweeps of bulk mail, then small batches, then one by one, with a suggested action each; `decision=...` after every user answer. |
 | `mail_act` | Archive, delete, read, unread, flag, unflag, move, categorize, unsubscribe, classify, or undo, on ids or on a selector (`kind=receipt`). Answers at once; bulk and selector changes return a plan first. |
 | `mail_draft` | Write or revise a draft (new, reply, reply_all, forward); recipients may be names of people the user mails with. Returns `d4` and a preview. |

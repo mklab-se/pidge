@@ -682,6 +682,14 @@ impl Provider for GraphProvider {
         Ok(out)
     }
 
+    async fn message_headers(&self, id: &str) -> ProviderResult<Vec<(String, String)>> {
+        check_graph_id(id)?;
+        self.client
+            .fetch_message_headers(&self.address, id)
+            .await
+            .map_err(|e| self.err(e))
+    }
+
     async fn unsubscribe_headers(&self, id: &str) -> ProviderResult<UnsubscribeHeaders> {
         check_graph_id(id)?;
         let headers = self
@@ -1360,6 +1368,34 @@ mod tests {
         assert!(item.unread && item.flagged && item.has_attachments);
         assert_eq!(item.bulk_hint, Some(BulkHint::Other));
         assert_eq!(item.categories, vec!["Uppdrag".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn message_headers_come_back_in_order() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/me/messages/m1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "internetMessageHeaders": [
+                    { "name": "Received", "value": "from a" },
+                    { "name": "Authentication-Results", "value": "dkim=pass" },
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let headers = provider(&server).message_headers("m1").await.unwrap();
+
+        assert_eq!(
+            headers,
+            vec![
+                ("Received".to_string(), "from a".to_string()),
+                (
+                    "Authentication-Results".to_string(),
+                    "dkim=pass".to_string()
+                ),
+            ]
+        );
     }
 
     #[tokio::test]

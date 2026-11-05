@@ -792,6 +792,14 @@ impl Provider for GmailProvider {
             .collect()
     }
 
+    async fn message_headers(&self, id: &str) -> ProviderResult<Vec<(String, String)>> {
+        // Naming no header asks Gmail for all of them.
+        let m = self.get_metadata(id, &[]).await?;
+        Ok(m.payload
+            .map(|p| p.headers.into_iter().map(|h| (h.name, h.value)).collect())
+            .unwrap_or_default())
+    }
+
     async fn unsubscribe_headers(&self, id: &str) -> ProviderResult<UnsubscribeHeaders> {
         let m = self
             .get_metadata(id, &["List-Unsubscribe", "List-Unsubscribe-Post"])

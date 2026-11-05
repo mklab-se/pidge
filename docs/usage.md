@@ -40,6 +40,7 @@ pidge mail find --category Uppdrag --unread
 pidge mail find --text "Q3" --before 2025-06-01 --folder any   # searches the mailbox past the index
 pidge mail read m12
 pidge mail read m12 --thread
+pidge mail read m12 --headers          # delivery path, SPF, DKIM and DMARC results
 pidge mail attachment m12 faktura             # the attachment as text (markitdown when installed)
 pidge mail attachment m12 --mode save         # into Downloads
 ```
