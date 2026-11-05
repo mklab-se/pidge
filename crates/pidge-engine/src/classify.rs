@@ -122,10 +122,13 @@ pub fn judge_without_ai(m: &MailItem, prefs: &Prefs, known: &Known) -> Classific
     // Importance, with reasons a person would accept.
     let mut reasons: Vec<String> = Vec::new();
     let bulk = kind.is_some_and(Kind::is_bulk);
+    // A machine replying in a thread, or a receipt ending in "?", asks nothing.
+    let conversational =
+        !bulk && !crate::kinds::automated_sender(&from) && kind != Some(Kind::Receipt);
     if prefs.is_vip(&from) {
         reasons.push("vip".into());
     }
-    if !from_self && known.threads_with_sent.contains(&m.thread_id) && !bulk {
+    if !from_self && known.threads_with_sent.contains(&m.thread_id) && conversational {
         reasons.push("reply-to-you".into());
     }
     if m.is_invite {
@@ -136,7 +139,7 @@ pub fn judge_without_ai(m: &MailItem, prefs: &Prefs, known: &Known) -> Classific
         reasons.push("from-someone-you-write-to".into());
     }
     let text = format!("{} {}", m.subject, m.preview).to_lowercase();
-    if direct && !bulk && kind != Some(Kind::Notification) {
+    if direct && conversational {
         if DEADLINE_WORDS.iter().any(|w| text.contains(w)) {
             reasons.push("deadline".into());
         }
@@ -647,6 +650,22 @@ mod tests {
         };
         let c = judge_without_ai(&m("bob@y.se", false, "Hej", ""), &prefs, &known(&[], &[]));
         assert_eq!(c.importance, 2);
+    }
+
+    #[test]
+    fn machines_and_receipts_ask_nothing() {
+        let c = judge_without_ai(
+            &m(
+                "noreply@github.com",
+                true,
+                "[GitHub] Payment Receipt",
+                "Questions?",
+            ),
+            &Prefs::default(),
+            &known(&[], &["t1"]),
+        );
+        assert_eq!(c.kind.as_deref(), Some("receipt"));
+        assert!(c.reasons.is_empty(), "{:?}", c.reasons);
     }
 
     #[test]

@@ -6,6 +6,9 @@
 //! [`TokenBackend`] themselves so tokens can live in a per-user secret store
 //! instead; `AuthClient` and `GraphClient` don't care which.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use async_trait::async_trait;
 use pidge_core::TokenStorage;
 
@@ -49,14 +52,49 @@ impl LocalBackend {
     }
 }
 
+/// Tokens already read in this process. Every Graph call asks for its token,
+/// and on macOS a keychain read can put a dialog in front of the user, so the
+/// store is read once per mailbox. Held across the read, so parallel calls
+/// for a mailbox wait for that one read instead of each making their own.
+/// Tokens about to expire are read again: another pidge process may have
+/// refreshed them.
+fn token_cache() -> &'static Mutex<HashMap<String, TokenSet>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, TokenSet>>> = OnceLock::new();
+    CACHE.get_or_init(Mutex::default)
+}
+
+/// `read` only when `email` has nothing fresh in the cache.
+fn load_cached(
+    email: &str,
+    read: impl FnOnce() -> Result<Option<TokenSet>, ClientError>,
+) -> Result<Option<TokenSet>, ClientError> {
+    let mut cache = token_cache().lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(tokens) = cache.get(email)
+        && !tokens.needs_refresh()
+    {
+        return Ok(Some(tokens.clone()));
+    }
+    let tokens = read()?;
+    match &tokens {
+        Some(t) => cache.insert(email.to_string(), t.clone()),
+        None => cache.remove(email),
+    };
+    Ok(tokens)
+}
+
 #[async_trait]
 impl TokenBackend for LocalBackend {
     async fn load(&self, email: &str) -> Result<Option<TokenSet>, ClientError> {
-        TokenStore::load(email, Self::storage_for(email))
+        load_cached(email, || TokenStore::load(email, Self::storage_for(email)))
     }
 
     async fn save(&self, email: &str, tokens: &TokenSet) -> Result<(), ClientError> {
-        TokenStore::save(email, tokens, Self::storage_for(email))
+        TokenStore::save(email, tokens, Self::storage_for(email))?;
+        token_cache()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(email.to_string(), tokens.clone());
+        Ok(())
     }
 
     /// Opportunistic backfill: accounts added before pidge requested the
