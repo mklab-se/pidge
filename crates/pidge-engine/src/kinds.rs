@@ -200,17 +200,42 @@ const SOCIAL_DOMAINS: &[&str] = &[
 
 fn automated_sender(address: &str) -> bool {
     let local = address.split('@').next().unwrap_or("").to_ascii_lowercase();
-    ["noreply", "no-reply", "donotreply", "do-not-reply", "notifications", "notification", "notify", "alerts", "mailer-daemon", "bounce", "info", "news", "nyhetsbrev", "newsletter", "marketing", "kampanj", "hello", "team"]
-        .iter()
-        .any(|w| local == *w || local.starts_with(&format!("{w}.")) || local.starts_with(&format!("{w}-")) || local.starts_with(&format!("{w}+")) || local.contains("noreply") || local.contains("no-reply"))
+    [
+        "noreply",
+        "no-reply",
+        "donotreply",
+        "do-not-reply",
+        "notifications",
+        "notification",
+        "notify",
+        "alerts",
+        "mailer-daemon",
+        "bounce",
+        "info",
+        "news",
+        "nyhetsbrev",
+        "newsletter",
+        "marketing",
+        "kampanj",
+        "hello",
+        "team",
+    ]
+    .iter()
+    .any(|w| {
+        local == *w
+            || local.starts_with(&format!("{w}."))
+            || local.starts_with(&format!("{w}-"))
+            || local.starts_with(&format!("{w}+"))
+            || local.contains("noreply")
+            || local.contains("no-reply")
+    })
 }
 
 fn has_any(text: &str, words: &[&str]) -> bool {
     words.iter().any(|w| {
         if w.len() <= 4 && !w.contains(' ') && !w.contains('%') {
             // Short words must stand alone: "rea" is not "area".
-            text.split(|c: char| !c.is_alphanumeric())
-                .any(|t| t == *w)
+            text.split(|c: char| !c.is_alphanumeric()).any(|t| t == *w)
         } else {
             text.contains(w)
         }
@@ -238,7 +263,9 @@ pub fn signal_kind(m: &MailItem, knows_sender: bool) -> Option<Kind> {
     if knows_sender && !automated && !m.list_unsubscribe {
         return Some(Kind::Personal);
     }
-    if SOCIAL_DOMAINS.iter().any(|d| domain == *d || domain.ends_with(&format!(".{d}")))
+    if SOCIAL_DOMAINS
+        .iter()
+        .any(|d| domain == *d || domain.ends_with(&format!(".{d}")))
         || m.bulk_hint == Some(BulkHint::Social)
     {
         return Some(Kind::Social);
@@ -309,16 +336,51 @@ mod tests {
 
     #[test]
     fn receipts_by_subject_in_both_languages() {
-        assert_eq!(signal_kind(&m("no-reply@telia.se", "Din faktura för oktober", None, false), false), Some(Kind::Receipt));
-        assert_eq!(signal_kind(&m("orders@shop.com", "Your receipt from Shop", None, false), false), Some(Kind::Receipt));
+        assert_eq!(
+            signal_kind(
+                &m("no-reply@telia.se", "Din faktura för oktober", None, false),
+                false
+            ),
+            Some(Kind::Receipt)
+        );
+        assert_eq!(
+            signal_kind(
+                &m("orders@shop.com", "Your receipt from Shop", None, false),
+                false
+            ),
+            Some(Kind::Receipt)
+        );
     }
 
     #[test]
     fn promotions_need_a_bulk_signal() {
-        assert_eq!(signal_kind(&m("news@shop.se", "REA: 30% på allt", Some(BulkHint::Other), true), false), Some(Kind::Promotion));
-        assert_eq!(signal_kind(&m("x@y.se", "Hej", Some(BulkHint::Promotions), false), false), Some(Kind::Promotion));
+        assert_eq!(
+            signal_kind(
+                &m(
+                    "news@shop.se",
+                    "REA: 30% på allt",
+                    Some(BulkHint::Other),
+                    true
+                ),
+                false
+            ),
+            Some(Kind::Promotion)
+        );
+        assert_eq!(
+            signal_kind(
+                &m("x@y.se", "Hej", Some(BulkHint::Promotions), false),
+                false
+            ),
+            Some(Kind::Promotion)
+        );
         // A colleague writing "rea" is not a promotion.
-        assert_eq!(signal_kind(&m("anna@firma.se", "Om rean", Some(BulkHint::Focused), false), false), None);
+        assert_eq!(
+            signal_kind(
+                &m("anna@firma.se", "Om rean", Some(BulkHint::Focused), false),
+                false
+            ),
+            None
+        );
     }
 
     #[test]
@@ -329,13 +391,33 @@ mod tests {
 
     #[test]
     fn known_people_are_personal() {
-        assert_eq!(signal_kind(&m("anna@x.se", "Middag?", Some(BulkHint::Focused), false), true), Some(Kind::Personal));
+        assert_eq!(
+            signal_kind(
+                &m("anna@x.se", "Middag?", Some(BulkHint::Focused), false),
+                true
+            ),
+            Some(Kind::Personal)
+        );
     }
 
     #[test]
     fn notifications_and_social() {
-        assert_eq!(signal_kind(&m("noreply@bank.se", "Ny inloggning", None, false), false), Some(Kind::Notification));
-        assert_eq!(signal_kind(&m("messages-noreply@linkedin.com", "You appeared in 4 searches", None, true), false), Some(Kind::Social));
+        assert_eq!(
+            signal_kind(&m("noreply@bank.se", "Ny inloggning", None, false), false),
+            Some(Kind::Notification)
+        );
+        assert_eq!(
+            signal_kind(
+                &m(
+                    "messages-noreply@linkedin.com",
+                    "You appeared in 4 searches",
+                    None,
+                    true
+                ),
+                false
+            ),
+            Some(Kind::Social)
+        );
     }
 
     #[test]

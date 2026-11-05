@@ -267,7 +267,11 @@ impl Prefs {
 
     /// The earliest "seen" watermark of the given mailboxes.
     pub fn seen_since(&self, accounts: &[String]) -> Option<DateTime<Utc>> {
-        accounts.iter().filter_map(|a| self.seen.get(a)).min().copied()
+        accounts
+            .iter()
+            .filter_map(|a| self.seen.get(a))
+            .min()
+            .copied()
     }
 
     pub fn is_vip(&self, address: &str) -> bool {

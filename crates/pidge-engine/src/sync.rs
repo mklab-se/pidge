@@ -124,7 +124,11 @@ async fn refresh_people(user: &User, provider: &dyn Provider) {
 
 /// Bring the given mailboxes up to date, waiting at most `budget`, then
 /// classify what is new.
-pub async fn ensure(user: &Arc<User>, providers: &[Arc<dyn Provider>], budget: Duration) -> SyncReport {
+pub async fn ensure(
+    user: &Arc<User>,
+    providers: &[Arc<dyn Provider>],
+    budget: Duration,
+) -> SyncReport {
     let mut handles = Vec::new();
     for p in providers {
         let (u, p) = (user.clone(), p.clone());
@@ -140,7 +144,9 @@ pub async fn ensure(user: &Arc<User>, providers: &[Arc<dyn Provider>], budget: D
                 account,
                 "needs to sign in again (accounts action=connect)".into(),
             )),
-            Ok(Ok(Err(e))) => report.failed.push((account, format!("could not sync: {e}"))),
+            Ok(Ok(Err(e))) => report
+                .failed
+                .push((account, format!("could not sync: {e}"))),
             Ok(Err(_)) => report.failed.push((account, "sync stopped".into())),
             // Still running: it carries on in the background.
             Err(_) => report.loading.push(account),

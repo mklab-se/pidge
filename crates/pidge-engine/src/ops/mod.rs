@@ -159,9 +159,7 @@ pub fn since_point(
     let today = now.with_timezone(&tz).date_naive();
     let midnight = |d: NaiveDate| parse_point(&d.to_string(), tz, false).map_err(OpError::usage);
     match s {
-        "last_seen" | "new" | "unseen" => {
-            Ok(seen.unwrap_or_else(|| now - Duration::days(1)))
-        }
+        "last_seen" | "new" | "unseen" => Ok(seen.unwrap_or_else(|| now - Duration::days(1))),
         "today" => midnight(today),
         "yesterday" => midnight(today - Duration::days(1)),
         "this_week" | "week" => {
@@ -223,7 +221,11 @@ pub async fn to_filter(
         has_attachments: sel.has_attachments,
         from: sel.from.clone().filter(|s| !s.trim().is_empty()),
         text: sel.text.clone().filter(|s| !s.trim().is_empty()),
-        kinds: sel.kinds()?.iter().map(|k| k.as_str().to_string()).collect(),
+        kinds: sel
+            .kinds()?
+            .iter()
+            .map(|k| k.as_str().to_string())
+            .collect(),
         category: sel.category.clone(),
         ..Default::default()
     };
@@ -401,7 +403,10 @@ pub fn resolve_people(user: &User, tokens: &[String]) -> OpResult<Vec<MessageFro
         if t.is_empty() {
             continue;
         }
-        if let Some((name, addr)) = t.rsplit_once('<').map(|(n, a)| (n.trim(), a.trim_end_matches('>').trim())) {
+        if let Some((name, addr)) = t
+            .rsplit_once('<')
+            .map(|(n, a)| (n.trim(), a.trim_end_matches('>').trim()))
+        {
             out.push(MessageFrom {
                 name: name.trim_matches('"').to_string(),
                 address: addr.to_string(),
@@ -427,7 +432,10 @@ pub fn resolve_people(user: &User, tokens: &[String]) -> OpResult<Vec<MessageFro
             Some(exact[0])
         } else if found.len() == 1 {
             Some(&found[0])
-        } else if found.len() > 1 && (found[0].sent_to * 3 + found[0].received_from) >= 4 * (found[1].sent_to * 3 + found[1].received_from).max(1) {
+        } else if found.len() > 1
+            && (found[0].sent_to * 3 + found[0].received_from)
+                >= 4 * (found[1].sent_to * 3 + found[1].received_from).max(1)
+        {
             // One person clearly dominates.
             Some(&found[0])
         } else {
@@ -450,11 +458,10 @@ pub fn resolve_people(user: &User, tokens: &[String]) -> OpResult<Vec<MessageFro
                     .map(|p| format!("{} <{}>", render::inline(&p.name), p.address))
                     .collect::<Vec<_>>()
                     .join("; ");
-                return Err(OpError::new(
-                    ErrorKind::Ambiguous,
-                    format!("{t:?} could be: {list}"),
-                )
-                .with_hint("ask the user which one and pass the address"));
+                return Err(
+                    OpError::new(ErrorKind::Ambiguous, format!("{t:?} could be: {list}"))
+                        .with_hint("ask the user which one and pass the address"),
+                );
             }
         }
     }
@@ -468,7 +475,9 @@ pub fn valid_address(a: &str) -> bool {
     };
     !local.is_empty()
         && domain.contains('.')
-        && !a.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"'))
+        && !a.chars().any(|c| {
+            c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"')
+        })
 }
 
 #[cfg(test)]
@@ -478,17 +487,25 @@ mod tests {
     #[test]
     fn since_understands_people_words() {
         let tz: Tz = "Europe/Stockholm".parse().unwrap();
-        let now = DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z").unwrap().to_utc();
-        let seen = DateTime::parse_from_rfc3339("2026-11-05T07:30:00Z").unwrap().to_utc();
+        let now = DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        let seen = DateTime::parse_from_rfc3339("2026-11-05T07:30:00Z")
+            .unwrap()
+            .to_utc();
         assert_eq!(since_point("last_seen", tz, now, Some(seen)).unwrap(), seen);
         assert_eq!(
             since_point("today", tz, now, None).unwrap(),
-            DateTime::parse_from_rfc3339("2026-11-04T23:00:00Z").unwrap().to_utc()
+            DateTime::parse_from_rfc3339("2026-11-04T23:00:00Z")
+                .unwrap()
+                .to_utc()
         );
         // 7d includes today: six days back at midnight.
         assert_eq!(
             since_point("7d", tz, now, None).unwrap(),
-            DateTime::parse_from_rfc3339("2026-10-29T23:00:00Z").unwrap().to_utc()
+            DateTime::parse_from_rfc3339("2026-10-29T23:00:00Z")
+                .unwrap()
+                .to_utc()
         );
         assert!(since_point("whenever", tz, now, None).is_err());
     }

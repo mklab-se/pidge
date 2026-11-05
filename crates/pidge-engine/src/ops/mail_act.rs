@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use pidge_core::MessageFrom;
 use pidge_core::provider::{DraftKind, DraftSpec, Folder, MailChange};
 use pidge_core::unsubscribe::{UnsubscribeMethod, mailto_subject, parse_unsubscribe};
-use pidge_core::MessageFrom;
 use pidge_store::{Filter, HandleKind, Stored, UndoEntry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -135,13 +135,10 @@ async fn run_act(user: Arc<User>, input: ActInput) -> OpResult<Output> {
     }
     // Apply a plan.
     if let Some(p) = &input.plan {
-        let plan: MailPlan = user
-            .store
-            .get_doc("mailplan", p.trim())?
-            .ok_or_else(|| {
-                OpError::not_found(format!("plan {p} has expired or was already applied"))
-                    .with_hint("make it again with the same mail_act call")
-            })?;
+        let plan: MailPlan = user.store.get_doc("mailplan", p.trim())?.ok_or_else(|| {
+            OpError::not_found(format!("plan {p} has expired or was already applied"))
+                .with_hint("make it again with the same mail_act call")
+        })?;
         let mut targets = plan.targets.clone();
         let exclude: Vec<(String, String)> = input
             .exclude
@@ -168,7 +165,9 @@ async fn run_act(user: Arc<User>, input: ActInput) -> OpResult<Output> {
         return Err(OpError::usage("give ids or selector fields, not both"));
     }
     if !by_ids && !by_selector {
-        return Err(OpError::usage("which messages? give ids=[m12] or selector fields such as kind=promotion"));
+        return Err(OpError::usage(
+            "which messages? give ids=[m12] or selector fields such as kind=promotion",
+        ));
     }
     validate(&user, &input).await?;
     let prefs = user.prefs().await;
@@ -198,7 +197,15 @@ async fn run_act(user: Arc<User>, input: ActInput) -> OpResult<Output> {
                     .iter()
                     .filter_map(|(a, id)| user.store.get(a, id).ok().flatten())
                     .collect();
-                make_plan(&user, &input, &action, stored, Vec::new(), format!("{} selected messages", targets.len())).await
+                make_plan(
+                    &user,
+                    &input,
+                    &action,
+                    stored,
+                    Vec::new(),
+                    format!("{} selected messages", targets.len()),
+                )
+                .await
             }
             _ => execute(&user, &input, &targets).await,
         };
@@ -254,7 +261,9 @@ async fn validate(user: &User, input: &ActInput) -> OpResult<()> {
         }
         "classify" => {
             if input.set_kind.is_none() && input.set_category.is_none() {
-                return Err(OpError::usage("classify needs set_kind and/or set_category"));
+                return Err(OpError::usage(
+                    "classify needs set_kind and/or set_category",
+                ));
             }
             if let Some(k) = &input.set_kind
                 && Kind::parse(k).is_none()
@@ -312,23 +321,38 @@ async fn make_plan(
         Some(now + chrono::Duration::minutes(PLAN_TTL_MINUTES)),
     )?;
     let what = match action {
-        "move" => format!("move to {}", render::inline(input.to.as_deref().unwrap_or(""))),
+        "move" => format!(
+            "move to {}",
+            render::inline(input.to.as_deref().unwrap_or(""))
+        ),
         other => other.to_string(),
     };
-    let mut text = format!(
-        "Plan {handle}: {what} {} {description}.",
-        matched.len()
-    );
+    let mut text = format!("Plan {handle}: {what} {} {description}.", matched.len());
     // Where the judgement came from, so the user can trust the count.
     let by: BTreeMap<String, usize> = matched.iter().fold(BTreeMap::new(), |mut m, s| {
-        let src = s.class.kind_source.clone().unwrap_or_else(|| "filter".into());
+        let src = s
+            .class
+            .kind_source
+            .clone()
+            .unwrap_or_else(|| "filter".into());
         *m.entry(src).or_default() += 1;
         m
     });
     if input.selector.kind.is_some() && !by.is_empty() {
         let parts: Vec<String> = by
             .iter()
-            .map(|(k, n)| format!("{n} by {}", match k.as_str() { "signal" => "mail signals", "ai" => "your AI", "rule" => "your rules", "harness" => "earlier decisions", other => other }))
+            .map(|(k, n)| {
+                format!(
+                    "{n} by {}",
+                    match k.as_str() {
+                        "signal" => "mail signals",
+                        "ai" => "your AI",
+                        "rule" => "your rules",
+                        "harness" => "earlier decisions",
+                        other => other,
+                    }
+                )
+            })
             .collect();
         text.push_str(&format!(" ({})", parts.join(", ")));
     }
@@ -369,13 +393,11 @@ async fn make_plan(
 
 /// The provider change for an action, per account (moves need the
 /// folder's id in that account).
-async fn change_for(
-    user: &User,
-    input: &ActInput,
-    account: &str,
-) -> OpResult<Option<MailChange>> {
+async fn change_for(user: &User, input: &ActInput, account: &str) -> OpResult<Option<MailChange>> {
     Ok(Some(match input.action.as_str() {
-        "archive" => MailChange::Move { to: Folder::Archive },
+        "archive" => MailChange::Move {
+            to: Folder::Archive,
+        },
         "delete" => MailChange::Delete,
         "read" => MailChange::MarkRead,
         "unread" => MailChange::MarkUnread,
@@ -406,10 +428,16 @@ async fn change_for(
     }))
 }
 
-async fn execute(user: &Arc<User>, input: &ActInput, targets: &[(String, String)]) -> OpResult<Output> {
+async fn execute(
+    user: &Arc<User>,
+    input: &ActInput,
+    targets: &[(String, String)],
+) -> OpResult<Output> {
     let action = input.action.as_str();
     if targets.is_empty() {
-        return Ok(Output::text("Nothing to do: none of those messages are left."));
+        return Ok(Output::text(
+            "Nothing to do: none of those messages are left.",
+        ));
     }
     let mut by_account: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (a, id) in targets {
@@ -536,10 +564,16 @@ async fn undo(user: &Arc<User>) -> OpResult<Output> {
                 .push(e.id.clone());
         }
         if now.item.unread != e.unread {
-            reads.entry((e.account.clone(), e.unread)).or_default().push(e.id.clone());
+            reads
+                .entry((e.account.clone(), e.unread))
+                .or_default()
+                .push(e.id.clone());
         }
         if now.item.flagged != e.flagged {
-            flags.entry((e.account.clone(), e.flagged)).or_default().push(e.id.clone());
+            flags
+                .entry((e.account.clone(), e.flagged))
+                .or_default()
+                .push(e.id.clone());
         }
         if now.item.categories != e.categories {
             cats.push(e.clone());
@@ -549,22 +583,57 @@ async fn undo(user: &Arc<User>) -> OpResult<Output> {
     user.enqueue(async move {
         let mut jobs: Vec<(String, Vec<String>, MailChange)> = Vec::new();
         for ((a, f), ids) in moves {
-            jobs.push((a, ids, MailChange::Move { to: Folder::from_key(&f) }));
+            jobs.push((
+                a,
+                ids,
+                MailChange::Move {
+                    to: Folder::from_key(&f),
+                },
+            ));
         }
         for ((a, unread), ids) in reads {
-            jobs.push((a, ids, if unread { MailChange::MarkUnread } else { MailChange::MarkRead }));
+            jobs.push((
+                a,
+                ids,
+                if unread {
+                    MailChange::MarkUnread
+                } else {
+                    MailChange::MarkRead
+                },
+            ));
         }
         for ((a, flagged), ids) in flags {
-            jobs.push((a, ids, if flagged { MailChange::Flag { due: None } } else { MailChange::Unflag }));
+            jobs.push((
+                a,
+                ids,
+                if flagged {
+                    MailChange::Flag { due: None }
+                } else {
+                    MailChange::Unflag
+                },
+            ));
         }
         for e in cats {
-            jobs.push((e.account.clone(), vec![e.id.clone()], MailChange::SetCategories { categories: e.categories.clone() }));
+            jobs.push((
+                e.account.clone(),
+                vec![e.id.clone()],
+                MailChange::SetCategories {
+                    categories: e.categories.clone(),
+                },
+            ));
         }
         for (a, ids, change) in jobs {
             if let Ok(p) = u.provider(&a) {
-                let failed = p.apply(&ids, &change).await.iter().filter(|r| r.is_err()).count();
+                let failed = p
+                    .apply(&ids, &change)
+                    .await
+                    .iter()
+                    .filter(|r| r.is_err())
+                    .count();
                 if failed > 0 {
-                    let _ = u.store.push_note(&format!("undo could not restore {failed} messages in {a}"));
+                    let _ = u
+                        .store
+                        .push_note(&format!("undo could not restore {failed} messages in {a}"));
                 }
             }
         }
@@ -619,15 +688,24 @@ async fn unsubscribe(user: &Arc<User>, targets: &[(String, String)]) -> OpResult
             headers.push(("List-Unsubscribe-Post".to_string(), v));
         }
         match parse_unsubscribe(&headers) {
-            UnsubscribeMethod::OneClickPost(url) => match user.host.one_click_unsubscribe(&url).await {
-                Ok(()) => done += 1,
-                Err(_) => failed += 1,
-            },
-            UnsubscribeMethod::Mailto { address, subject, body } => {
+            UnsubscribeMethod::OneClickPost(url) => {
+                match user.host.one_click_unsubscribe(&url).await {
+                    Ok(()) => done += 1,
+                    Err(_) => failed += 1,
+                }
+            }
+            UnsubscribeMethod::Mailto {
+                address,
+                subject,
+                body,
+            } => {
                 check_cap(user, 1).await?;
                 let spec = DraftSpec {
                     kind: DraftKind::New,
-                    to: vec![MessageFrom { name: String::new(), address }],
+                    to: vec![MessageFrom {
+                        name: String::new(),
+                        address,
+                    }],
                     cc: vec![],
                     bcc: vec![],
                     subject: Some(mailto_subject(subject.as_deref())),
@@ -650,7 +728,15 @@ async fn unsubscribe(user: &Arc<User>, targets: &[(String, String)]) -> OpResult
     }
     let mut parts = Vec::new();
     if done + mailed > 0 {
-        parts.push(format!("{} unsubscribed{}", done + mailed, if mailed > 0 { format!(" ({mailed} by e-mail)") } else { String::new() }));
+        parts.push(format!(
+            "{} unsubscribed{}",
+            done + mailed,
+            if mailed > 0 {
+                format!(" ({mailed} by e-mail)")
+            } else {
+                String::new()
+            }
+        ));
     }
     if !manual.is_empty() {
         parts.push(format!(

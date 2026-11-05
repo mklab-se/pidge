@@ -204,10 +204,15 @@ impl User {
     pub fn scope(&self, account: Option<&str>) -> OpResult<Vec<Arc<dyn Provider>>> {
         let all = self.providers();
         if all.is_empty() {
-            return Err(OpError::new(ErrorKind::NotFound, "no mailbox is connected yet")
-                .with_hint("accounts action=connect adds one"));
+            return Err(
+                OpError::new(ErrorKind::NotFound, "no mailbox is connected yet")
+                    .with_hint("accounts action=connect adds one"),
+            );
         }
-        match account.map(str::trim).filter(|a| !a.is_empty() && *a != "all") {
+        match account
+            .map(str::trim)
+            .filter(|a| !a.is_empty() && *a != "all")
+        {
             None => Ok(all),
             Some(a) => Ok(vec![self.provider(a)?]),
         }

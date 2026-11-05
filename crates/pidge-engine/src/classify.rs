@@ -330,7 +330,9 @@ pub async fn classify_pending(user: &Arc<User>, budget: Duration) {
         if ai.is_some() && open && worth_asking {
             ask.push((s, c));
         } else {
-            let _ = user.store.set_classification(&s.item.account, &s.item.id, &c);
+            let _ = user
+                .store
+                .set_classification(&s.item.account, &s.item.id, &c);
         }
     }
     let Some(client) = ai else { return };
@@ -413,11 +415,15 @@ pub fn record_verdict(
         c.category = Some(cat.to_string());
         c.category_source = Some("harness".into());
     }
-    user.store.set_classification(&s.item.account, &s.item.id, &c)
+    user.store
+        .set_classification(&s.item.account, &s.item.id, &c)
 }
 
 /// Group counts of a set, for maps and plans.
-pub fn count_by<'a>(items: impl Iterator<Item = &'a Stored>, key: impl Fn(&Stored) -> Option<String>) -> Vec<(String, usize)> {
+pub fn count_by<'a>(
+    items: impl Iterator<Item = &'a Stored>,
+    key: impl Fn(&Stored) -> Option<String>,
+) -> Vec<(String, usize)> {
     let mut map: HashMap<String, usize> = HashMap::new();
     for s in items {
         if let Some(k) = key(s) {
@@ -479,7 +485,12 @@ mod tests {
     #[test]
     fn a_question_from_someone_you_write_to_is_important() {
         let c = judge_without_ai(
-            &m("anna@x.se", true, "Avtal", "Kan du skriva under före fredag?"),
+            &m(
+                "anna@x.se",
+                true,
+                "Avtal",
+                "Kan du skriva under före fredag?",
+            ),
             &Prefs::default(),
             &known(&["anna@x.se"], &[]),
         );

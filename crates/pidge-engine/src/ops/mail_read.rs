@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use crate::classify::count_by;
 use crate::ctx::User;
 use crate::error::{OpError, OpResult};
-use crate::ops::{Selector, item_json, item_line, post_filter, resolve_message, since_point, to_filter};
+use crate::ops::{
+    Selector, item_json, item_line, post_filter, resolve_message, since_point, to_filter,
+};
 use crate::registry::{Meta, OpDef, Output, op};
 use crate::{render, sync};
 
@@ -136,7 +138,9 @@ async fn run_brief(user: Arc<User>, input: BriefInput) -> OpResult<Output> {
         })
         .await?;
     }
-    text.push_str("next: mail_read <id> reads one; mail_triage goes through the inbox with the user");
+    text.push_str(
+        "next: mail_read <id> reads one; mail_triage goes through the inbox with the user",
+    );
     let items: Vec<Value> = new.iter().map(item_json).collect();
     Ok(Output::new(
         text,
@@ -178,9 +182,11 @@ pub fn inbox_map(
     let waiting = inbox
         .iter()
         .filter(|s| {
-            s.class.reasons.iter().any(|r| {
-                matches!(r.as_str(), "question" | "needs-reply" | "reply-to-you")
-            }) && s.item.unread
+            s.class
+                .reasons
+                .iter()
+                .any(|r| matches!(r.as_str(), "question" | "needs-reply" | "reply-to-you"))
+                && s.item.unread
         })
         .count();
     let oldest_unread = inbox
@@ -218,7 +224,11 @@ pub fn inbox_map(
             text.push_str(&format!(" New: {} ({}).", new.len(), words.join(", ")));
         }
         data["new"] = json!(new.len());
-        data["new_by_category"] = json!(groups.into_iter().collect::<std::collections::BTreeMap<_, _>>());
+        data["new_by_category"] = json!(
+            groups
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>()
+        );
     }
     let mut extra = Vec::new();
     if waiting > 0 {
@@ -308,7 +318,10 @@ async fn run_find(user: Arc<User>, input: FindInput) -> OpResult<Output> {
         || filter.since.is_some_and(|s| s < window_start);
     let searchable = sel.text.is_some() || sel.from.is_some();
     let mut searched = false;
-    if (reaches_back || (found.len() < limit && searchable)) && sel.kind.is_none() && sel.category.is_none() {
+    if (reaches_back || (found.len() < limit && searchable))
+        && sel.kind.is_none()
+        && sel.category.is_none()
+    {
         searched = true;
         let q = SearchQuery {
             text: sel.text.clone(),
@@ -358,11 +371,7 @@ async fn run_find(user: Arc<User>, input: FindInput) -> OpResult<Output> {
             text.push_str(" Try text= or from= to search the whole mailbox.");
         }
     } else {
-        text.push_str(&format!(
-            "{} of {total}: {}\n",
-            found.len(),
-            sel.describe()
-        ));
+        text.push_str(&format!("{} of {total}: {}\n", found.len(), sel.describe()));
         for s in &found {
             text.push_str(&item_line(&user, s, tz, now, true));
             text.push('\n');
@@ -441,7 +450,11 @@ async fn run_read(user: Arc<User>, input: ReadInput) -> OpResult<Output> {
         ));
         h
     };
-    text.push_str(&format!("{}{}", t.handle, account_suffix(&user, &t.account)));
+    text.push_str(&format!(
+        "{}{}",
+        t.handle,
+        account_suffix(&user, &t.account)
+    ));
     text.push('\n');
     text.push_str(&header(&msg));
     let mut data = json!({
@@ -460,10 +473,22 @@ async fn run_read(user: Arc<User>, input: ReadInput) -> OpResult<Output> {
         if !atts.is_empty() {
             let names: Vec<String> = atts
                 .iter()
-                .map(|a| format!("{} ({} KB)", render::inline(&a.name), a.size_bytes.div_ceil(1024)))
+                .map(|a| {
+                    format!(
+                        "{} ({} KB)",
+                        render::inline(&a.name),
+                        a.size_bytes.div_ceil(1024)
+                    )
+                })
                 .collect();
             text.push_str(&format!("Attachments: {}\n", names.join(", ")));
-            data["attachments"] = json!(atts.iter().map(|a| json!({ "name": a.name, "size": a.size_bytes, "type": a.content_type })).collect::<Vec<_>>());
+            data["attachments"] = json!(
+                atts.iter()
+                    .map(
+                        |a| json!({ "name": a.name, "size": a.size_bytes, "type": a.content_type })
+                    )
+                    .collect::<Vec<_>>()
+            );
         }
     }
     if msg.is_invite
@@ -472,7 +497,9 @@ async fn run_read(user: Arc<User>, input: ReadInput) -> OpResult<Output> {
         let h = user
             .store
             .handle(pidge_store::HandleKind::Event, &t.account, ev)?;
-        text.push_str(&format!("Invitation: event {h} (calendar_respond id={h})\n"));
+        text.push_str(&format!(
+            "Invitation: event {h} (calendar_respond id={h})\n"
+        ));
         data["event"] = json!(h);
     }
     if input.thread.unwrap_or(false) {
@@ -480,7 +507,9 @@ async fn run_read(user: Arc<User>, input: ReadInput) -> OpResult<Output> {
         let mut parts = Vec::new();
         for m in thread.iter().rev() {
             let own = strip_quoted_history(&body_text(m));
-            let handle = user.store.handle(pidge_store::HandleKind::Message, &t.account, &m.id)?;
+            let handle = user
+                .store
+                .handle(pidge_store::HandleKind::Message, &t.account, &m.id)?;
             parts.push(format!(
                 "--- {handle} {} {}\n{}",
                 render::local(m.received_at, tz),
@@ -488,7 +517,10 @@ async fn run_read(user: Arc<User>, input: ReadInput) -> OpResult<Output> {
                 render::cap(&own, THREAD_CAP)
             ));
         }
-        text.push_str(&format!("Thread ({} messages, newest first):\n", thread.len()));
+        text.push_str(&format!(
+            "Thread ({} messages, newest first):\n",
+            thread.len()
+        ));
         text.push_str(&render::untrusted(&parts.join("\n")));
         data["thread"] = json!(thread.len());
     } else {
@@ -500,7 +532,7 @@ async fn run_read(user: Arc<User>, input: ReadInput) -> OpResult<Output> {
         crate::ops::mail_act::change_now(
             &user,
             &t.account,
-            &[t.id.clone()],
+            std::slice::from_ref(&t.id),
             pidge_core::provider::MailChange::MarkRead,
             "read",
         )
@@ -564,7 +596,10 @@ async fn run_attachment(user: Arc<User>, input: AttachmentInput) -> OpResult<Out
         .filter(|a| !a.is_inline)
         .collect();
     if atts.is_empty() {
-        return Err(OpError::not_found(format!("{} has no attachments", t.handle)));
+        return Err(OpError::not_found(format!(
+            "{} has no attachments",
+            t.handle
+        )));
     }
     let att = match &input.name {
         Some(n) => {
@@ -574,7 +609,10 @@ async fn run_attachment(user: Arc<User>, input: AttachmentInput) -> OpResult<Out
                 .ok_or_else(|| {
                     OpError::not_found(format!(
                         "no attachment matching {n:?}; there are: {}",
-                        atts.iter().map(|a| render::inline(&a.name)).collect::<Vec<_>>().join(", ")
+                        atts.iter()
+                            .map(|a| render::inline(&a.name))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ))
                 })?
         }
@@ -587,7 +625,10 @@ async fn run_attachment(user: Arc<User>, input: AttachmentInput) -> OpResult<Out
             .host
             .deliver_attachment(&t.account, &t.id, att, bytes)
             .await?;
-        return Ok(Output::new(text.clone(), json!({ "name": att.name, "result": text })));
+        return Ok(Output::new(
+            text.clone(),
+            json!({ "name": att.name, "result": text }),
+        ));
     }
     let ct = att.content_type.to_ascii_lowercase();
     let lower = att.name.to_ascii_lowercase();
@@ -611,11 +652,20 @@ async fn run_attachment(user: Arc<User>, input: AttachmentInput) -> OpResult<Out
             .await
         {
             Some(Ok(md)) => md,
-            Some(Err(e)) => return Err(OpError::new(crate::error::ErrorKind::Unsupported, format!("could not convert {name}: {e}")).with_hint("mode=save gets the file")),
+            Some(Err(e)) => {
+                return Err(OpError::new(
+                    crate::error::ErrorKind::Unsupported,
+                    format!("could not convert {name}: {e}"),
+                )
+                .with_hint("mode=save gets the file"));
+            }
             None => {
                 return Err(OpError::new(
                     crate::error::ErrorKind::Unsupported,
-                    format!("this pidge cannot convert {name} ({}) to text", att.content_type),
+                    format!(
+                        "this pidge cannot convert {name} ({}) to text",
+                        att.content_type
+                    ),
                 )
                 .with_hint("mode=save gets the file; installing markitdown enables conversion"));
             }
@@ -625,7 +675,10 @@ async fn run_attachment(user: Arc<User>, input: AttachmentInput) -> OpResult<Out
     let rest: String = content.chars().skip(offset).collect();
     let total = content.chars().count();
     let shown = render::cap(&rest, ATTACHMENT_CAP);
-    let mut text = format!("{name} ({} of {total} characters from {offset}):\n", rest.chars().count().min(ATTACHMENT_CAP));
+    let mut text = format!(
+        "{name} ({} of {total} characters from {offset}):\n",
+        rest.chars().count().min(ATTACHMENT_CAP)
+    );
     text.push_str(&render::untrusted(&shown));
     if offset + ATTACHMENT_CAP < total {
         text.push_str(&format!(
@@ -635,5 +688,8 @@ async fn run_attachment(user: Arc<User>, input: AttachmentInput) -> OpResult<Out
             offset + ATTACHMENT_CAP
         ));
     }
-    Ok(Output::new(text, json!({ "name": att.name, "total_chars": total, "offset": offset })))
+    Ok(Output::new(
+        text,
+        json!({ "name": att.name, "total_chars": total, "offset": offset }),
+    ))
 }

@@ -168,9 +168,18 @@ pub fn event_line(handle: &str, e: &Event, tz: Tz, show_account: bool) -> String
         let s = e.start.at.with_timezone(&tz);
         let en = e.end.at.with_timezone(&tz);
         if s.date_naive() == en.date_naive() {
-            format!("{}-{} {}", s.format("%H:%M"), en.format("%H:%M"), s.format("%a %-d %b"))
+            format!(
+                "{}-{} {}",
+                s.format("%H:%M"),
+                en.format("%H:%M"),
+                s.format("%a %-d %b")
+            )
         } else {
-            format!("{} - {}", s.format("%a %-d %b %H:%M"), en.format("%a %-d %b %H:%M"))
+            format!(
+                "{} - {}",
+                s.format("%a %-d %b %H:%M"),
+                en.format("%a %-d %b %H:%M")
+            )
         }
     };
     let mut facts: Vec<String> = Vec::new();
@@ -185,10 +194,13 @@ pub fn event_line(handle: &str, e: &Event, tz: Tz, show_account: bool) -> String
         .filter(|a| a.kind != pidge_core::AttendeeKind::Resource)
         .count();
     if !e.is_organizer && !e.organizer.address.is_empty() {
-        facts.push(format!("organizer {}", name_of(&MessageFrom {
-            name: e.organizer.name.clone(),
-            address: e.organizer.address.clone(),
-        })));
+        facts.push(format!(
+            "organizer {}",
+            name_of(&MessageFrom {
+                name: e.organizer.name.clone(),
+                address: e.organizer.address.clone(),
+            })
+        ));
     }
     if others > 0 {
         facts.push(format!("me: {}", my_response(e)));
@@ -238,10 +250,16 @@ mod tests {
     #[test]
     fn when_reads_like_speech() {
         let tz: Tz = "Europe/Stockholm".parse().unwrap();
-        let now = DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z").unwrap().to_utc();
-        let t = DateTime::parse_from_rfc3339("2026-11-05T08:14:00Z").unwrap().to_utc();
+        let now = DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z")
+            .unwrap()
+            .to_utc();
+        let t = DateTime::parse_from_rfc3339("2026-11-05T08:14:00Z")
+            .unwrap()
+            .to_utc();
         assert_eq!(when(t, tz, now), "09:14");
-        let old = DateTime::parse_from_rfc3339("2026-10-03T08:14:00Z").unwrap().to_utc();
+        let old = DateTime::parse_from_rfc3339("2026-10-03T08:14:00Z")
+            .unwrap()
+            .to_utc();
         assert_eq!(when(old, tz, now), "3 Oct");
     }
 }
