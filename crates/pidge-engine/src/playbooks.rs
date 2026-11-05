@@ -111,6 +111,9 @@ pub fn skill(ops: &[OpDef], prefix: &SkillPrefix) -> String {
     ));
     s.push_str("Exit codes: 0 ok, 2 bad input, 3 a mailbox must sign in again (`pidge account add`), 4 not found or ambiguous, 5 throttled, 6 not allowed by the user's policy.\n\n");
     s.push_str("## What the user says, and what to run\n\n");
+    s.push_str(&format!(
+        "Operations are named as the MCP tools are: `mail_triage decision=yes` is `{p} mail triage yes`, `mail_act action=archive kind=receipt` is `{p} mail act archive --kind receipt` (an input `set_kind` is the flag `--set-kind`; a switch that is on by default turns off with `--name=false`).\n\n"
+    ));
     for (ask, how) in RECIPES {
         s.push_str(&format!("- **{ask}**: {how}\n"));
     }
