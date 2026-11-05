@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use pidge_core::MessageFrom;
@@ -448,6 +449,7 @@ async fn execute(
         .filter_map(|(a, id)| user.store.lookup(HandleKind::Message, a, id).ok().flatten())
         .collect();
     let mut extra = String::new();
+    let mut failed = 0;
     match action {
         "classify" => {
             let kind = input.set_kind.as_deref().and_then(Kind::parse);
@@ -471,12 +473,14 @@ async fn execute(
                 let Some(change) = change_for(user, input, account).await? else {
                     continue;
                 };
-                change_now(user, account, ids, change, action).await;
+                failed += change_counted(user, account, ids, change, action).await;
             }
         }
     }
     let n = targets.len();
-    let mut text = if n == 1 {
+    let mut text = if failed > 0 {
+        format!("{} {} of {n}; {failed} failed.", verb(action), n - failed)
+    } else if n == 1 {
         format!("{}.", verb(action))
     } else {
         format!("{} {n}.", verb(action))
@@ -492,7 +496,7 @@ async fn execute(
     }
     Ok(Output::new(
         text,
-        json!({ "action": action, "count": n, "ids": handles }),
+        json!({ "action": action, "count": n, "failed": failed, "ids": handles }),
     ))
 }
 
@@ -504,6 +508,19 @@ pub async fn change_now(
     change: MailChange,
     label: &str,
 ) {
+    change_counted(user, account, ids, change, label).await;
+}
+
+/// [`change_now`], returning how many messages are known to have failed: on
+/// the CLI the change has finished by now; on a server it is still running,
+/// so 0, and a failure reaches the next answer as a note.
+async fn change_counted(
+    user: &Arc<User>,
+    account: &str,
+    ids: &[String],
+    change: MailChange,
+    label: &str,
+) -> usize {
     let before = match user.store.apply_local(account, ids, &change) {
         Ok(b) => b,
         Err(e) => {
@@ -515,6 +532,8 @@ pub async fn change_now(
     let _ = user.store.push_undo(&group, label, &before);
     let (u, account, ids) = (user.clone(), account.to_string(), ids.to_vec());
     let label = label.to_string();
+    let failures = Arc::new(AtomicUsize::new(0));
+    let counted = failures.clone();
     user.enqueue(async move {
         let Ok(p) = u.provider(&account) else { return };
         let results = p.apply(&ids, &change).await;
@@ -529,6 +548,7 @@ pub async fn change_now(
                 }
             }
         }
+        counted.store(failed, Ordering::SeqCst);
         if failed > 0 {
             let what = if failed == 1 {
                 "a message".to_string()
@@ -542,6 +562,7 @@ pub async fn change_now(
         }
     })
     .await;
+    failures.load(Ordering::SeqCst)
 }
 
 async fn undo(user: &Arc<User>) -> OpResult<Output> {

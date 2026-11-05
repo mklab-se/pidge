@@ -331,12 +331,14 @@ impl Provider for Fake {
     }
 }
 
-struct TestHost;
+struct TestHost {
+    frontend: Frontend,
+}
 
 #[async_trait]
 impl Host for TestHost {
     fn frontend(&self) -> Frontend {
-        Frontend::Mcp
+        self.frontend
     }
     fn default_timezone(&self) -> String {
         "Europe/Stockholm".into()
@@ -447,7 +449,9 @@ async fn setup() -> (Arc<User>, Arc<Fake>) {
         Arc::new(Store::in_memory().unwrap()),
         Arc::new(MemoryPrefs::default()),
         vec![fake.clone() as Arc<dyn Provider>],
-        Arc::new(TestHost),
+        Arc::new(TestHost {
+            frontend: Frontend::Mcp,
+        }),
     );
     (user, fake)
 }
@@ -538,6 +542,39 @@ async fn background_failures_are_reported_on_the_next_call() {
         "{}",
         next.text
     );
+}
+
+#[tokio::test]
+async fn the_cli_answer_counts_what_actually_failed() {
+    let fake = Arc::new(Fake::default());
+    *fake.mail.lock().unwrap() = inbox();
+    let user = User::new(
+        "test",
+        Arc::new(Store::in_memory().unwrap()),
+        Arc::new(MemoryPrefs::default()),
+        vec![fake.clone() as Arc<dyn Provider>],
+        Arc::new(TestHost {
+            frontend: Frontend::Cli,
+        }),
+    );
+    call(&user, "mail_find", json!({})).await.unwrap();
+    *fake.fail_apply.lock().unwrap() = true;
+    let h = handle_of(&user, "p1");
+
+    let out = call(
+        &user,
+        "mail_act",
+        json!({ "action": "archive", "ids": [h] }),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        out.text.contains("Archived 0 of 1; 1 failed."),
+        "{}",
+        out.text
+    );
+    assert_eq!(out.data["failed"], 1);
 }
 
 #[tokio::test]

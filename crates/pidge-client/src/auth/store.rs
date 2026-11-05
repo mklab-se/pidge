@@ -3,10 +3,29 @@
 //! Service name: "pidge". Account name: the user's email.
 //! The value is a JSON-serialized `TokenSet`.
 
+use std::time::Duration;
+
 use crate::auth::tokens::TokenSet;
 use crate::error::ClientError;
 
 const SERVICE_NAME: &str = "pidge";
+
+/// How long pidge waits for the keychain, which on macOS may be waiting for
+/// the user to answer a dialog nobody is looking at.
+const KEYCHAIN_PATIENCE: Duration = Duration::from_secs(120);
+
+/// Run `work` on its own thread and stop waiting after `patience`. `None`
+/// means it did not finish; the thread is left to end by itself.
+fn within<T: Send + 'static>(
+    patience: Duration,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    rx.recv_timeout(patience).ok()
+}
 
 pub struct KeychainStore;
 
@@ -18,7 +37,12 @@ impl KeychainStore {
     /// Load tokens for an email. Returns `None` if there's no entry for that account.
     pub fn load(email: &str) -> Result<Option<TokenSet>, ClientError> {
         let entry = Self::entry(email)?;
-        match entry.get_password() {
+        let answer = within(KEYCHAIN_PATIENCE, move || entry.get_password()).ok_or_else(|| {
+            ClientError::KeychainTimeout {
+                email: email.to_string(),
+            }
+        })?;
+        match answer {
             Ok(blob) => {
                 let tokens: TokenSet = serde_json::from_str(&blob)?;
                 Ok(Some(tokens))
@@ -32,7 +56,11 @@ impl KeychainStore {
     pub fn save(email: &str, tokens: &TokenSet) -> Result<(), ClientError> {
         let blob = serde_json::to_string(tokens)?;
         let entry = Self::entry(email)?;
-        entry.set_password(&blob).map_err(ClientError::Keychain)
+        within(KEYCHAIN_PATIENCE, move || entry.set_password(&blob))
+            .ok_or_else(|| ClientError::KeychainTimeout {
+                email: email.to_string(),
+            })?
+            .map_err(ClientError::Keychain)
     }
 
     /// Remove tokens for an email. No-op if no entry exists.
@@ -54,6 +82,22 @@ mod tests {
 
     use super::*;
     use chrono::{Duration, Utc};
+
+    #[test]
+    fn slow_work_is_given_up_on() {
+        let patience = std::time::Duration::from_millis(20);
+        let slow = || std::thread::sleep(std::time::Duration::from_secs(5));
+        let started = std::time::Instant::now();
+
+        assert_eq!(within(patience, slow), None);
+
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn work_in_time_returns_its_result() {
+        assert_eq!(within(std::time::Duration::from_secs(5), || 7), Some(7));
+    }
 
     #[test]
     fn token_blob_serializes_and_deserializes() {

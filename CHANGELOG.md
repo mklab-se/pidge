@@ -10,6 +10,8 @@ with 1.x commands, tool names or ids; mailboxes, tokens and settings carry over.
 
 ### Added
 
+- **Keychain:** parallel calls share one token refresh, a refused keychain is not asked again for
+  five minutes, and pidge gives up with a clear message after two minutes without an answer.
 - **Message headers:** `pidge mail read m12 --headers` (`headers=true` in MCP) shows the internet
   headers, for delivery problems and SPF, DKIM and DMARC checks.
 - **Gmail and Google Calendar** next to Microsoft 365 and Outlook.com (`pidge account add --provider
