@@ -1,6 +1,6 @@
 //! `pidge mcp status [url]`: show the current hosted MCP session: which
 //! server, when its access token expires, which backend it's stored under,
-//! then the live `accounts_list` text for that session.
+//! then the live `accounts` list text for that session.
 //!
 //! With no `url`, the server is resolved from the on-disk index the
 //! keychain itself can't provide (see [`pidge_client::mcp::McpTokenStore::list`]):
@@ -95,14 +95,17 @@ pub async fn run(
     Ok(())
 }
 
-/// Initialize the session and fetch `accounts_list`'s text. A `401` on
+/// Initialize the session and fetch `accounts` list's text. A `401` on
 /// either step (the locally-held token looked fresh, but the server had
 /// already revoked it; see [`RefreshingRpc::initialize`]) surfaces as
 /// [`ClientError::SessionExpired`], which the caller remaps the same way as
 /// [`session_or_error`]'s `Expired` case.
 async fn accounts_list(rpc: &mut RefreshingRpc) -> Result<String> {
     rpc.initialize().await?;
-    Ok(rpc.call_tool("accounts_list", json!({})).await?.text)
+    Ok(rpc
+        .call_tool("accounts", json!({ "action": "list" }))
+        .await?
+        .text)
 }
 
 /// Turn a [`SessionLookup`] into `status`'s outcome: the found session, or a

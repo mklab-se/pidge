@@ -1084,7 +1084,18 @@ async fn connect(
         urlencode(&key)
     );
     with_consent_cookie(
-        pages::confirm_connect(&owner, mailbox.as_deref(), &go),
+        pages::confirm_connect(
+            &owner,
+            mailbox.as_deref(),
+            &go,
+            match pending.kind {
+                PendingKind::Connect {
+                    provider: ProviderKind::Google,
+                    ..
+                } => "Google",
+                _ => "Microsoft",
+            },
+        ),
         &CONNECT_CONSENT,
         &nonce,
         &state,

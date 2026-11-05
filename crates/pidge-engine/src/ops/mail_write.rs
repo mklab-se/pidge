@@ -151,7 +151,7 @@ async fn run_draft(user: Arc<User>, input: DraftInput) -> OpResult<Output> {
     )?;
     let mut text = preview(&handle, &account, &draft);
     if input.send.unwrap_or(false) {
-        let sent = queue_send(&user, &handle, false).await?;
+        let sent = queue_send(&user, &handle, SendHow::Hold).await?;
         text = format!("{}\n{}", sent.text, text);
         return Ok(Output::new(
             text,
@@ -258,10 +258,11 @@ async fn run_send(user: Arc<User>, input: SendInput) -> OpResult<Output> {
         .ok_or_else(|| OpError::usage("which draft? give draft=d4"))?;
     let t = resolve_draft(&user, d)?;
     match action.as_str() {
-        "send" => queue_send(&user, &t.handle, false).await,
-        "now" | "approve" => queue_send(&user, &t.handle, true).await,
+        "send" => queue_send(&user, &t.handle, SendHow::Hold).await,
+        "now" => queue_send(&user, &t.handle, SendHow::Now).await,
+        "approve" => queue_send(&user, &t.handle, SendHow::Approve).await,
         "cancel" => {
-            let Some(mut e) = user.store.outbox_entry(&t.handle)? else {
+            let Some(e) = user.store.outbox_entry(&t.handle)? else {
                 return Ok(Output::text(format!(
                     "{} is not waiting to be sent.",
                     t.handle
@@ -270,7 +271,6 @@ async fn run_send(user: Arc<User>, input: SendInput) -> OpResult<Output> {
             if e.status == "sending" {
                 return Err(OpError::usage("too late: it is being sent right now"));
             }
-            e.status = "cancelled".into();
             user.store.remove_outbox(&t.handle)?;
             Ok(Output::new(
                 format!("Cancelled. {} stays a draft.", t.handle),
@@ -283,8 +283,19 @@ async fn run_send(user: Arc<User>, input: SendInput) -> OpResult<Output> {
     }
 }
 
-/// Put a draft in the outbox (or send it, when `now`).
-pub async fn queue_send(user: &Arc<User>, handle: &str, now: bool) -> OpResult<Output> {
+/// How a send was asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendHow {
+    /// Through the hold (or into approval when the mail is sensitive).
+    Hold,
+    /// Skip the hold; sensitive mail still waits for approval.
+    Now,
+    /// The user's second yes: send now, sensitive or not.
+    Approve,
+}
+
+/// Put a draft in the outbox (or send it at once).
+pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResult<Output> {
     let t = resolve_draft(user, handle)?;
     let provider = user.provider(&t.account)?;
     let prefs = user.prefs().await;
@@ -321,10 +332,8 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, now: bool) -> OpResult<O
     if existing.is_none() {
         check_cap(user, 1).await?;
     }
-    let approved = now
-        || existing
-            .as_ref()
-            .is_some_and(|e| e.status == "approval" && now);
+    let approved = how == SendHow::Approve;
+    let now = how != SendHow::Hold;
     let needs_approval = risk.level == Level::Approval || prefs.policy.send == SendMode::Confirm;
     let mut entry = OutboxEntry {
         draft: t.handle.clone(),

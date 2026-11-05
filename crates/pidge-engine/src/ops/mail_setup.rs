@@ -394,7 +394,14 @@ async fn run_setup(user: Arc<User>, input: SetupInput) -> OpResult<Output> {
                         pol.send = match value.as_str() {
                             "hold" => SendMode::Hold,
                             "confirm" => SendMode::Confirm,
-                            "allow" => SendMode::Allow,
+                            // Sending without a hold or approval is not
+                            // something an agent can switch on for itself:
+                            // the user edits prefs.json for that.
+                            "allow" => {
+                                return Err(OpError::usage(
+                                    "send=allow (no hold, no approval) can only be set by the user in prefs.json; hold is the default",
+                                ));
+                            }
                             "deny" => SendMode::Deny,
                             _ => return Err(OpError::usage("send is hold, confirm, allow or deny")),
                         }
@@ -407,7 +414,7 @@ async fn run_setup(user: Arc<User>, input: SetupInput) -> OpResult<Output> {
                         pol.sends_per_hour = value
                             .parse::<usize>()
                             .map_err(|_| OpError::usage("a number"))?
-                            .min(200)
+                            .clamp(1, 60)
                     }
                     _ => return Err(OpError::usage("policy keys: send, notify, bulk, delete, bulk_threshold, sends_per_hour")),
                 }

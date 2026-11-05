@@ -151,7 +151,11 @@ async fn dispatch(matches: &clap::ArgMatches, json: bool) -> Result<()> {
         }) => {
             let user = local::open_user(Frontend::Cli).await?;
             let t = pidge_engine::ops::resolve_message(&user, &id)?;
-            let msg = user.provider(&t.account)?.get_message(&t.id).await.map_err(pidge_engine::OpError::from)?;
+            let msg = user
+                .provider(&t.account)?
+                .get_message(&t.id)
+                .await
+                .map_err(pidge_engine::OpError::from)?;
             print!("{}", msg.body_content);
             Ok(())
         }

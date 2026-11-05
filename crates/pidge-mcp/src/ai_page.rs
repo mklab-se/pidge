@@ -1,5 +1,5 @@
 //! `/ai`: the page where a user enters their own AI provider key, opened
-//! from a link minted by `accounts_connect_ai`. The key goes from the
+//! from a link minted by the `accounts` tool (`action=ai`). The key goes from the
 //! browser straight to this server and into the user's own secret; it
 //! never passes through the AI harness or its model.
 //!

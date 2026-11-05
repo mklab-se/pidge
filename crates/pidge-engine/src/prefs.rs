@@ -188,8 +188,9 @@ pub enum SendMode {
 #[serde(default)]
 pub struct Policy {
     pub send: SendMode,
-    /// Invitations, attendee changes, cancellations, RSVP messages and
-    /// unsubscribe e-mails: mail to other people that is not a send.
+    /// Calendar changes that e-mail other people: invitations, attendee
+    /// changes, time changes of meetings, cancellations. (RSVPs and
+    /// unsubscribe e-mails are not planned, but count against the cap.)
     pub notify: Mode,
     /// Changes to more than `bulk_threshold` messages or events, and every
     /// selector-based change.

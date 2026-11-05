@@ -36,8 +36,6 @@
 #     <domain>     bind this domain (must match the bound one, if any)
 #     -            unbind the live domain
 #   PIDGE_MCP_CUTOVER
-#   PIDGE_MCP_MIN_REPLICAS   (default 1; 0 scales to zero)
-#   PIDGE_GOOGLE_CLIENT_ID / PIDGE_GOOGLE_CLIENT_SECRET (optional, for Gmail)
 #     unset/empty  keep the live state: if the live public URL is
 #                  https://<custom domain>, stay cut over; otherwise don't
 #     1            make https://<custom domain> the public URL (OAuth issuer);
@@ -46,6 +44,11 @@
 #     0            the FQDN is the public URL. If the app was cut over, this
 #                  reverts it, and the custom-domain origin becomes a legacy
 #                  issuer so tokens minted under it keep validating
+#
+# Not state-preserving (always taken from the environment, so CI must set
+# them as repository variables/secrets to keep them):
+#   PIDGE_MCP_MIN_REPLICAS   default 1; 0 scales to zero
+#   PIDGE_GOOGLE_CLIENT_ID / PIDGE_GOOGLE_CLIENT_SECRET   optional, for Gmail
 #
 # PIDGE_MCP_LEGACY_ISSUERS on the live app is carried over (plus whatever the
 # run adds), so a grace granted by an earlier cutover or revert isn't lost.

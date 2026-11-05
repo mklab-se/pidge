@@ -63,21 +63,22 @@ pub fn done(owner: &str, message: &str) -> Response {
 /// The interstitial before a connect link goes to Microsoft: names the
 /// mailbox being connected (when the link was issued for one) and the pidge
 /// account it will join, with a Continue link to `go_url`.
-pub fn confirm_connect(owner: &str, mailbox: Option<&str>, go_url: &str) -> Response {
+/// `at` names the sign-in service: "Microsoft" or "Google".
+pub fn confirm_connect(owner: &str, mailbox: Option<&str>, go_url: &str, at: &str) -> Response {
     let message = match mailbox {
         Some(mailbox) => format!(
             "You are about to connect the mailbox {mailbox} to the pidge account {owner}. \
-             At Microsoft, sign in as {mailbox}; signing in with any other account connects nothing. \
+             At {at}, sign in as {mailbox}; signing in with any other account connects nothing. \
              Continue only if {owner} is your pidge account."
         ),
         None => format!(
             "You are about to connect a mailbox to the pidge account {owner}. \
-             At Microsoft, sign in with the mailbox you want to connect. \
+             At {at}, sign in with the mailbox you want to connect. \
              Continue only if {owner} is your pidge account."
         ),
     };
     let action = format!(
-        r#"<p><a class="go" href="{}">Continue to Microsoft sign-in</a></p>"#,
+        r#"<p><a class="go" href="{}">Continue to {at} sign-in</a></p>"#,
         html_escape(go_url)
     );
     let picture = art::CONNECT.html(
@@ -252,7 +253,12 @@ mod tests {
             ai_error(StatusCode::BAD_REQUEST, "no"),
             link_unavailable(),
             done("jane@example.com", "ok"),
-            confirm_connect("jane@example.com", None, "https://x.test/connect/go"),
+            confirm_connect(
+                "jane@example.com",
+                None,
+                "https://x.test/connect/go",
+                "Microsoft",
+            ),
             confirm_sign_in(Some("App"), "claude.ai", "https://x.test/authorize/go"),
             ai_form("jane@example.com", "s", "t", None),
         ] {
@@ -287,11 +293,12 @@ async fn dump_pages() {
                 "kristofer.liljeblad@live.com",
                 Some("kristofer@mklab.se"),
                 "#",
+                "Microsoft",
             ),
         ),
         (
             "connect-any",
-            confirm_connect("jane@example.com", None, "#"),
+            confirm_connect("jane@example.com", None, "#", "Microsoft"),
         ),
         ("sign-in", confirm_sign_in(Some("Claude"), "claude.ai", "#")),
         (
@@ -318,6 +325,7 @@ async fn dump_pages() {
                 "a.really.long.signin.address@subdomain.example.com",
                 Some("another.quite.long.mailbox.name@example.co.uk"),
                 "#",
+                "Google",
             ),
         ),
     ];

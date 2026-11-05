@@ -709,6 +709,19 @@ async fn invite_this_person_adds_to_the_list_after_a_plan() {
 }
 
 #[tokio::test]
+async fn an_agent_cannot_switch_off_the_send_hold() {
+    let (user, _) = setup().await;
+    let err = call(
+        &user,
+        "mail_setup",
+        json!({ "action": "policy", "key": "send", "value": "allow" }),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("prefs.json"), "{}", err.message);
+}
+
+#[tokio::test]
 async fn bodies_are_wrapped_as_untrusted() {
     let (user, _) = setup().await;
     call(&user, "mail_find", json!({})).await.unwrap();

@@ -2,7 +2,7 @@
 //! migrate every locally signed-in Microsoft account onto it.
 //!
 //! The migration loop (skip already-connected mailboxes, call
-//! `accounts_connect` for the rest, wait for each to finish) is factored out
+//! `accounts action=connect` for the rest, wait for each to finish) is factored out
 //! as [`run_migration`] over a small [`McpCalls`] trait so it can be driven
 //! against a fake in tests, with no network involved.
 //!
@@ -10,7 +10,7 @@
 //! URL, each connect link, the Enter prompt, "already connected" notes, and
 //! warnings) goes to stderr, unconditionally; `--json` does not suppress
 //! it, since the connect link is often the only way to finish the flow.
-//! Stdout carries only the one final payload: the `accounts_list` text, or
+//! Stdout carries only the one final payload: the `accounts` list text, or
 //! (with `--json`) the `{"server","connected","skipped"}` summary.
 
 use std::collections::HashSet;
@@ -56,7 +56,7 @@ pub async fn run(url: String, store: TokenStorage, yes: bool, json_output: bool)
 /// memory settles it; see docs/mcp.md "Make sure the agent picks pidge".
 const ROUTING_HINT: &str = "Tip: so your AI harness always uses pidge for mail, add this line to its instructions \
 or memory (CLAUDE.md, AGENTS.md, project instructions):\n\
-  E-mail and calendar go through the pidge MCP tools (mail_*, calendar_*, accounts_*), \
+  E-mail and calendar go through the pidge MCP tools (mail_*, calendar_*, accounts), \
 never another mail connector.";
 
 /// Whether to poll for each mailbox rather than wait for Enter. Without a
@@ -81,7 +81,7 @@ fn effective_yes(yes: bool, stdin_is_terminal: bool) -> (bool, Option<&'static s
 /// usable stored session, says sign-in would be required and stops there.
 /// If the stored session is close enough to expiry that using it would
 /// require a refresh, says so and stops rather than performing that
-/// refresh. Otherwise makes exactly one `accounts_list` read (via
+/// refresh. Otherwise makes exactly one `accounts` list read (via
 /// [`plan_dry_run`]) and reports which local accounts would be connected
 /// and which settings would be copied.
 async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()> {
@@ -117,7 +117,7 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
                 tokens.server.cyan(),
                 backend_name(backend)
             );
-            println!("  skipping the live accounts_list call; a dry run never refreshes tokens.");
+            println!("  skipping the live accounts call; a dry run never refreshes tokens.");
             println!(
                 "  run `pidge mcp connect {url}` (without --dry-run) to see the current plan."
             );
@@ -178,8 +178,8 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
 /// accounts would be connected, and which settings would be copied. Takes
 /// `calls` generically (over [`McpCalls`]) purely so it's unit-testable
 /// with a recording fake: a test can assert this makes exactly one
-/// `accounts_list` call and nothing else, since a dry run must never call
-/// `accounts_connect`/`accounts_update`.
+/// `accounts` list call and nothing else, since a dry run must never call
+/// `accounts action=connect` or `mail_setup`.
 struct DryRunPlan {
     would_connect: Vec<String>,
     would_copy: Vec<String>,
@@ -192,9 +192,9 @@ async fn plan_dry_run<C: McpCalls>(
     trusted_senders: &[String],
 ) -> Result<DryRunPlan> {
     let list_text = calls
-        .call_tool("accounts_list", json!({}))
+        .call_tool("accounts", json!({ "action": "list" }))
         .await
-        .context("accounts_list failed")?
+        .context("listing the server's mailboxes failed")?
         .text;
     let already_connected = parse_connected_addresses(&list_text);
 
@@ -241,9 +241,9 @@ async fn run_inner(url: &str, store: TokenStorage, yes: bool, json_output: bool)
     let local_accounts: Vec<String> = config.accounts.iter().map(|a| a.email.clone()).collect();
 
     let list_text = rpc
-        .call_tool("accounts_list", json!({}))
+        .call_tool("accounts", json!({ "action": "list" }))
         .await
-        .context("accounts_list failed")?
+        .context("listing the server's mailboxes failed")?
         .text;
     let already_connected = parse_connected_addresses(&list_text);
 
@@ -279,9 +279,9 @@ async fn run_inner(url: &str, store: TokenStorage, yes: bool, json_output: bool)
     .await?;
 
     let final_text = rpc
-        .call_tool("accounts_list", json!({}))
+        .call_tool("accounts", json!({ "action": "list" }))
         .await
-        .context("accounts_list failed")?
+        .context("listing the server's mailboxes failed")?
         .text;
 
     if json_output {
@@ -368,23 +368,23 @@ async fn try_existing_session(
 /// The outcome of one [`run_migration`] run.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MigrationOutcome {
-    /// Local accounts `accounts_connect`+wait completed for, in the order
+    /// Local accounts `accounts action=connect`+wait completed for, in the order
     /// they were processed. Not yet verified against the server; the
-    /// caller re-checks `accounts_list` afterwards (see `run_inner`).
+    /// caller re-checks `accounts` list afterwards (see `run_inner`).
     pub connected: Vec<String>,
     /// Local accounts that were already connected and so were skipped.
     pub skipped: Vec<String>,
 }
 
 /// For every address in `local_accounts` not already present in
-/// `already_connected`, call `accounts_connect`, extract its connect link,
+/// `already_connected`, call `accounts action=connect`, extract its connect link,
 /// and hand it to `on_link(url, email)`; the caller's job is to show the
 /// link (and, for the real CLI, wait for the user to finish, interactively
 /// or by polling). Already-connected addresses are skipped without calling
-/// `accounts_connect` at all.
+/// `accounts action=connect` at all.
 ///
 /// `calls` is shared behind a `tokio::sync::Mutex` rather than taken as
-/// `&mut` so that `on_link` can also reach it (e.g. to poll `accounts_list`
+/// `&mut` so that `on_link` can also reach it (e.g. to poll `accounts` list
 /// while waiting) without fighting the borrow checker; every lock here is
 /// released before the next `.await` point that might re-enter it. A plain
 /// `std::cell::RefCell` cannot be used here: clippy (rightly) flags a
@@ -412,8 +412,11 @@ where
 
         let result = {
             let mut c = calls.lock().await;
-            c.call_tool("accounts_connect", json!({ "email": email }))
-                .await?
+            c.call_tool(
+                "accounts",
+                json!({ "action": "connect", "email": email, "provider": provider_of(email) }),
+            )
+            .await?
         };
         let url = extract_connect_url(&result.text).ok_or_else(|| {
             anyhow::anyhow!(
@@ -432,7 +435,7 @@ where
 /// After the migration loop: re-verify who's actually connected (never
 /// trust an Enter keypress, or even a completed poll, at face value), then
 /// copy `default_send` (only for a *verified* address) and every trusted
-/// sender onto the server. Each `accounts_update` failure is a warning on
+/// sender onto the server. Each `mail_setup` failure is a warning on
 /// stderr, never fatal, so one rejected update doesn't stop the next or
 /// swallow the summary. Returns the verified subset of `outcome.connected`
 /// to report as the run's `connected` list; an account the loop thought it
@@ -447,9 +450,9 @@ async fn finish_migration<C: McpCalls>(
     trusted_senders: &[String],
 ) -> Result<Vec<String>> {
     let verify_text = calls
-        .call_tool("accounts_list", json!({}))
+        .call_tool("accounts", json!({ "action": "list" }))
         .await
-        .context("accounts_list failed")?
+        .context("listing the server's mailboxes failed")?
         .text;
     let verified = parse_connected_addresses(&verify_text);
 
@@ -467,14 +470,17 @@ async fn finish_migration<C: McpCalls>(
     if let Some(default_send) = default_send
         && verified.contains(&default_send.to_lowercase())
         && let Err(e) = calls
-            .call_tool("accounts_update", json!({ "default_sender": default_send }))
+            .call_tool(
+                "mail_setup",
+                json!({ "action": "set", "key": "default_sender", "value": default_send }),
+            )
             .await
     {
         eprintln!("warning: could not set default sender to {default_send}: {e:#}");
     }
     for sender in trusted_senders {
         if let Err(e) = calls
-            .call_tool("accounts_update", json!({ "trust": sender }))
+            .call_tool("mail_setup", json!({ "action": "vip", "who": sender }))
             .await
         {
             eprintln!("warning: could not add trusted sender {sender}: {e:#}");
@@ -492,12 +498,12 @@ fn already_connected_line(addr: &str) -> String {
 }
 
 /// Print/open the connect link for `email`, then wait for the user to
-/// finish signing in: with `yes`, poll `accounts_list` until `email` shows
+/// finish signing in: with `yes`, poll `accounts` list until `email` shows
 /// as connected, the deadline passes, or the session turns out to be dead;
 /// otherwise, print a prompt and block for Enter. Returns `Err` only for a
 /// genuine I/O error reading stdin, or (via [`poll_until_connected`]) when
 /// the hosted session itself has expired; anything else (a timed-out poll,
-/// a transient `accounts_list` failure) is a warning; the caller
+/// a transient `accounts` list failure) is a warning; the caller
 /// re-verifies who's actually connected once the whole migration is done.
 async fn wait_for_connection<C: McpCalls>(
     calls: &Mutex<C>,
@@ -536,8 +542,8 @@ async fn poll_until_connected<C: McpCalls>(calls: &Mutex<C>, email: &str) -> Res
 ///
 /// A dead session ([`is_session_expired`]) bails immediately; otherwise
 /// this would spend its whole deadline re-POSTing a revoked refresh token
-/// every interval, only for the *next* account's `accounts_connect` to
-/// surface the reconnect hint. Every other `accounts_list` failure is
+/// every interval, only for the *next* account's `accounts action=connect` to
+/// surface the reconnect hint. Every other `accounts` list failure is
 /// transient and just a warning, retried until the deadline; a timeout is
 /// also just a warning; the caller moves on to the next account and
 /// re-verifies who actually connected once the whole migration is done.
@@ -552,7 +558,7 @@ async fn poll_until_connected_with<C: McpCalls>(
     loop {
         let outcome = {
             let mut c = calls.lock().await;
-            c.call_tool("accounts_list", json!({})).await
+            c.call_tool("accounts", json!({ "action": "list" })).await
         };
         match outcome {
             Ok(result) if parse_connected_addresses(&result.text).contains(&target) => {
@@ -576,7 +582,7 @@ async fn poll_until_connected_with<C: McpCalls>(
     }
 }
 
-/// Extract the set of e-mail addresses appearing in `accounts_list`'s
+/// Extract the set of e-mail addresses appearing in `accounts` list's
 /// *healthy* mailbox lines (rendered by the server, one per line, as
 /// `  - <addr>[ (sign-in)]: <health>`; see `pidge-mcp`'s
 /// `tools::accounts::render_accounts`). Tolerant of the exact formatting: a
@@ -585,8 +591,16 @@ async fn poll_until_connected_with<C: McpCalls>(
 /// punctuation and lower-cased. Lines that don't start with `-` (the
 /// sign-in/default-sender/trusted-senders lines, which may also contain
 /// addresses) are ignored, and so are mailbox lines whose health reads
-/// "needs reconnect"; the server is telling us to run `accounts_connect`
+/// "needs reconnect"; the server is telling us to run `accounts action=connect`
 /// for that address again, not that it's already connected.
+/// `microsoft` or `google`, from the local account's record.
+fn provider_of(email: &str) -> &'static str {
+    pidge_core::Config::load()
+        .ok()
+        .and_then(|c| c.find(email).map(|a| a.provider.as_str()))
+        .unwrap_or("microsoft")
+}
+
 pub fn parse_connected_addresses(text: &str) -> HashSet<String> {
     text.lines()
         .filter_map(|line| line.trim().strip_prefix('-'))
@@ -602,7 +616,7 @@ pub fn parse_connected_addresses(text: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Pull the `https://…/connect?state=…` URL out of an `accounts_connect`
+/// Pull the `https://…/connect?state=…` URL out of an `accounts action=connect`
 /// response's text (see `pidge-mcp`'s `tools::accounts::accounts_connect`).
 /// Tolerant of surrounding prose: it looks for any whitespace-separated
 /// token that starts with `http` and contains `/connect?state=`.
@@ -681,7 +695,7 @@ mod tests {
     const ACCOUNTS_CONNECT_TEXT: &str = "Connect work@example.com by opening: \
         https://mcp.example.com/connect?state=abc123  (valid 10 minutes)\n\
         The user signs in at Microsoft with that mailbox's account.\n\
-        next: accounts_list once they have finished";
+        next: accounts once they have finished";
 
     #[test]
     fn extract_connect_url_pulls_the_link_out_of_accounts_connect_text() {
@@ -718,8 +732,8 @@ mod tests {
             name: &str,
             arguments: serde_json::Value,
         ) -> Result<ToolResult> {
-            match name {
-                "accounts_connect" => {
+            match (name, arguments["action"].as_str()) {
+                ("accounts", Some("connect")) => {
                     let email = arguments["email"].as_str().unwrap_or_default().to_string();
                     self.connect_calls.push(email.clone());
                     Ok(ToolResult {
@@ -729,7 +743,7 @@ mod tests {
                         is_error: false,
                     })
                 }
-                other => panic!("unexpected tool call in test: {other}"),
+                other => panic!("unexpected tool call in test: {other:?}"),
             }
         }
     }
@@ -936,7 +950,7 @@ mod tests {
 
     // --- finish_migration / plan_dry_run --------------------------------
 
-    /// Records every call made to it and answers `accounts_list` with a
+    /// Records every call made to it and answers `accounts` list with a
     /// fixed, settable text; an `accounts_update {"trust": <addr>}` for an
     /// address in `fail_trust` errors, everything else succeeds. Lets N3's
     /// tests drive `finish_migration`/`plan_dry_run` without any network.
@@ -955,12 +969,12 @@ mod tests {
         ) -> Result<ToolResult> {
             self.calls.push((name.to_string(), arguments.clone()));
             match name {
-                "accounts_list" => Ok(ToolResult {
+                "accounts" => Ok(ToolResult {
                     text: self.accounts_list_text.clone(),
                     is_error: false,
                 }),
-                "accounts_update" => {
-                    if let Some(trust) = arguments.get("trust").and_then(|v| v.as_str())
+                "mail_setup" => {
+                    if let Some(trust) = arguments.get("who").and_then(|v| v.as_str())
                         && self.fail_trust.contains(trust)
                     {
                         return Err(anyhow::anyhow!("simulated failure for {trust}"));
@@ -986,8 +1000,13 @@ mod tests {
         fn update_calls_with(&self, key: &str) -> Vec<&str> {
             self.calls
                 .iter()
-                .filter(|(name, _)| name == "accounts_update")
-                .filter_map(|(_, args)| args.get(key).and_then(|v| v.as_str()))
+                .filter(|(name, _)| name == "mail_setup")
+                .filter_map(|(_, args)| match key {
+                    "trust" => args.get("who").and_then(|v| v.as_str()),
+                    other => (args.get("key").and_then(|v| v.as_str()) == Some(other))
+                        .then(|| args.get("value").and_then(|v| v.as_str()))
+                        .flatten(),
+                })
                 .collect()
         }
     }
@@ -1108,7 +1127,7 @@ mod tests {
                 .iter()
                 .map(|(name, _)| name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["accounts_list"],
+            vec!["accounts"],
             "a dry run must make exactly one accounts_list call and nothing else: {:?}",
             rpc.calls
         );

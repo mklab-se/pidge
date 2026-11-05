@@ -44,20 +44,22 @@ GITHUB_SUBJECT="repo:${REPO}:environment:${GITHUB_ENVIRONMENT}"
 GITHUB_AUDIENCE="api://AzureADTokenExchange"
 ROLE_CONTRIBUTOR="b24988ac-6180-42a0-ab88-20f7382dd24c"
 ROLE_RBAC_ADMIN="f58310d9-a9f6-439a-9e8d-f62e7b41a168"
-# The two roles main.bicep itself assigns (AcrPull to the registry, Key
-# Vault Secrets Officer to the vault). The RBAC Administrator grant below is
+# The roles main.bicep itself assigns (AcrPull to the registry, Key Vault
+# Secrets Officer to the vault, Storage Blob Data Contributor to the
+# preferences storage account). The RBAC Administrator grant below is
 # conditioned to only these, so a compromised main-push can't use it to
 # grant itself (or anyone else) a broader role such as Owner.
 ROLE_ACR_PULL="7f951dda-4ed3-4680-a7ca-43fe172d538d"
 ROLE_KV_SECRETS_OFFICER="b86a8fe4-44ce-4948-aee5-eccb2c155cd7"
+ROLE_STORAGE_BLOB_DATA_CONTRIBUTOR="ba92f5b4-2d11-453d-a403-e96b0029c9fe"
 # The server's own identity, created by main.bicep (absent before the first
 # deploy). When it exists, the condition also pins *who* may receive those
 # roles: only that identity, so even a compromised deploy run can't grant
 # itself or anyone else Key Vault Secrets Officer.
 APP_IDENTITY_NAME="id-pidge-mcp"
 APP_PRINCIPAL_ID="$(az identity show --resource-group "$RESOURCE_GROUP" --name "$APP_IDENTITY_NAME" --query principalId -o tsv 2>/dev/null || true)"
-ROLES_CLAUSE_WRITE="@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}}"
-ROLES_CLAUSE_DELETE="@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}}"
+ROLES_CLAUSE_WRITE="@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}, ${ROLE_STORAGE_BLOB_DATA_CONTRIBUTOR}}"
+ROLES_CLAUSE_DELETE="@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ROLE_ACR_PULL}, ${ROLE_KV_SECRETS_OFFICER}, ${ROLE_STORAGE_BLOB_DATA_CONTRIBUTOR}}"
 if [[ -n "$APP_PRINCIPAL_ID" ]]; then
   ROLES_CLAUSE_WRITE="${ROLES_CLAUSE_WRITE} AND @Request[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {${APP_PRINCIPAL_ID}}"
   ROLES_CLAUSE_DELETE="${ROLES_CLAUSE_DELETE} AND @Resource[Microsoft.Authorization/roleAssignments:PrincipalId] ForAnyOfAnyValues:GuidEquals {${APP_PRINCIPAL_ID}}"
@@ -166,8 +168,8 @@ assign_role_if_missing() {
   fi
 }
 
-# Role Based Access Control Administrator, conditioned to AcrPull and Key
-# Vault Secrets Officer only. Handled separately from
+# Role Based Access Control Administrator, conditioned to AcrPull, Key
+# Vault Secrets Officer and Storage Blob Data Contributor only. Handled separately from
 # assign_role_if_missing because it needs a retrofit: an earlier run of
 # this script (before the condition existed) may have left an unconditioned
 # assignment in place, and that has to be replaced, not left alongside.

@@ -261,13 +261,14 @@ resource prefsWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-var googleSecrets = empty(googleClientSecret) ? [] : [
+var googleEnabled = !empty(googleClientId) && !empty(googleClientSecret)
+var googleSecrets = !googleEnabled ? [] : [
   {
     name: 'google-client-secret'
     value: googleClientSecret
   }
 ]
-var googleEnv = empty(googleClientId) ? [] : [
+var googleEnv = !googleEnabled ? [] : [
   { name: 'PIDGE_GOOGLE_CLIENT_ID', value: googleClientId }
   { name: 'PIDGE_GOOGLE_CLIENT_SECRET', secretRef: 'google-client-secret' }
 ]

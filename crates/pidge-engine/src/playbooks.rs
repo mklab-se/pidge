@@ -1,5 +1,5 @@
 //! How an agent should use pidge: one text, emitted as the MCP server
-//! instructions, as MCP prompts, and as the skill (SKILL.md). The recipes
+//! instructions and as the skill (SKILL.md). The recipes
 //! are written from the user's side ("do I have any new e-mail?").
 
 use crate::registry::OpDef;
