@@ -26,6 +26,11 @@ futures.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
+rmcp = { workspace = true, optional = true }
+
+[features]
+# The shared MCP server handler (stdio and HTTP frontends).
+mcp = ["dep:rmcp"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

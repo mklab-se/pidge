@@ -21,6 +21,19 @@ pub struct Config {
     /// Classes: send, delete, cancel, rsvp, bulk, unsubscribe.
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub guardrails: std::collections::BTreeMap<String, String>,
+    /// The Google OAuth client for Gmail accounts (bring your own, see
+    /// docs/gmail.md). `PIDGE_GOOGLE_CLIENT_ID` / `PIDGE_GOOGLE_CLIENT_SECRET`
+    /// override it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub google: Option<GoogleClient>,
+}
+
+/// A Google Cloud "Desktop app" OAuth client.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoogleClient {
+    pub client_id: String,
+    /// Google issues desktop clients a secret that is not confidential.
+    pub client_secret: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

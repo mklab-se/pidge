@@ -24,7 +24,7 @@ pub use cache::{
     CacheLookup, CachedEventRef, CachedMessageRef, EventCache, FragmentError, MessageCache,
     short_hash,
 };
-pub use config::{Config, Defaults};
+pub use config::{Config, Defaults, GoogleClient};
 pub use contacts::{Contact, ContactSource, ContactsCache};
 pub use error::CoreError;
 pub use event::{

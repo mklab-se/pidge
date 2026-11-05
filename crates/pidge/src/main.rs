@@ -1,267 +1,216 @@
-//! pidge: A fast CLI for e-mail and calendar
+//! pidge: the e-mail and calendar client for your AI agent.
+//!
+//! The mail and calendar commands are the engine's operations, built into
+//! clap at runtime (`dynamic.rs`); the rest (sign-in, servers, completion)
+//! are fixed (`cli.rs`).
 
 use anyhow::Result;
-use clap::{CommandFactory, Parser};
+use clap::{Command, CommandFactory, FromArgMatches};
+use pidge_engine::{Frontend, registry};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 mod banner;
 mod cli;
 mod commands;
+mod dynamic;
 mod exitcode;
 mod guardrail;
-mod output;
+mod local;
 mod update;
 
-use cli::Cli;
+use cli::{Cli, Commands, McpCommands, OutboxCommands};
 
-/// Pre-process argv to make `pidge mail` ergonomic.
-///
-/// Clap can't natively decide whether `pidge mail 3515` means "show message
-/// with fragment 3515" or "run the (non-existent) subcommand named 3515", so
-/// we rewrite argv before clap sees it:
-///
-/// - `pidge mail`                          → `pidge mail list`
-/// - `pidge mail --account a@b.com -n 50`  → `pidge mail list --account a@b.com -n 50`
-/// - `pidge mail 3515`                     → `pidge mail show 3515`
-/// - `pidge mail list ...` / `mail show ...` / `mail --help` → unchanged
-///
-/// The known-subcommand list lives in [`cli::MAIL_SUBCOMMAND_NAMES`]; when
-/// new subcommands land (search, flag, archive, new, …) add their kebab-case
-/// names there too, or users will see "No message found for fragment '<name>'"
-/// instead of the new behavior.
-fn preprocess_args(args: Vec<std::ffi::OsString>) -> Vec<std::ffi::OsString> {
-    if args.len() < 2 {
-        return args;
+/// The whole command tree: fixed commands plus the engine's operations.
+pub fn build_command() -> Command {
+    let mut cmd = Cli::command();
+    for c in dynamic::commands(&registry::all()) {
+        cmd = cmd.subcommand(c);
     }
-    match args[1].to_string_lossy().as_ref() {
-        "mail" => preprocess_subcommand(args, cli::MAIL_SUBCOMMAND_NAMES),
-        "calendar" => preprocess_subcommand(args, cli::CALENDAR_SUBCOMMAND_NAMES),
-        _ => args,
-    }
-}
-
-/// Apply the shared "bare word → show" rewrite used by both `pidge mail` and
-/// `pidge calendar`:
-///
-/// - `pidge <ns>`                          → `pidge <ns> list`
-/// - `pidge <ns> --account a@b.com -n 50`  → `pidge <ns> list --account ...`
-/// - `pidge <ns> <fragment>`               → `pidge <ns> show <fragment>`
-/// - `pidge <ns> list ...` / explicit subcommand / `--help` → unchanged
-fn preprocess_subcommand(
-    mut args: Vec<std::ffi::OsString>,
-    known: &[&str],
-) -> Vec<std::ffi::OsString> {
-    if args.len() == 2 {
-        args.push("list".into());
-        return args;
-    }
-
-    let arg2 = args[2].to_string_lossy();
-
-    if matches!(arg2.as_ref(), "-h" | "--help" | "-V" | "--version") {
-        return args;
-    }
-    if arg2.starts_with('-') {
-        args.insert(2, "list".into());
-        return args;
-    }
-    if known.contains(&arg2.as_ref()) {
-        return args;
-    }
-    args.insert(2, "show".into());
-    args
+    cmd
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    // Handle dynamic shell completions (when invoked via COMPLETE=<shell> pidge)
-    clap_complete::CompleteEnv::with_factory(Cli::command).complete();
+async fn main() {
+    clap_complete::CompleteEnv::with_factory(build_command).complete();
+    let matches = build_command().get_matches();
+    let json = matches.get_flag("json");
+    let verbose = matches.get_count("verbose");
+    let quiet = matches.get_flag("quiet");
 
-    let cli = Cli::parse_from(preprocess_args(std::env::args_os().collect()));
-
-    // Initialize logging
-    let filter = if cli.verbose > 0 {
-        match cli.verbose {
-            1 => "pidge=debug",
-            _ => "pidge=trace",
-        }
-    } else if cli.quiet {
-        "error"
-    } else {
-        "pidge=info"
+    let filter = match verbose {
+        0 if quiet => "error",
+        0 => "pidge=warn,pidge_engine=warn",
+        1 => "pidge=debug,pidge_engine=debug,pidge_client=debug,pidge_gmail=debug",
+        _ => "trace",
     };
-
     tracing_subscriber::registry()
-        .with(fmt::layer().with_target(false).without_time())
+        .with(
+            fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_target(false)
+                .without_time(),
+        )
         .with(EnvFilter::new(filter))
         .init();
-
-    if cli.no_color {
+    if matches.get_flag("no_color") {
         colored::control::set_override(false);
-        output::set_no_color(true);
+    }
+    if matches.get_flag("dry_run") {
+        guardrail::set_dry_run();
     }
 
-    // Style every interactive prompt label (To:, Subject:, ...) so users can
-    // tell at a glance that they're being asked for input. Reads the no-color
-    // flag we just set; called once before any prompt runs.
-    output::install_inquire_theme();
+    let quiet_command = matches!(
+        matches.subcommand_name(),
+        Some("mcp" | "outbox" | "op" | "completion")
+    );
+    let update_handle =
+        (!quiet && !json && !quiet_command && std::env::var("PIDGE_NO_UPDATE_CHECK").is_err())
+            .then(|| tokio::spawn(update::check_for_updates()));
 
-    // Spawn background update check (skip in quiet mode or if disabled via env)
-    let update_handle = if !cli.quiet && std::env::var("PIDGE_NO_UPDATE_CHECK").is_err() {
-        Some(tokio::spawn(update::check_for_updates()))
-    } else {
-        None
-    };
+    let result = dispatch(&matches, json).await;
 
-    let json_errors = cli.json;
-    if cli.dry_run {
-        crate::guardrail::set_dry_run();
-    }
-    output::project::configure(cli.fields.clone(), cli.max_chars);
-    let result = cli.run().await;
-
-    // The update check is best-effort. Bound the wait so a slow or hung
-    // crates.io request (e.g. flaky DNS) can never delay process exit beyond
-    // a moment; previously a hung check could wedge the CLI indefinitely.
     if let Some(handle) = update_handle {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
     }
-
-    match result {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            let (kind, envelope) = exitcode::classify(&err);
-            if json_errors {
-                eprintln!("{}", serde_json::json!({ "error": envelope }));
-            } else {
-                eprintln!("Error: {err:#}");
+    if let Err(err) = result {
+        let (kind, envelope) = exitcode::classify(&err);
+        if json {
+            eprintln!("{}", serde_json::json!({ "error": envelope }));
+        } else {
+            match &envelope.hint {
+                Some(h) => eprintln!("Error: {err:#} ({h})"),
+                None => eprintln!("Error: {err:#}"),
             }
-            std::process::exit(kind as i32);
+        }
+        std::process::exit(kind as i32);
+    }
+}
+
+async fn dispatch(matches: &clap::ArgMatches, json: bool) -> Result<()> {
+    let ops = registry::all();
+    match matches.subcommand() {
+        None => return home(json).await,
+        Some((group, sub))
+            if dynamic::default_for(group).is_some() && sub.subcommand().is_none() =>
+        {
+            let name = dynamic::default_for(group).unwrap_or_default();
+            return run_op(name, serde_json::json!({}), json).await;
+        }
+        Some(_) => {
+            if let Some((op, input)) = dynamic::resolve(&ops, matches) {
+                return run_op(op.name, input, json).await;
+            }
+        }
+    }
+    let cli = Cli::from_arg_matches(matches)?;
+    match cli.command {
+        None => home(json).await,
+        Some(Commands::Account { command }) => commands::account::run(command, json).await,
+        Some(Commands::Mcp {
+            command: McpCommands::Serve,
+        }) => local::serve_stdio().await,
+        Some(Commands::Mcp { command }) => commands::mcp::run(command, json).await,
+        Some(Commands::Ai { command }) => commands::ai::run(command).await,
+        Some(Commands::Skill { from_source }) => commands::skill::run(from_source),
+        Some(Commands::Op { name, input, list }) => {
+            if list || name.is_none() {
+                for o in &ops {
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::json!({ "name": o.name, "description": o.description, "input": o.schema })
+                        );
+                    } else {
+                        println!("{:<24} {}", o.name, o.summary);
+                    }
+                }
+                return Ok(());
+            }
+            let raw = match input.as_deref() {
+                Some("-") => {
+                    let mut s = String::new();
+                    std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)?;
+                    s
+                }
+                Some(s) => s.to_string(),
+                None => "{}".into(),
+            };
+            let input: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| pidge_engine::OpError::usage(format!("--input is not JSON: {e}")))?;
+            run_op(name.as_deref().unwrap_or_default(), input, json).await
+        }
+        Some(Commands::Outbox {
+            command: OutboxCommands::Run,
+        }) => {
+            let user = local::open_user(Frontend::Cli).await?;
+            pidge_engine::outbox::run_until_empty(&user).await;
+            Ok(())
+        }
+        Some(Commands::Completion { shell }) => {
+            commands::completion::generate_completions(shell);
+            Ok(())
+        }
+        Some(Commands::Version) => {
+            banner::print_banner_with_version();
+            Ok(())
         }
     }
 }
 
-#[cfg(test)]
-mod preprocess_tests {
-    use super::preprocess_args;
-    use std::ffi::OsString;
-
-    fn pp(input: &[&str]) -> Vec<String> {
-        let argv: Vec<OsString> = input.iter().map(|s| OsString::from(*s)).collect();
-        preprocess_args(argv)
-            .into_iter()
-            .map(|s| s.into_string().unwrap())
-            .collect()
+/// Run one operation and print its answer.
+async fn run_op(name: &str, input: serde_json::Value, json: bool) -> Result<()> {
+    let op = registry::find(name).ok_or_else(|| {
+        pidge_engine::OpError::usage(format!("no operation {name:?}; see `pidge op --list`"))
+    })?;
+    let user = local::open_user(Frontend::Cli).await?;
+    let out = registry::run(&user, &op, input).await?;
+    user.drain().await;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&out.data)?);
+    } else {
+        println!("{}", out.text);
     }
+    Ok(())
+}
 
-    #[test]
-    fn non_mail_commands_pass_through() {
-        assert_eq!(
-            pp(&["pidge", "account", "list"]),
-            ["pidge", "account", "list"]
+/// `pidge` alone: what's new, and today's calendar.
+async fn home(json: bool) -> Result<()> {
+    let config = pidge_core::Config::load()?;
+    if config.accounts.is_empty() {
+        banner::print_banner();
+        println!(
+            "No mailbox yet. Start with `pidge account add` (or `--provider google` for Gmail)."
         );
-        assert_eq!(pp(&["pidge"]), ["pidge"]);
+        return Ok(());
     }
-
-    #[test]
-    fn bare_mail_inserts_list() {
-        assert_eq!(pp(&["pidge", "mail"]), ["pidge", "mail", "list"]);
+    let user = local::open_user(Frontend::Cli).await?;
+    let brief = registry::run(
+        &user,
+        &registry::find("mail_brief").expect("mail_brief"),
+        serde_json::json!({}),
+    )
+    .await?;
+    let agenda = registry::run(
+        &user,
+        &registry::find("calendar_agenda").expect("calendar_agenda"),
+        serde_json::json!({}),
+    )
+    .await?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({ "mail": brief.data, "calendar": agenda.data })
+            )?
+        );
+    } else {
+        let strip = |t: &str| {
+            t.lines()
+                .filter(|l| !l.starts_with("next:"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        println!("{}\n\n{}", strip(&brief.text), strip(&agenda.text));
     }
-
-    #[test]
-    fn mail_with_flags_inserts_list_before_flags() {
-        assert_eq!(
-            pp(&["pidge", "mail", "--account", "a@b.com", "-n", "50"]),
-            ["pidge", "mail", "list", "--account", "a@b.com", "-n", "50"]
-        );
-        assert_eq!(
-            pp(&["pidge", "mail", "-c"]),
-            ["pidge", "mail", "list", "-c"]
-        );
-    }
-
-    #[test]
-    fn mail_help_passes_through() {
-        assert_eq!(
-            pp(&["pidge", "mail", "--help"]),
-            ["pidge", "mail", "--help"]
-        );
-        assert_eq!(pp(&["pidge", "mail", "-h"]), ["pidge", "mail", "-h"]);
-    }
-
-    #[test]
-    fn mail_with_known_subcommand_passes_through() {
-        assert_eq!(
-            pp(&["pidge", "mail", "list", "-n", "50"]),
-            ["pidge", "mail", "list", "-n", "50"]
-        );
-        assert_eq!(
-            pp(&["pidge", "mail", "show", "3515"]),
-            ["pidge", "mail", "show", "3515"]
-        );
-        // `attachments` is a subcommand group, not a fragment; it must not be
-        // rewritten to `mail show attachments`.
-        assert_eq!(
-            pp(&["pidge", "mail", "attachments", "list", "3515"]),
-            ["pidge", "mail", "attachments", "list", "3515"]
-        );
-    }
-
-    #[test]
-    fn mail_with_bare_word_inserts_show() {
-        assert_eq!(
-            pp(&["pidge", "mail", "3515"]),
-            ["pidge", "mail", "show", "3515"]
-        );
-        // Even a fragment that looks like garbage routes to show; the show
-        // command will then surface a clear "no message found" error.
-        assert_eq!(
-            pp(&["pidge", "mail", "lsit"]),
-            ["pidge", "mail", "show", "lsit"]
-        );
-    }
-
-    // The calendar surface uses the same arg-preprocessor as mail, so we
-    // exercise the same rewrites against the `calendar` namespace.
-
-    #[test]
-    fn bare_calendar_inserts_list() {
-        assert_eq!(pp(&["pidge", "calendar"]), ["pidge", "calendar", "list"]);
-    }
-
-    #[test]
-    fn calendar_with_flags_inserts_list_before_flags() {
-        assert_eq!(
-            pp(&["pidge", "calendar", "--week"]),
-            ["pidge", "calendar", "list", "--week"]
-        );
-    }
-
-    #[test]
-    fn calendar_known_subcommand_passes_through() {
-        assert_eq!(
-            pp(&["pidge", "calendar", "new", "--title", "Sync"]),
-            ["pidge", "calendar", "new", "--title", "Sync"]
-        );
-        assert_eq!(
-            pp(&["pidge", "calendar", "move-time", "abc", "--start", "10:00"]),
-            ["pidge", "calendar", "move-time", "abc", "--start", "10:00"]
-        );
-    }
-
-    #[test]
-    fn calendar_bare_word_inserts_show() {
-        assert_eq!(
-            pp(&["pidge", "calendar", "abcd"]),
-            ["pidge", "calendar", "show", "abcd"]
-        );
-    }
-
-    #[test]
-    fn calendar_help_passes_through() {
-        assert_eq!(
-            pp(&["pidge", "calendar", "--help"]),
-            ["pidge", "calendar", "--help"]
-        );
-    }
+    Ok(())
 }

@@ -6,11 +6,10 @@
 
 use std::io;
 
-use clap::CommandFactory;
 use clap_complete::generate;
 use colored::Colorize;
 
-use crate::cli::{Cli, Shell};
+use crate::cli::Shell;
 
 /// Generate shell completions and write them to stdout.
 pub fn generate_completions(shell: Shell) {
@@ -28,7 +27,7 @@ pub fn generate_completions(shell: Shell) {
         Shell::Powershell => clap_complete::Shell::PowerShell,
     };
 
-    let mut cmd = Cli::command();
+    let mut cmd = crate::build_command();
     generate(clap_shell, &mut cmd, "pidge", &mut io::stdout());
 
     eprintln!();

@@ -1,18 +1,87 @@
-//! `pidge account add`: sign in to a new Microsoft account via OAuth
-//! authorization-code + PKCE with a one-shot localhost HTTP server.
+//! `pidge account add`: sign in to a Microsoft or Google mailbox through
+//! the browser (authorization code + PKCE, one-shot localhost listener).
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use colored::Colorize;
 
 use pidge_client::auth::{AuthClient, TokenStore, extract_tenant_id};
+use pidge_core::provider::ProviderKind;
 use pidge_core::{Account, Config, TokenStorage};
 
-pub async fn run(storage: TokenStorage) -> Result<()> {
-    let auth = AuthClient::from_env().context("AuthClient initialisation failed")?;
+/// The Google OAuth client: the environment wins over `config.yaml`.
+pub fn google_client(config: &Config) -> Option<pidge_gmail::GoogleOAuthConfig> {
+    pidge_gmail::GoogleOAuthConfig::from_env().or_else(|| {
+        config
+            .google
+            .as_ref()
+            .filter(|g| !g.client_id.is_empty())
+            .map(|g| {
+                pidge_gmail::GoogleOAuthConfig::new(g.client_id.clone(), g.client_secret.clone())
+            })
+    })
+}
 
+/// Sign in through the browser and record the mailbox. `on_url` gets the
+/// sign-in link (print it, open it). Returns the address.
+pub async fn sign_in(
+    provider: ProviderKind,
+    storage: TokenStorage,
+    on_url: impl FnOnce(&str),
+) -> Result<String> {
+    let mut config = Config::load()?;
+    let (email, tenant_id, home_account_id, tokens) = match provider {
+        ProviderKind::Microsoft => {
+            let auth = AuthClient::from_env().context("AuthClient initialisation failed")?;
+            let success = auth
+                .run_browser_flow(on_url)
+                .await
+                .context("browser sign-in failed")?;
+            let tenant_id = success
+                .id_token
+                .as_deref()
+                .and_then(extract_tenant_id)
+                .unwrap_or_default();
+            let graph = pidge_client::GraphClient::new(auth)?;
+            let me = graph
+                .me(&success.tokens.access_token)
+                .await
+                .context("failed to fetch /me")?;
+            let email = me
+                .mail
+                .clone()
+                .unwrap_or_else(|| me.user_principal_name.clone());
+            (email, tenant_id, me.id, success.tokens)
+        }
+        ProviderKind::Google => {
+            let cfg = google_client(&config).ok_or_else(|| {
+                anyhow!(
+                    "Gmail needs your own Google OAuth client: set PIDGE_GOOGLE_CLIENT_ID and \
+                     PIDGE_GOOGLE_CLIENT_SECRET, or `google:` in config.yaml (see docs/gmail.md)"
+                )
+            })?;
+            let (tokens, email) = pidge_gmail::auth::run_loopback_flow(&cfg, on_url)
+                .await
+                .map_err(|e| anyhow!("Google sign-in failed: {e}"))?;
+            (email.clone(), String::new(), email, tokens)
+        }
+    };
+    TokenStore::save(&email, &tokens, storage)?;
+    config.add_account(Account {
+        email: email.clone(),
+        tenant_id,
+        home_account_id,
+        added_at: Utc::now(),
+        storage,
+        provider,
+    });
+    config.save()?;
+    Ok(email)
+}
+
+pub async fn run(provider: ProviderKind, storage: TokenStorage) -> Result<()> {
     println!();
-    println!("Adding a new account to pidge.");
+    println!("Adding a mailbox to pidge.");
     if matches!(storage, TokenStorage::File) {
         println!(
             "{} Tokens will be saved as a {} on disk (mode 0600).",
@@ -20,80 +89,34 @@ pub async fn run(storage: TokenStorage) -> Result<()> {
             "plaintext file".bold()
         );
     }
-    println!();
     println!(
         "{}",
-        "A browser window will open for sign-in. Both personal Microsoft \
-         accounts (outlook.com / live.com / hotmail.com) and work/school \
-         M365 accounts are supported."
-            .dimmed()
+        match provider {
+            ProviderKind::Microsoft => "A browser window will open. Personal Microsoft accounts (outlook.com, live.com, hotmail.com) and work or school Microsoft 365 accounts both work.",
+            ProviderKind::Google => "A browser window will open to sign in to Google.",
+        }
+        .dimmed()
     );
     println!();
-
-    let success = auth
-        .run_browser_flow(|authorize_url| {
-            println!("{} {}", "Sign in at:".bold(), authorize_url.cyan());
-            println!(
-                "{}",
-                "(opening your browser…  Ctrl-C here to cancel)".dimmed()
-            );
-            let _ = open_browser(authorize_url);
-        })
-        .await
-        .context("browser sign-in failed")?;
-
-    // Tenant from id_token (when present; Microsoft only returns id_token
-    // if the `openid` scope was requested or as part of certain flows).
-    let tenant_id = success
-        .id_token
-        .as_deref()
-        .and_then(extract_tenant_id)
-        .unwrap_or_default();
-
-    // Identity from Graph /me, same as before; this is what teaches us the
-    // user's actual e-mail address so we can key the cached tokens by it.
-    let graph = pidge_client::GraphClient::new(auth)?;
-    let me = graph
-        .me(&success.tokens.access_token)
-        .await
-        .context("failed to fetch /me")?;
-    let email = me
-        .mail
-        .clone()
-        .unwrap_or_else(|| me.user_principal_name.clone());
-
-    // Persist tokens to the requested backend
-    TokenStore::save(&email, &success.tokens, storage)?;
-
-    // Persist account in config
-    let mut config = Config::load()?;
-    let was_first = config.accounts.is_empty();
-    config.add_account(Account {
-        email: email.clone(),
-        tenant_id,
-        home_account_id: me.id,
-        added_at: Utc::now(),
-        storage,
-    });
-    config.save()?;
-
+    let email = sign_in(provider, storage, |url| {
+        println!("{} {}", "Sign in at:".bold(), url.cyan());
+        println!(
+            "{}",
+            "(opening your browser…  Ctrl-C here to cancel)".dimmed()
+        );
+        let _ = open_browser(url);
+    })
+    .await?;
+    let count = Config::load().map(|c| c.accounts.len()).unwrap_or(1);
     println!();
     println!("{} {} <{}>", "✔".green(), "Signed in as".bold(), email);
-    if was_first {
-        println!();
-        println!("This is your first account, so pidge has set it as:");
-        println!("  • Default e-mail account");
-        println!("  • Default calendar account");
-        println!();
-        println!(
-            "Change with {} or {}.",
-            "`pidge account default e-mail <email>`".cyan(),
-            "`pidge account default calendar <email>`".cyan()
-        );
-    } else {
-        println!("Currently signed in: {} accounts.", config.accounts.len());
+    if count > 1 {
+        println!("{count} mailboxes signed in; pidge merges them.");
     }
-
+    println!(
+        "{}",
+        "Next: `pidge` shows what's new; `pidge skill > ~/.claude/skills/pidge/SKILL.md` teaches your agent.".dimmed()
+    );
     Ok(())
 }
 

@@ -345,8 +345,7 @@ fn plan_steps(items: &[Stored], categories: &[crate::prefs::Category]) -> Vec<St
         }
     }
     let mut steps = Vec::new();
-    let mut sweep_list: Vec<(String, Vec<Head<'_>>)> =
-        sweeps.into_iter().collect();
+    let mut sweep_list: Vec<(String, Vec<Head<'_>>)> = sweeps.into_iter().collect();
     sweep_list.sort_by_key(|(_, v)| std::cmp::Reverse(v.len()));
     for (label, members) in sweep_list {
         if members.len() < 2 {

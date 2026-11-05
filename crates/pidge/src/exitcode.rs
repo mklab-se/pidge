@@ -1,11 +1,10 @@
 //! Exit-code taxonomy + structured error envelope for agents.
 //!
 //! Codes: 0 ok · 1 unexpected · 2 usage/bad input · 3 auth expired/missing ·
-//! 4 not found / ambiguous fragment · 5 throttled · 6 denied by guardrails.
+//! 4 not found / ambiguous · 5 throttled · 6 denied by guardrails.
 //! (clap parse errors exit 2 on their own.)
 
 use pidge_client::ClientError;
-use pidge_core::FragmentError;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,48 +109,21 @@ pub fn classify(err: &anyhow::Error) -> (ExitKind, Envelope) {
                 _ => {}
             }
         }
-        if let Some(fragment) = cause.downcast_ref::<FragmentError>() {
-            let code = match fragment {
-                FragmentError::NotFound { .. } => "not_found",
-                FragmentError::Ambiguous { .. } => "ambiguous",
+        if let Some(op) = cause.downcast_ref::<pidge_engine::OpError>() {
+            let kind = match op.kind.exit_code() {
+                2 => ExitKind::Usage,
+                3 => ExitKind::AuthExpired,
+                4 => ExitKind::NotFound,
+                5 => ExitKind::Throttled,
+                6 => ExitKind::GuardrailDenied,
+                _ => ExitKind::Unexpected,
             };
             return (
-                ExitKind::NotFound,
+                kind,
                 Envelope {
-                    code,
-                    message: fragment.to_string(),
-                    hint: Some(match fragment {
-                        FragmentError::NotFound { .. } => {
-                            "refresh the cache with `pidge mail` or `pidge calendar`".into()
-                        }
-                        FragmentError::Ambiguous { .. } => {
-                            "provide more characters of the id".into()
-                        }
-                    }),
-                    account: None,
-                    retry_after: None,
-                },
-            );
-        }
-        if let Some(guardrail) = cause.downcast_ref::<crate::guardrail::GuardrailError>() {
-            return (
-                ExitKind::GuardrailDenied,
-                Envelope {
-                    code: match guardrail {
-                        crate::guardrail::GuardrailError::Denied { .. } => "guardrail_denied",
-                        crate::guardrail::GuardrailError::ConfirmRequired { .. } => {
-                            "guardrail_confirm_required"
-                        }
-                    },
-                    message: guardrail.to_string(),
-                    hint: Some(match guardrail {
-                        crate::guardrail::GuardrailError::Denied { .. } => {
-                            "this action class is denied by the user's guardrails config".into()
-                        }
-                        crate::guardrail::GuardrailError::ConfirmRequired { .. } => {
-                            "ask the user to run this interactively or relax guardrails".into()
-                        }
-                    }),
+                    code: op.kind.as_str(),
+                    message: op.message.clone(),
+                    hint: op.hint.clone(),
                     account: None,
                     retry_after: None,
                 },
@@ -269,21 +241,14 @@ mod tests {
     }
 
     #[test]
-    fn fragment_errors_map_to_4() {
-        let err = anyhow::Error::from(FragmentError::Ambiguous {
-            fragment: "35".into(),
-            count: 3,
-        });
-        let (kind, env) = classify(&err);
-        assert_eq!(kind as i32, 4);
-        assert_eq!(env.code, "ambiguous");
-
-        let err = anyhow::Error::from(FragmentError::NotFound {
-            fragment: "dead".into(),
-        });
+    fn operation_errors_keep_their_kind() {
+        let err = anyhow::Error::from(
+            pidge_engine::OpError::not_found("no message").with_hint("use a handle"),
+        );
         let (kind, env) = classify(&err);
         assert_eq!(kind as i32, 4);
         assert_eq!(env.code, "not_found");
+        assert_eq!(env.hint.as_deref(), Some("use a handle"));
     }
 
     #[test]

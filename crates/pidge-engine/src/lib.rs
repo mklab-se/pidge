@@ -11,6 +11,8 @@ pub mod classify;
 pub mod ctx;
 pub mod error;
 pub mod kinds;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod ops;
 pub mod outbox;
 pub mod playbooks;

@@ -11,6 +11,7 @@ use crate::commands::{mcp_connect, mcp_logout, mcp_status};
 
 pub async fn run(command: McpCommands, json: bool) -> Result<()> {
     match command {
+        McpCommands::Serve => crate::local::serve_stdio().await,
         McpCommands::Connect { url, store, yes } => {
             mcp_connect::run(url, store.into(), yes, json).await
         }
