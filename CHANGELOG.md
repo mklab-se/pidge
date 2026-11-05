@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+pidge 2.0: a ground-up rebuild around one engine. Design and reasoning:
+`docs/superpowers/specs/2026-11-05-pidge-2-ground-up-rethink-design.md`. There is no compatibility
+with 1.x commands, tool names or ids; mailboxes, tokens and settings carry over.
+
+### Added
+
+- **Gmail and Google Calendar** next to Microsoft 365 and Outlook.com (`pidge account add --provider
+  google`, or `accounts action=connect provider=google` hosted). Bring your own Google OAuth client:
+  `docs/gmail.md`.
+- **Local MCP server:** `pidge mcp serve` gives Claude Desktop, Cowork and any stdio MCP client the
+  same tools as the hosted server, with no hosting.
+- **One set of operations everywhere** (CLI, skill, local MCP, hosted MCP): `mail_brief`,
+  `mail_find`, `mail_read`, `mail_triage`, `mail_act`, `mail_draft`, `mail_send`,
+  `mail_attachment`, `mail_setup`, `calendar_agenda`, `calendar_event`, `calendar_act`,
+  `calendar_respond`, `calendar_availability`, `accounts`. The CLI's `pidge mail ...` and
+  `pidge calendar ...` commands are built from them; `pidge op <name> --input <json>` runs any of
+  them with its exact MCP input.
+- **A local index** of recent mail (90 days by default), kept current with Graph delta and Gmail
+  history: "what's new" means since you last looked, and sets ("all receipts", "all commercials")
+  are one query. Short ids: `m12`, `e3`, `d4`, `p5`.
+- **What a message is:** kinds (receipt, newsletter, promotion, notification, social, invite,
+  personal), your categories, and importance with a reason (VIP, a reply to you, a question to you,
+  a deadline, an invitation). Your own AI key is optional; unsure messages go back to the agent to
+  judge, and its verdicts are remembered.
+- **Inbox triage in passes:** sweeps of bulk mail (one yes clears a group), small batches of
+  routine mail, then what matters one by one with a suggested action. Every answer says what comes
+  next, and acting on the current message by any route moves on.
+- **Plans** for bulk and selector-based changes and for calendar changes that e-mail people, with
+  the count, examples, who is notified and the unsure messages; **undo** for mail changes.
+- **Sending with a hold:** 10 s, 30 s or 2 min depending on risk (first mail to an address,
+  forwards, attachments, many recipients), cancellable; mail with identity or card numbers,
+  credentials or more than 20 recipients waits for approval.
+- **Calendar:** `calendar_act` clears a day (cancel, decline or delete per event, listing who is
+  told), `add_attendees` / `remove_attendees` ("invite this person"), events from an e-mail's
+  `.ics`, recurring scope, `calendar_availability` with other people where the account allows.
+- Hosted: preferences in Azure Blob storage, a per-user index on the replica, `minReplicas` 1 by
+  default (no cold start), Google client settings in the Bicep template.
+
+### Changed
+
+- Mail changes answer at once and run in the background; failures are reported on the next answer.
+- Microsoft Graph ids are immutable ids, so ids survive moves.
+- Hosted users' 1.x review categories, rules and examples, timezone, default sender and trusted
+  senders carry over to the new preferences on first use.
+- `pidge skill` replaces `pidge ai skill --emit` and is generated from the operations and the same
+  playbooks as the MCP server instructions.
+- The renderer's fixture snapshots live in `pidge-core`; `pidge debug raw-html <id>` captures a
+  message for a new fixture.
+- MSRV 1.89 (rusqlite 0.41).
+
+### Removed
+
+- The 1.x CLI commands (`mail list/show/search/...`, `calendar new/edit/...`, `drafts`, `trust`,
+  `contacts`, `categorize`, `watch`, `mail delta`, `config`, `ai classify`), the full-screen
+  compose forms, inline images in the terminal, and guardrails config (replaced by the policy in
+  `pidge mail setup`).
+- The 1.x MCP tools and prompts, mailbox category sync and `prune_mailboxes` (`mail_setup
+  action=label_mail` writes categories onto recent mail instead).
+
 ## [1.7.7] - 2026-10-11
 
 ### Changed

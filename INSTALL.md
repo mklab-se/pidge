@@ -47,7 +47,7 @@ cargo audit bin ./pidge
 
 ## cargo install
 
-Compile from source via crates.io (requires Rust 1.88+):
+Compile from source via crates.io (requires Rust 1.89+):
 
 ```bash
 cargo install pidge
@@ -67,7 +67,7 @@ cd pidge
 cargo build --release
 ```
 
-The binary is at `target/release/pidge`. Requires Rust 1.88 or later. The Windows NASM/CMake
+The binary is at `target/release/pidge`. Requires Rust 1.89 or later. The Windows NASM/CMake
 requirement above applies here too.
 
 ## cargo binstall

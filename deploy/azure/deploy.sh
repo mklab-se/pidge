@@ -36,6 +36,8 @@
 #     <domain>     bind this domain (must match the bound one, if any)
 #     -            unbind the live domain
 #   PIDGE_MCP_CUTOVER
+#   PIDGE_MCP_MIN_REPLICAS   (default 1; 0 scales to zero)
+#   PIDGE_GOOGLE_CLIENT_ID / PIDGE_GOOGLE_CLIENT_SECRET (optional, for Gmail)
 #     unset/empty  keep the live state: if the live public URL is
 #                  https://<custom domain>, stay cut over; otherwise don't
 #     1            make https://<custom domain> the public URL (OAuth issuer);
@@ -64,6 +66,11 @@ IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
 # with IMPORT_USERNAME / IMPORT_PASSWORD for a private registry.
 IMPORT_IMAGE="${IMPORT_IMAGE:-}"
 DOMAIN_INPUT="${PIDGE_MCP_CUSTOM_DOMAIN:-}"
+# 1 keeps a replica warm (no cold start); 0 scales to zero.
+MIN_REPLICAS="${PIDGE_MCP_MIN_REPLICAS:-1}"
+# Optional: a Google OAuth web client for Gmail mailboxes (docs/gmail.md).
+GOOGLE_CLIENT_ID="${PIDGE_GOOGLE_CLIENT_ID:-}"
+GOOGLE_CLIENT_SECRET="${PIDGE_GOOGLE_CLIENT_SECRET:-}"
 CUTOVER_INPUT="${PIDGE_MCP_CUTOVER:-}"
 SKIP_BUILD=false
 SKIP_ENTRA=false
@@ -259,6 +266,7 @@ bind_custom_domain_certificate() {
     --parameters allowedEmails="$ALLOWED_EMAILS" vaultAdminObjectId="$DEPLOYER_OID" image="$IMAGE" \
       customDomain="$CUSTOM_DOMAIN" customDomainCertificateId="" \
       publicUrlOverride="$PUBLIC_URL_OVERRIDE" altHosts="$ALT_HOSTS" legacyIssuers="$LEGACY_ISSUERS" \
+      minReplicas="$MIN_REPLICAS" googleClientId="$GOOGLE_CLIENT_ID" googleClientSecret="$GOOGLE_CLIENT_SECRET" \
     --query properties.outputs -o json >/dev/null
 
   local existing_cert
@@ -311,6 +319,7 @@ PHASE3="$(az deployment group create \
   --parameters allowedEmails="$ALLOWED_EMAILS" vaultAdminObjectId="$DEPLOYER_OID" image="$IMAGE" \
     customDomain="$CUSTOM_DOMAIN" customDomainCertificateId="$CERT_ID" \
     publicUrlOverride="$PUBLIC_URL_OVERRIDE" altHosts="$ALT_HOSTS" legacyIssuers="$LEGACY_ISSUERS" \
+    minReplicas="$MIN_REPLICAS" googleClientId="$GOOGLE_CLIENT_ID" googleClientSecret="$GOOGLE_CLIENT_SECRET" \
   --query properties.outputs -o json)"
 PUBLIC_URL="$(jq -r .publicUrl.value <<<"$PHASE3")"
 APP_FQDN="$(jq -r .appFqdn.value <<<"$PHASE3")"

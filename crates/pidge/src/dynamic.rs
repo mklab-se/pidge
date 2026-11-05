@@ -87,7 +87,12 @@ pub fn command_for(op: &OpDef) -> Command {
         let long = name.replace('_', "-");
         let arg = Arg::new(name.clone()).long(long).help(help);
         let arg = match shape(prop) {
-            Shape::Bool => arg.action(ArgAction::SetTrue),
+            // `--unread` is true; `--mark-seen=false` turns a default-on switch off.
+            Shape::Bool => arg
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value("true")
+                .value_parser(clap::value_parser!(bool)),
             Shape::Int => arg.value_parser(clap::value_parser!(i64)).value_name("N"),
             Shape::List => arg.action(ArgAction::Append).value_name("VALUE"),
             Shape::Text => arg.value_name("VALUE"),
@@ -167,8 +172,8 @@ fn input_from(op: &OpDef, m: &ArgMatches) -> Value {
         }
         match shape(&prop) {
             Shape::Bool => {
-                if m.get_flag(id) {
-                    out.insert(name, Value::Bool(true));
+                if let Some(b) = m.get_one::<bool>(id) {
+                    out.insert(name, Value::Bool(*b));
                 }
             }
             Shape::Int => {
@@ -255,6 +260,8 @@ mod tests {
         ]);
         assert_eq!(op, "calendar_event");
         assert_eq!(input["add_attendees"], serde_json::json!(["anna", "bob"]));
+        let (_, input) = parse(&["pidge", "mail", "brief", "--mark-seen=false"]);
+        assert_eq!(input, serde_json::json!({ "mark_seen": false }));
         let (op, _) = parse(&["pidge", "accounts"]);
         assert_eq!(op, "accounts");
     }

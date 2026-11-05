@@ -309,14 +309,14 @@ jobs:
       # crates.io: a version can never be re-uploaded, so this is what lets
       # a tag be re-pushed (or the run re-run) after a partial failure
       # elsewhere in the workflow without failing red here.
-      - name: Publish pidge-core, pidge-client, pidge
+      - name: Publish pidge-core, pidge-client, pidge-gmail, pidge-store, pidge-engine, pidge
         shell: bash
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          for crate in pidge-core pidge-client pidge; do
+          for crate in pidge-core pidge-client pidge-gmail pidge-store pidge-engine pidge; do
             status="$(curl -s -o /dev/null -w '%{http_code}' \
               -A 'pidge-release (https://github.com/mklab-se/pidge)' \
               "https://crates.io/api/v1/crates/${crate}/${version}")"
@@ -402,6 +402,9 @@ jobs:
           PIDGE_MCP_ALLOWED_EMAILS: ${{ secrets.PIDGE_MCP_ALLOWED_EMAILS }}
           PIDGE_MCP_CUSTOM_DOMAIN: ${{ vars.PIDGE_MCP_CUSTOM_DOMAIN }}
           PIDGE_MCP_CUTOVER: ${{ vars.PIDGE_MCP_CUTOVER }}
+          PIDGE_MCP_MIN_REPLICAS: ${{ vars.PIDGE_MCP_MIN_REPLICAS }}
+          PIDGE_GOOGLE_CLIENT_ID: ${{ vars.PIDGE_GOOGLE_CLIENT_ID }}
+          PIDGE_GOOGLE_CLIENT_SECRET: ${{ secrets.PIDGE_GOOGLE_CLIENT_SECRET }}
 
       - name: Smoke test
         shell: bash

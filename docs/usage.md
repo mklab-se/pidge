@@ -1,142 +1,144 @@
 # Using pidge
 
-pidge is built for AI agents, but every command works just as well by hand. This page is a tour of
-the everyday commands; `pidge --help` and `pidge <command> --help` are always the complete,
-up-to-date reference. Add `--json` to any command for machine-readable output, and `--dry-run` to
-any mutating command to see what it would do.
+pidge is built for AI agents, and every command works by hand too. The mail and calendar commands
+are the same operations the MCP tools are, with the same names and inputs: `pidge mail find` is
+`mail_find`, `--set-kind` is `set_kind`. `pidge <area> <verb> --help` is always the complete
+reference; add `--json` to any command for the structured result.
 
-## Account setup
+## Mailboxes
 
 ```bash
-# Add an account (opens your browser, auth code + PKCE)
-pidge account add
-
-# List signed-in accounts and which one is default for e-mail / calendar
+pidge account add                     # Microsoft 365 or Outlook.com (opens your browser)
+pidge account add --provider google   # Gmail (needs your own Google client: docs/gmail.md)
 pidge account list
-
-# Remove an account (interactive picker if more than one is signed in)
 pidge account remove
+pidge accounts                        # health, sync state, default sender, timezone
 ```
 
-The first account you add becomes the default for both e-mail and calendar; change either with:
+Mailboxes are merged: every read covers all of them unless you pass `--account`.
+
+## What's new
 
 ```bash
-pidge account default e-mail   <email>
-pidge account default calendar <email>
-pidge account default              # prints both currents
+pidge                         # what's new since you last looked, and today's calendar
+pidge mail brief              # the inbox map and what matters, with a reason for each
+pidge mail brief --importance high
+pidge mail brief --since 7d --mark-seen=false   # peek without moving "last seen"
 ```
 
-Sign in to multiple accounts and pidge merges reads across all of them by default.
+pidge remembers what you have seen, so "what's new" at 16:00 does not repeat what you went through
+at 09:00.
 
-## Reading the inbox
+## Finding and reading
+
+Every message, event, draft and plan has a short id (`m12`, `e3`, `d4`, `p5`).
 
 ```bash
-# Shortcut: list 25 most recent across every signed-in account
-pidge mail
-
-# Shortcut: open a specific message by a fragment of its 8-char ID
-pidge mail 3515
-
-# Explicit forms
-pidge mail list --account kristofer@mklab.se --unread -n 50
-pidge mail show 3515 --mark-read
-
-# Pipe to scripts
-pidge mail --json | jq '.[].subject'
+pidge mail find avtal --from anna             # words and a sender
+pidge mail find --kind receipt --since this_month
+pidge mail find --category Uppdrag --unread
+pidge mail find --text "Q3" --before 2025-06-01 --folder any   # searches the mailbox past the index
+pidge mail read m12
+pidge mail read m12 --thread
+pidge mail attachment m12 faktura             # the attachment as text (markitdown when installed)
+pidge mail attachment m12 --mode save         # into Downloads
 ```
 
-## Writing mail
+Kinds are `receipt` (receipts, invoices, bills), `newsletter`, `promotion` (ads), `notification`,
+`social`, `invite` and `personal`.
+
+## Going through the inbox
 
 ```bash
-# Reply, reply-all or forward (asks "Send? [y/N]"; -y skips, --draft saves instead)
-pidge mail reply 3515 --body "Thanks, see you Tuesday."
-pidge mail reply-all 3515 --draft --body-file notes.txt
-pidge mail forward 3515 --to bob@example.com
-
-# Compose: a full-screen form, or send directly for scripting
-pidge mail new
-pidge mail new --to alice@example.com --subject "Hello" --body "Hi Alice"
-
-# Drafts
-pidge drafts list
-pidge drafts send 7a2c
-
-# File and clean up
-pidge mail archive 3515
-pidge mail move 3515 --to "Receipts"
-pidge mail unsubscribe 3515
+pidge mail triage                     # start: the map, the plan, the first step
+pidge mail triage yes                 # do what pidge suggests for this step
+pidge mail triage archive             # or: delete, read, keep, flag, file, unsubscribe, skip, one_by_one, undo, stop
+pidge mail triage --scope all         # the whole inbox ("clear my inbox")
 ```
+
+A triage runs in passes: sweeps of bulk mail first (one decision clears a group), then small
+batches of routine mail such as receipts, then what matters one by one with a suggestion.
+
+## Acting on mail
+
+```bash
+pidge mail act archive m12 m14
+pidge mail act delete --kind promotion        # a plan: count, examples, unsure ones
+pidge mail act delete --plan p5               # apply it
+pidge mail act move m12 --to "Kvitton/2026"   # folders are created as needed
+pidge mail act flag m12 --due 2026-11-20
+pidge mail act unsubscribe m12
+pidge mail act classify m12 --set-kind receipt   # teach pidge about one message
+pidge mail act undo
+```
+
+Changes to more than five messages, and every change described by a selector, become a plan you
+apply after looking at it. Delete always means Deleted Items or Trash.
+
+## Writing
+
+```bash
+pidge mail draft reply --in-reply-to m12 --body "Absolut, jag skriver under."
+pidge mail draft new --to anna --subject "Lunch?" --body -     # body from stdin
+pidge mail send d4                    # held 10 s to 2 min depending on risk
+pidge mail send d4 --action cancel
+pidge mail send --action status       # the outbox
+```
+
+Recipients can be names of people you mail with. Sending is held briefly so you can cancel: about
+10 seconds for a short reply to someone you know, longer for a first mail to an address, a forward
+or attachments. Mail that looks sensitive (identity or card numbers, passwords, many recipients)
+waits until you approve it with `--action approve`. A short-lived CLI hands held mail to a small
+background `pidge outbox run` process; anything overdue also goes out on the next pidge command.
 
 ## Calendar
 
 ```bash
-# Shortcut: list events for today + next 7 days across every account
-pidge calendar
-
-# Canned windows
-pidge calendar --today
-pidge calendar --tomorrow
-pidge calendar --week
-pidge calendar --month
-
-# Open one event by fragment of its 8-char hash
-pidge calendar 4cabda75
-
-# Schedule a meeting with attendees and a Teams URL
-pidge calendar new \
-  --title "Q3 planning" \
-  --start "tomorrow 15:00" --end "+90m" \
-  --invite alice@example.com,bob@example.com \
-  --location "Office" --online
-
-# Recurring weekly team sync
-pidge calendar new \
-  --title "Team sync" \
-  --start "next mon 09:00" --end "+30m" \
-  --repeat weekly --on mon --until 2026-12-31
-
-# Appointment with a real calendar reminder the day before
-pidge calendar new \
-  --title "Car service" \
-  --start "2026-10-07T11:25" --end "+35m" \
-  --location "Volvo Car Kista" --reminder 1d
-
-# Change or switch off the reminder on an existing event
-pidge calendar edit 4cabda75 --reminder 2h
-pidge calendar edit 4cabda75 --reminder off
-
-# Reschedule
-pidge calendar move-time 4cabda75 --start "fri 14:00"
-
-# Cancel (organizer-only; sends notices to attendees)
-pidge calendar cancel 4cabda75 --comment "Postponed to next week"
-
-# RSVP to someone else's invite
-pidge calendar rsvp 4cabda75 --accept
-
-# Pipe to scripts
-pidge calendar --json --week | jq '.[] | .subject'
+pidge calendar                        # today
+pidge calendar agenda this_week
+pidge calendar agenda next            # the next event
+pidge calendar agenda --pending-only  # unanswered invitations
+pidge calendar event create --title "Q3 planning" --start "tomorrow 15:00" --end +90m \
+  --attendees anna,bob@example.com --online-meeting
+pidge calendar event create --from-message m12          # from an e-mail's .ics
+pidge calendar event update --id e3 --add-attendees anna  # "invite this person": a plan first
+pidge calendar event cancel --id e3 --message "Sorry, something came up"
+pidge calendar act clear today        # cancel / decline / delete everything today: a plan first
+pidge calendar respond e3 accept
+pidge calendar free next_week --with anna --duration-minutes 60
 ```
 
-
-## Guardrails
-
-Every mutating action belongs to a class (`send`, `delete`, `cancel`, `rsvp`, `bulk`,
-`unsubscribe`), and each class can be set to `allow` (the default), `confirm` or `deny`:
+## Teaching pidge
 
 ```bash
-pidge config set guardrails.send confirm
-pidge config set guardrails.delete deny
-pidge config show
+pidge mail setup                                        # categories, VIPs, policy, settings
+pidge mail setup add --name Leisure --description "Climbing, choir"
+pidge mail setup add_rule --name Leisure --rule domain:klatterklubben.se
+pidge mail setup add_example --name Leisure --example m12
+pidge mail setup vip --who anna@example.com
+pidge mail setup mute --who news@shop.se
+pidge mail setup policy --key bulk --value allow        # bulk changes without a plan
+pidge mail setup set --key timezone --value Europe/Stockholm
 ```
 
-## AI provider
+Preferences live in `prefs.json` next to `config.yaml`; the index (a cache rebuilt from your
+mailboxes) is `index.db` in pidge's cache directory.
 
-A few features (such as `pidge ai classify`) call an AI model directly. pidge delegates that
-configuration to [ailloy](https://github.com/mklab-se/ailloy), shared with the other MKLab tools,
-so you configure a provider once:
+## Your own AI (optional)
+
+pidge sorts mail with your rules and mail signals on its own. With your own AI key it also judges
+what rules and signals leave open, and checks how sensitive an outgoing mail is:
 
 ```bash
-pidge ai config    # configure your AI provider
-pidge ai status    # check status
+pidge ai config      # provider and model, through Ailloy (shared with rigg, mdeck, cosq)
+pidge ai enable
+```
+
+## For agents
+
+```bash
+pidge skill > ~/.claude/skills/pidge/SKILL.md   # Claude Code, Codex, Copilot CLI, ...
+pidge mcp serve                                  # a local MCP server on stdio
+pidge op --list                                  # every operation
+pidge op mail_find --input '{"kind":"receipt"}'  # any operation with its exact MCP input
 ```

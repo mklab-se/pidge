@@ -625,3 +625,25 @@ on the parts below it:
 6. Frontends: the CLI (op commands built from the registry), `pidge mcp serve` (stdio), the hosted
    server (tools from the same registry; Blob prefs; Gmail connect).
 7. Deploy (`minReplicas`, Blob storage, Google secrets), docs, skill, CHANGELOG, release 2.0.0.
+
+## 15. As built (2026-11-05)
+
+The single step landed on `claude/pidge-architecture-rethink-dshoko`. Where the build differs from
+the text above:
+
+- **Crate names.** The Microsoft crate keeps the name `pidge-client` (it holds the Graph provider
+  and the shared token plumbing that `pidge-gmail` reuses); there is no `pidge-graph`.
+- **Bootstrap.** Instead of two sync steps, a mailbox's first sync runs in the background for the
+  whole window and a read waits for it up to a budget (8 s for MCP, 120 s for the CLI), answering
+  with what is there and a note that older mail is still loading. With `minReplicas` 1 this happens
+  once per user, not once per conversation.
+- **Hosted MCP surface.** The 1.x MCP prompts and the mailbox category sync (`prune_mailboxes`,
+  per-mailbox restore) are not carried over; `mail_setup action=label_mail` writes pidge's
+  categories onto recent mail on request. MCP sampling is not used.
+- **Gmail specifics.** Labels serve as both folders and categories, so a label used as a folder is
+  also listed as a category; cancellations cannot carry a note (Google sends its own); forwards are
+  text only; `has_attachments` in lists is a heuristic (the full message is exact).
+- **Policy.** Single-message changes act at once; `bulk` (more than 5, or any selector) and
+  `notify` (calendar changes that e-mail people) default to `confirm`, which returns a plan. RSVPs
+  are not planned (answering an invitation is the user's explicit request) but a message with an
+  RSVP counts against the hourly cap.

@@ -80,6 +80,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: OutboxCommands,
     },
+    /// Developer tools (capturing an e-mail for a renderer fixture)
+    #[command(hide = true)]
+    Debug {
+        #[command(subcommand)]
+        command: DebugCommands,
+    },
     /// Generate shell completions
     Completion {
         #[arg(value_enum)]
@@ -163,6 +169,16 @@ pub enum AiCommands {
     Status,
     /// Send a test message
     Test { message: Option<String> },
+}
+
+#[derive(Subcommand)]
+pub enum DebugCommands {
+    /// Print a message's raw HTML body (or text, when it has no HTML), to
+    /// anonymize into a renderer fixture (see CLAUDE.md)
+    RawHtml {
+        /// The message (m12)
+        id: String,
+    },
 }
 
 #[derive(Subcommand)]

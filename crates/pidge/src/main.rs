@@ -18,7 +18,7 @@ mod guardrail;
 mod local;
 mod update;
 
-use cli::{Cli, Commands, McpCommands, OutboxCommands};
+use cli::{Cli, Commands, DebugCommands, McpCommands, OutboxCommands};
 
 /// The whole command tree: fixed commands plus the engine's operations.
 pub fn build_command() -> Command {
@@ -144,6 +144,15 @@ async fn dispatch(matches: &clap::ArgMatches, json: bool) -> Result<()> {
         }) => {
             let user = local::open_user(Frontend::Cli).await?;
             pidge_engine::outbox::run_until_empty(&user).await;
+            Ok(())
+        }
+        Some(Commands::Debug {
+            command: DebugCommands::RawHtml { id },
+        }) => {
+            let user = local::open_user(Frontend::Cli).await?;
+            let t = pidge_engine::ops::resolve_message(&user, &id)?;
+            let msg = user.provider(&t.account)?.get_message(&t.id).await.map_err(pidge_engine::OpError::from)?;
+            print!("{}", msg.body_content);
             Ok(())
         }
         Some(Commands::Completion { shell }) => {

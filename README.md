@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>The e-mail and calendar client for your AI agent.</strong><br>
-  Let Claude Code, Codex, Copilot, Claude.ai or ChatGPT work your real inbox and calendar, safely.
+  Let Claude Code, Codex, Copilot, Claude.ai or ChatGPT work your real inbox and calendar, safely.<br>
+  Microsoft 365, Outlook.com and Gmail.
 </p>
 
 <p align="center">
@@ -20,8 +21,8 @@
 <!-- "What's new" callout: keep it right after the badges and refresh it on every minor/major
      release (version and a one-line summary of the headline changes). Only link CHANGELOG.md. -->
 <p align="center">
-  <strong>pidge 1.7</strong> is here: go through your inbox hands-free from a voice assistant, one
-  call per message, sorted into your own categories (optionally by your own Jev key).<br>
+  <strong>pidge 2.0</strong> is a rebuild around one engine: Gmail next to Microsoft, a local MCP server,
+  inbox triage in sweeps and batches, changes that never make you wait, and sending you can still cancel.<br>
   <a href="CHANGELOG.md"><strong>What's new</strong></a>
 </p>
 
@@ -33,86 +34,80 @@
 
 ---
 
-Your AI agent already writes your code. pidge lets it handle the rest of your day too:
-triage the inbox, draft replies, find a free slot, book the meeting and answer the invite,
-across every mailbox you have, from one tool.
+Your AI agent already writes your code. pidge lets it handle the rest of your day too: tell you
+what's new, go through the inbox with you, find that one e-mail, clear out receipts and ads, draft
+the reply, and run the calendar, across every mailbox you have.
 
 ```text
-You:    Go through my unread mail, archive the newsletters, and draft a reply to
-        Bob proposing a slot next week when we're both free.
-
-Agent:  $ pidge mail list --unread --json
-        $ pidge mail archive 3f1a
-        $ pidge mail archive 9c02
-        $ pidge calendar --week --json
-        $ pidge mail reply 4d8e --draft --body-file -
-        Archived 2 newsletters. Drafted a reply to Bob proposing Tue 14:00 or
-        Thu 10:00. Want me to send it?
+You:    Anything important today?
+Agent:  (mail_brief importance=high)
+        Two things: Anna asks you to sign the contract before Friday, and Bob's
+        invitation for Thursday 14:00 is still unanswered.
+You:    Clear out the rest of my inbox.
+Agent:  (mail_triage scope=all)
+        41 messages. First, 23 newsletters and promotions: archive them all?
+You:    Yes.
+Agent:  Done. Next, 4 receipts: Telia 449 kr, SL 970 kr, Apple 29 kr, Spotify 119 kr. File them?
 ```
 
 ## Why pidge
 
-- **Built for agents first.** Every command speaks `--json`, messages and events have short
-  stable ids, lists page with cursors, and `mail delta` / `calendar delta` / `pidge watch` let
-  long-running agents follow changes instead of re-reading everything.
-- **You stay in control.** Sends ask before they go, and agents can save drafts for you to
-  approve. Lock things down further with per-action guardrails
-  (`pidge config set guardrails.send confirm`, also `delete`, `cancel`, `rsvp`, `bulk`,
-  `unsubscribe`; each `allow` / `confirm` / `deny`) or preview anything with `--dry-run`.
-  The MCP server goes further: sends only from an approved draft, a per-user send cap, and
-  third-party mail content marked as untrusted so your agent summarises it instead of obeying it.
-- **All your mailboxes in one view.** Sign in to several accounts; reads are merged across all
-  of them, and writes go out from the right one.
-- **Mail and calendar in one tool.** Search, read, reply, forward, file, unsubscribe; create,
-  reschedule, duplicate, cancel and RSVP to events, including recurring meetings.
-- **Fast and self-contained.** A single Rust binary. Tokens live in your OS keychain.
+- **Made for agents, by asking what people say.** Fifteen operations, each answering something
+  people actually ask ("anything new?", "clear my inbox", "archive all invoices", "cancel all my
+  appointments today") in one or two calls. Short ids (`m12`, `e3`), compact text output, and a
+  `next:` line telling the agent what to do.
+- **It remembers.** pidge keeps a small local index of your recent mail, synced from your mailboxes:
+  "new" means new since you last looked, and "all receipts" or "all commercials" is one query, not
+  a hundred judgements.
+- **Snappy.** Archive, delete, flag: pidge answers at once and does it in the background; a failure
+  is reported on the next answer.
+- **Safe by construction.** Changes to many messages, and anything that e-mails other people, are a
+  plan you approve first. Sending is held for a few seconds to two minutes depending on risk, so
+  you can still say "cancel", and mail that looks sensitive waits for a second yes. Undo is one
+  call. Nothing is deleted permanently, and mail content is marked untrusted so your agent
+  summarises it instead of obeying it.
+- **All your mailboxes in one view.** Microsoft 365, Outlook.com and Gmail, with calendars, merged.
+- **Everywhere your agent is.** A CLI and skill for terminal agents, a local MCP server for desktop
+  apps, and a hosted MCP server for Claude.ai and ChatGPT, all one engine with the same behaviour.
 
 ## Get started
 
-### Option 1: CLI + agent skill (Claude Code, Codex, Copilot, …)
-
 ```bash
 brew install mklab-se/tap/pidge        # or: cargo install pidge (see INSTALL.md)
-pidge account add                      # sign in (opens your browser)
-pidge ai skill --emit > ~/.claude/skills/pidge/SKILL.md
+pidge account add                      # Microsoft (opens your browser)
+pidge account add --provider google    # Gmail (bring your own Google client: docs/gmail.md)
 ```
 
-That's it, ask your agent about your mail. The emitted skill is deliberately small: it teaches
-the agent the patterns (JSON output, confirmation gates, account context) and points it at
-`pidge --help` for everything else, so it keeps working as pidge grows.
+Then connect your agent:
 
-### Option 2: Remote MCP server (Claude.ai, ChatGPT, Cowork, …)
-
-For harnesses that speak [MCP](https://modelcontextprotocol.io) rather than run shell commands,
-`pidge-mcp` exposes the same mail and calendar tools over HTTP. Each user signs in with their
-own account and only ever sees their own mailboxes.
-
-- **Self-host it:** a ready-made image is published at `ghcr.io/mklab-se/pidge-mcp`, with
-  Bicep templates for Azure Container Apps.
-- **The reference server** at `https://pidge.mklab.se/mcp` is currently invite-only.
-
-See [docs/mcp.md](docs/mcp.md) for connecting clients, self-hosting, and moving an existing
-local setup over with `pidge mcp connect`.
+- **Claude Code, Codex, Copilot CLI and other terminal agents:**
+  `pidge skill > ~/.claude/skills/pidge/SKILL.md` (or your agent's skill folder).
+- **Claude Desktop, Cowork and other local MCP clients:** add a stdio server running
+  `pidge mcp serve`:
+  ```json
+  { "mcpServers": { "pidge": { "command": "pidge", "args": ["mcp", "serve"] } } }
+  ```
+- **Claude.ai, ChatGPT, phones and voice:** a hosted `pidge-mcp` server. The reference server at
+  `https://pidge.mklab.se/mcp` is invite-only; self-host your own from the published image
+  `ghcr.io/mklab-se/pidge-mcp` (Bicep templates for Azure included). See [docs/mcp.md](docs/mcp.md).
 
 ## Using it yourself
 
-pidge is a pleasant CLI for humans too:
-
 ```bash
-pidge mail                                   # latest mail, all accounts
-pidge mail 3515                              # open a message by id fragment
-pidge mail search 'from:alice subject:budget'
-pidge calendar --week                        # the week ahead
-pidge calendar new --title "Q3 planning" --start "tomorrow 15:00" --end "+90m" \
-  --invite alice@example.com --online
+pidge                                      # what's new, and today's calendar
+pidge mail find avtal --from anna          # find a message
+pidge mail triage                          # go through the inbox, step by step
+pidge mail act archive --kind receipt      # a plan for every receipt; apply it with --plan
+pidge calendar agenda this_week
+pidge calendar event create --title "Q3 planning" --start "tomorrow 15:00" --end +90m --attendees anna
 ```
 
-More in [docs/usage.md](docs/usage.md), or run `pidge --help`.
+More in [docs/usage.md](docs/usage.md), or `pidge --help`.
 
 ## Supported providers
 
-Microsoft 365 work/school accounts and personal Microsoft accounts (Outlook.com, Hotmail, Live)
-today. pidge's core is provider-neutral, and more providers may follow.
+Microsoft 365 work and school accounts, personal Microsoft accounts (Outlook.com, Hotmail, Live),
+and Gmail with Google Calendar ([setup](docs/gmail.md)).
 
 ## Contributing
 

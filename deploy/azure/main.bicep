@@ -49,6 +49,18 @@ param altHosts string = ''
 @description('Comma-separated issuer URLs whose previously issued tokens the server still accepts, for cutover to a new public URL.')
 param legacyIssuers string = ''
 
+@description('Replicas kept running. 1 (the default) avoids the cold start on the first call of a conversation and keeps each user\'s index, held sends and undo warm; 0 scales to zero when idle and costs less.')
+@minValue(0)
+@maxValue(1)
+param minReplicas int = 1
+
+@description('Google OAuth "Web application" client id, for connecting Gmail mailboxes (redirect URI <public url>/callback/google). Empty: Gmail cannot be connected.')
+param googleClientId string = ''
+
+@description('Secret of the Google OAuth client.')
+@secure()
+param googleClientSecret string = ''
+
 var suffix = uniqueString(resourceGroup().id)
 var tags = {
   project: baseName
@@ -63,6 +75,7 @@ var appPort = 8080
 // Built-in role definition ids.
 var roleKeyVaultSecretsOfficer = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
 var roleAcrPull = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+var roleStorageBlobDataContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
 // ---------------------------------------------------------------------------
 // Observability
@@ -198,6 +211,67 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 // The MCP server
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Preferences: one small JSON blob per user (categories, rules, policy),
+// written only by the app's identity. Tokens and AI keys stay in Key Vault.
+// ---------------------------------------------------------------------------
+
+resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: 'st${baseName}${substring(suffix, 0, 8)}'
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: storage
+  name: 'default'
+  properties: {
+    deleteRetentionPolicy: {
+      enabled: true
+      days: 14
+    }
+  }
+}
+
+resource prefsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'prefs'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource prefsWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, identity.id, roleStorageBlobDataContributor)
+  scope: storage
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleStorageBlobDataContributor)
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+var googleSecrets = empty(googleClientSecret) ? [] : [
+  {
+    name: 'google-client-secret'
+    value: googleClientSecret
+  }
+]
+var googleEnv = empty(googleClientId) ? [] : [
+  { name: 'PIDGE_GOOGLE_CLIENT_ID', value: googleClientId }
+  { name: 'PIDGE_GOOGLE_CLIENT_SECRET', secretRef: 'google-client-secret' }
+]
+
 var publicUrl = empty(publicUrlOverride) ? 'https://${appName}.${containerEnv.properties.defaultDomain}' : publicUrlOverride
 
 resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
@@ -234,6 +308,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
           identity: identity.id
         }
       ]
+      secrets: googleSecrets
     }
     template: {
       containers: [
@@ -244,7 +319,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
             cpu: json('0.25')
             memory: '0.5Gi'
           }
-          env: [
+          env: concat([
             { name: 'PORT', value: string(appPort) }
             { name: 'RUST_LOG', value: logLevel }
             { name: 'PIDGE_MCP_PUBLIC_URL', value: publicUrl }
@@ -254,7 +329,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
             { name: 'PIDGE_MCP_ALT_HOSTS', value: altHosts }
             { name: 'PIDGE_MCP_LEGACY_ISSUERS', value: legacyIssuers }
             { name: 'PIDGE_MCP_LOG_FORMAT', value: 'json' }
-          ]
+            { name: 'PIDGE_MCP_PREFS_URL', value: '${storage.properties.primaryEndpoints.blob}prefs' }
+            // The index is a cache rebuilt from the mailboxes: local disk is enough.
+            { name: 'PIDGE_MCP_INDEX_DIR', value: '/tmp/pidge-index' }
+          ], googleEnv)
           probes: [
             {
               type: 'Liveness'
@@ -285,9 +363,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
         //  - token generations (sign-out everywhere) are cached per process
         //    for up to 5 minutes, so with more replicas a sign-out on one
         //    would take that long to reach the others.
-        // Scale-to-zero is fine: a Rust binary cold-starts in well under a
-        // second.
-        minReplicas: 0
+        // minReplicas 1 (the default) keeps it warm: the image pull and
+        // container start of a cold scale-from-zero were the slow first call,
+        // and an always-on replica keeps each user's index, held sends and
+        // undo log between conversations.
+        minReplicas: minReplicas
         maxReplicas: 1
       }
     }
@@ -295,6 +375,8 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
   dependsOn: [
     registryPull
     vaultSecretsOfficerApp
+    prefsWriter
+    prefsContainer
   ]
 }
 
