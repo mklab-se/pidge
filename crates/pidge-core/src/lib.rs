@@ -17,6 +17,7 @@ pub mod paths;
 pub mod provider;
 pub mod render;
 pub mod timerange;
+pub mod unsubscribe;
 
 pub use account::{Account, TokenStorage};
 pub use cache::{

@@ -9,7 +9,7 @@ pub mod graph;
 pub mod mcp;
 #[cfg(test)]
 pub(crate) mod test_support;
-pub mod unsubscribe;
+pub use pidge_core::unsubscribe;
 
 pub use auth::AuthClient;
 pub use error::ClientError;

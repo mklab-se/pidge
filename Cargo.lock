@@ -2845,11 +2845,28 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]
 name = "pidge-engine"
 version = "1.7.7"
+dependencies = [
+ "ailloy",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "futures",
+ "pidge-core",
+ "pidge-store",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+]
 
 [[package]]
 name = "pidge-mcp"
