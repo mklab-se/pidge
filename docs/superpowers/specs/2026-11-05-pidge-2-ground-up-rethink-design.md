@@ -1,7 +1,7 @@
 # pidge 2: a ground-up rethink
 
 **Date:** 2026-11-05
-**Status:** proposal for discussion (nothing here is decided yet; open questions in §11)
+**Status:** decided (see §10 and §11); built as one step into pidge 2.0
 **Starting point:** pidge 1.7.7 (four crates, about 57 000 lines of Rust, 830 tests, 19 MCP tools,
 about 60 CLI command modules)
 
@@ -485,44 +485,143 @@ holding the moved logic once. Total size should fall, not grow.
 
 ---
 
-## 10. Getting there without a rewrite
+## 10. Decisions (2026-11-05)
 
-A big-bang rewrite would throw away a working, security-reviewed system. The path below keeps
-`main` releasable after every phase and moves code rather than retyping it.
+| Question | Decision |
+|---|---|
+| Local front ends | Both: the skill (CLI) and local MCP (`pidge mcp serve`, stdio), on the same engine. |
+| Hosted preferences | Move non-secret preferences to Blob storage; Key Vault keeps tokens and AI keys only. |
+| Index window | 90 days by default. |
+| Sending | No "confirm before send" by default. Sending is **held**: it goes out by itself after a short delay that grows with risk, can be cancelled during the hold, and the riskiest mail waits for a second approval (§12). |
+| Human CLI features | Remove the compose forms, inline images and the trusted-senders list behind them. |
+| Providers | Add **Gmail** (with Google Calendar) as a second provider, next to Microsoft (§13). |
+| Tool names | As proposed in §4. |
+| Migration | **One step.** There is one user and no compatibility to keep: pidge 2.0 replaces 1.7 outright, old tool names, CLI commands and file formats included. Section 10 of the first draft (phased releases) is withdrawn; §14 is the build order inside the single step. |
 
-| Phase | Outcome | Release |
+## 11. What the car session taught us (2026-11-05)
+
+A voice session (ChatGPT voice mode, hosted pidge) gave five findings. Each one changes the design.
+
+**F1. Waking up is slow, but acceptable.** The hosted app scales to zero, so the first call pays for
+a container start, Key Vault reads and Graph token refreshes. pidge 2 also adds an index bootstrap
+to that first call, which would make it worse. Responses:
+- The index bootstraps in two steps: the inbox since the seen watermark (or the last 14 days) is
+  synced before the first answer; the rest of the 90-day window fills in the background.
+- `minReplicas` becomes a Bicep parameter, **default 1** for the reference deployment: with one
+  always-on replica of this size the cost is small (idle pricing on Container Apps; check the
+  current price list) and the index, plans and undo log survive between conversations.
+  Self-hosters can set it to 0.
+
+**F2. "Archive it" must not wait.** Every mailbox change is now **fire-and-forget**: the operation
+records the change in the index at once (so the next read already reflects it), queues the provider
+call on a per-user worker, and answers immediately. The answer is one word ("Archived.") followed by
+whatever comes next. A failure is reported once, at the top of the next answer ("Earlier: archiving
+the Telia mail failed, it is back in the inbox."). The CLI runs the queue before it exits; the MCP
+frontends run it in the background. Sending is the only exception, and it has its own hold (§12).
+
+**F3. The agent lacks the full picture.** Every triage start and every brief opens with an
+**inbox map**: totals per mailbox, unread, new since the last look, per category and kind, waiting
+for a reply, pending invites, flagged, oldest unread. The agent can answer "how bad is it?" and
+plan without asking for more.
+
+**F4. The agent forgets to continue.** Two causes, both fixed structurally:
+- The agent used a different tool to act (the general `mail_act` instead of `mail_review_next`),
+  and that tool's answer ended the turn. In pidge 2, **any** change to a message that belongs to an
+  active triage session advances the session, and its answer carries the next item, whichever
+  operation the agent called.
+- The answer did not say what to do next. Every triage answer now ends with an explicit
+  instruction line for the agent: `next: read this to the user and ask what to do; call
+  mail_triage with their answer`. Triage answers put the next item *first*, and the confirmation
+  of the last action is a single word, so a voice harness reads on without pausing.
+
+**F5. An efficient order, part AI and part plain efficiency.** Triage is planned in **passes**
+instead of walking the inbox newest first:
+1. **Sweep:** everything pidge is confident is bulk (promotions, newsletters, notifications, by
+   rule, signal or AI) is offered as one decision per kind: "31 newsletters and promotions and 12
+   notifications: archive them all?" One yes clears most of an inbox.
+2. **Batches:** routine mail that needs a glance, not a thought, grouped by kind and sender in
+   groups of up to five: "4 receipts: Telia 449 kr, SL 970 kr, Apple 29 kr, Spotify 119 kr. File
+   them?" One decision per group, with the option to pull one out.
+3. **One by one:** what matters, most important first (VIP, waiting for your reply, invites,
+   deadlines), each with a suggested action, and conversations collapsed into one item.
+
+The sweep and batches are where plain efficiency wins; the one-by-one pass is where the AI helps
+(the harness drafts the reply, proposes the RSVP). pidge decides the order, the user can always
+say "skip", "later" or "just the important ones".
+
+## 12. Sending: a hold instead of a question
+
+The user wants to send without a ceremony, and still be able to catch a mistake. `mail_send` puts
+the draft in pidge's **outbox** with a hold, and returns at once:
+
+```
+Sending to Anna Berg in 30 s ("Re: Avtal"). Say "cancel" to stop it.
+next: tell the user it will go out in 30 s; mail_send action=cancel draft=d4 stops it
+```
+
+**Hold length** comes from a risk assessment of the draft (heuristics always, the user's AI key
+when configured):
+
+| Level | Hold | Typical triggers |
 |---|---|---|
-| 0 | This document agreed; open questions decided. | |
-| 1 | `pidge-engine` with the `Op` trait and `Ctx`. Move the MCP tools into ops *unchanged in behaviour* (they are closest to the target); the hosted server calls the registry. Add immutable ids (Graph header) behind the existing id format. | 1.8 |
-| 2 | `pidge mcp serve` (stdio) on the same registry. Local MCP exists for every desktop client. | 1.9 |
-| 3 | `pidge-store`: index, delta sync, handles, prefs. Ops read from it; hosted gets per-user cache files. Seen watermark and `mail_brief`. | 1.10 |
-| 4 | Policy engine with plans and undo; selectors on `mail_act`; `calendar_act`; `add_attendees` / `remove_attendees`; `from_message`. | 1.11 |
-| 5 | Triage model: kinds, importance with reasons, suggested actions, harness-as-classifier; `mail_triage` and `mail_setup` replace review and categories (old tool names kept as aliases for one release). | 1.12 |
-| 6 | CLI becomes a thin adapter over the ops; drop the items in §9; skill generated from the registry and playbooks; docs rewritten around the prompt table in §8. | **2.0** |
+| low | 10 s | reply to one known person in an existing thread, short, no attachments |
+| normal | 30 s | new mail to a known person, small recipient list |
+| high | 2 min | first mail to an address, external recipients on a work account, many recipients, reply-all to a large list, attachments, forwarding |
+| approval | held until approved | sensitive content (personal identity numbers, card or account numbers, passwords, health or legal words), more than 20 recipients, a forward of a thread that contains such content |
 
-Each phase has its own implementation plan under `docs/superpowers/plans/`, and the test
-suite moves with the code (wiremock Graph tests to the engine, OAuth flow tests stay in
-`pidge-mcp`, renderer snapshots stay as they are).
+`approval` means the draft waits in the outbox until `mail_send action=approve` (the "second
+approval"). The answer says why ("it contains what looks like a personal identity number"), so the
+agent can read it to the user. `action=now` skips the hold (for "send it now"), `action=cancel`
+stops it and leaves it a draft. The policy (`send: hold | confirm | allow | deny`) still applies;
+`hold` is the new default.
 
----
+**Where the hold runs:** the hosted server and local MCP run the outbox on their per-user worker.
+The CLI, which exits, records the outbox entry in the store and starts a small detached
+`pidge outbox run` process that sends due items and exits when the outbox is empty; every pidge
+start also sends anything overdue, so a reboot during a hold only delays the send. Held sends count
+against the send cap when they are queued, not when they go out.
 
-## 11. Open questions for Kristofer
+## 13. Gmail
 
-1. **Local MCP vs skill as the primary local surface.** Proposal: both, from the same engine; the
-   skill stays for terminal agents, local MCP for desktop clients. Agree?
-2. **Hosted preferences store.** Keep the `UserRecord` in Key Vault, or move non-secret preferences
-   to Blob storage and keep Key Vault for tokens and AI keys only (recommended)?
-3. **Index window.** 90 days of inbox, archive and sent by default, or smaller? It bounds disk,
-   bootstrap time on a cold hosted start, and what `kind` selectors can find without falling back
-   to Graph search.
-4. **Default policy.** Is `send: confirm`, `notify: confirm`, `bulk: confirm` right for the CLI too?
-   It changes today's CLI behaviour (`mail new --to … --body …` would no longer send without a
-   confirmation or an applied plan).
-5. **How much human CLI to keep.** Dropping the compose forms and inline images is the biggest cut.
-   Is anyone relying on them?
-6. **Provider seam.** The engine talks to traits, with Graph as the only implementation. Should
-   phase 1 also sketch a second provider (Gmail API or JMAP) to keep the traits honest, or is
-   Microsoft-only fine for the people who will use pidge?
-7. **Naming of the new tools.** `mail_find`, `mail_brief`, `mail_triage`, `mail_setup`,
-   `calendar_act` are proposals; harnesses already trained on today's names keep working through
-   aliases for one release.
+Gmail (with Google Calendar) is the second implementation of the provider traits. The engine does
+not know which provider an account uses; the mapping is the provider's job:
+
+| pidge concept | Microsoft Graph | Gmail / Google Calendar |
+|---|---|---|
+| inbox, archive, deleted | folders (`inbox`, `archive`, `deleteditems`) | labels: `INBOX`; archive = remove `INBOX`; delete = trash |
+| move to folder | `move` | add the user label, remove `INBOX` |
+| user category | Outlook categories | user labels (`pidge/<name>` namespace when synced) |
+| bulk signal | `inferenceClassification` (Focused/Other) | `CATEGORY_PROMOTIONS`, `CATEGORY_SOCIAL`, `CATEGORY_UPDATES`, `CATEGORY_FORUMS` |
+| delta | `/delta` with immutable ids | `history.list` from a `historyId` |
+| flag | follow-up flag | `STARRED` |
+| draft, send | Graph drafts | `drafts.create` (raw RFC 5322), `drafts.send` |
+| calendar | `calendarView`, Graph events | Calendar API v3 `events` (`singleEvents=true`), `sendUpdates=all` on changes |
+| free/busy | `getSchedule` (work/school) | `freeBusy.query` |
+| online meeting | Teams (`isOnlineMeeting`) | Google Meet (`conferenceData.createRequest`) |
+
+**Sign-in.** pidge cannot ship a Google OAuth client for everyone: the Gmail scopes pidge needs
+(`gmail.modify`) are restricted, and a public app with them needs Google's verification and a
+security assessment. Instead, whoever runs pidge brings their own Google Cloud OAuth client:
+- locally, a "Desktop app" client (`PIDGE_GOOGLE_CLIENT_ID` / `PIDGE_GOOGLE_CLIENT_SECRET`, or
+  `google.client_id` / `google.client_secret` in `config.yaml`), loopback redirect with PKCE;
+- hosted, a "Web application" client, redirect `https://<host>/callback/google`, secret in Key
+  Vault.
+A consent screen left in "Testing" issues refresh tokens that expire after 7 days; for lasting use
+the project should be published (unverified, it shows a warning screen and is capped at 100 users,
+which suits personal use). `docs/gmail.md` walks through the setup.
+
+## 14. Build order inside the single step
+
+Everything lands on one branch and ships as 2.0. The order only exists so each part can be tested
+on the parts below it:
+
+1. `pidge-core` types (handles, selectors, kinds, provider-neutral message and event shapes) and
+   the provider traits.
+2. `pidge-graph` (today's `pidge-client`, renamed): immutable ids, the trait implementation.
+3. `pidge-gmail`: Gmail and Google Calendar behind the same traits.
+4. `pidge-store`: SQLite index, handles, prefs, plans, undo, outbox, triage sessions.
+5. `pidge-engine`: op registry, policy, queue worker, outbox and risk, triage, people, render,
+   playbooks, every operation in §4.
+6. Frontends: the CLI (op commands built from the registry), `pidge mcp serve` (stdio), the hosted
+   server (tools from the same registry; Blob prefs; Gmail connect).
+7. Deploy (`minReplicas`, Blob storage, Google secrets), docs, skill, CHANGELOG, release 2.0.0.
