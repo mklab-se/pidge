@@ -201,9 +201,9 @@ pub(crate) fn build_authorize_url_with_hint(
     url.into()
 }
 
-pub(crate) struct CallbackParams {
-    pub(crate) code: String,
-    pub(crate) state: String,
+pub struct CallbackParams {
+    pub code: String,
+    pub state: String,
 }
 
 /// Accept a single connection on the listener, parse the request line for
@@ -231,7 +231,7 @@ fn timeout_label(timeout: Duration) -> String {
     }
 }
 
-pub(crate) async fn wait_for_callback(
+pub async fn wait_for_callback(
     listener: TcpListener,
     timeout: Duration,
     label: &str,
@@ -395,21 +395,21 @@ fn html_escape(s: &str) -> String {
 /// STRING, using the unreserved characters … with a minimum length of 43
 /// characters and a maximum length of 128 characters." 64 alphanumerics is
 /// comfortably inside the spec and gives ~380 bits of entropy.
-pub(crate) fn make_code_verifier() -> String {
+pub fn make_code_verifier() -> String {
     let mut rng = rng();
     (0..64).map(|_| rng.sample(Alphanumeric) as char).collect()
 }
 
 /// `base64url(SHA256(code_verifier))` per RFC 7636 §4.2. URL_SAFE_NO_PAD is
 /// the exact encoding the OAuth spec requires.
-pub(crate) fn make_code_challenge(verifier: &str) -> String {
+pub fn make_code_challenge(verifier: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(hasher.finalize())
 }
 
 /// 32 bytes of OS random → URL-safe base64. Used for the `state` CSRF nonce.
-pub(crate) fn make_random(byte_len: usize) -> String {
+pub fn make_random(byte_len: usize) -> String {
     let mut buf = vec![0u8; byte_len];
     rng().fill_bytes(&mut buf);
     URL_SAFE_NO_PAD.encode(&buf)

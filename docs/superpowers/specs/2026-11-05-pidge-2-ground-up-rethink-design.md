@@ -381,7 +381,7 @@ frontend:
 
 | Class | Covers | Default |
 |---|---|---|
-| `send` | `mail_send` | confirm |
+| `send` | `mail_send` | hold (§12) |
 | `notify` | invites, attendee changes, cancellations, RSVPs with a message, unsubscribe e-mails | confirm |
 | `bulk` | any change to more than 5 items, or any selector-based change | confirm |
 | `delete` | delete (always to Deleted Items) | allow for single, confirm in bulk |

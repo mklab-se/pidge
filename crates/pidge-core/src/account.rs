@@ -32,6 +32,9 @@ pub struct Account {
     pub added_at: DateTime<Utc>,
     #[serde(default)]
     pub storage: TokenStorage,
+    /// Which service the account lives at (Microsoft when absent).
+    #[serde(default)]
+    pub provider: crate::provider::ProviderKind,
 }
 
 impl Account {
@@ -64,7 +67,9 @@ impl Account {
     /// / Live / Hotmail) from organizational M365 tenants. As we add Gmail,
     /// IMAP, etc., this becomes a stored field rather than a derived one.
     pub fn provider_label(&self) -> &'static str {
-        if self.is_personal() {
+        if self.provider == crate::provider::ProviderKind::Google {
+            "Gmail"
+        } else if self.is_personal() {
             "Outlook"
         } else {
             "M365"
@@ -74,7 +79,9 @@ impl Account {
     /// Machine-readable provider identifier, used in `--json` output and any
     /// future config-file lookups. Stays stable as labels change.
     pub fn provider_id(&self) -> &'static str {
-        if self.is_personal() {
+        if self.provider == crate::provider::ProviderKind::Google {
+            "gmail"
+        } else if self.is_personal() {
             "outlook"
         } else {
             "m365"
@@ -95,6 +102,7 @@ mod tests {
                 .unwrap()
                 .to_utc(),
             storage: TokenStorage::default(),
+            provider: Default::default(),
         }
     }
 

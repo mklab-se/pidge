@@ -1,7 +1,8 @@
 //! Core types for pidge: accounts, configuration, and the normalized message model.
 //!
 //! This crate is intentionally provider-agnostic: it knows nothing about HTTP,
-//! Microsoft Graph, or authentication. Those concerns live in `pidge-client`.
+//! Microsoft Graph, Gmail, or authentication. It defines the [`provider::Provider`]
+//! seam that `pidge-graph` and `pidge-gmail` implement.
 
 mod account;
 pub mod availability;
@@ -13,6 +14,7 @@ mod event;
 pub mod flags;
 mod message;
 pub mod paths;
+pub mod provider;
 pub mod render;
 pub mod timerange;
 

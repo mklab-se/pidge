@@ -2802,6 +2802,7 @@ dependencies = [
 name = "pidge-core"
 version = "1.7.7"
 dependencies = [
+ "async-trait",
  "chrono",
  "chrono-tz",
  "dirs",
