@@ -62,3 +62,14 @@ pub fn call_line(
     })
     .to_string()
 }
+
+/// Append one line to the day's file in `dir` (created if missing).
+pub fn append_line(dir: &std::path::Path, at: DateTime<Utc>, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(day_file(at)))?;
+    writeln!(file, "{line}")
+}

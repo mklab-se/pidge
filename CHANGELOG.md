@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Intent log:** agents start each request with the new `intent` tool (`pidge intent "..."`): a
+  sentence or two on what the user asked, returning an id that every other tool takes as `intent`.
+  Every call is logged with its intent, input, duration, outcome and answer (capped at 4,000
+  characters), one JSON line each: `~/.cache/pidge/activity/` locally, the `activity` Blob container
+  hosted (`PIDGE_MCP_ACTIVITY_URL`). Nothing is deleted.
+
 ## [2.0.0] - 2026-11-06
 
 pidge 2.0: a ground-up rebuild around one engine. Design and reasoning:

@@ -25,7 +25,7 @@ use rmcp::RoleServer;
 use rmcp::service::RequestContext;
 use serde_json::Value;
 
-use crate::config::PrefsBackend;
+use crate::config::{ActivityBackend, PrefsBackend};
 use crate::oauth::bearer::AuthenticatedUser;
 use crate::oauth::jwt::random_id;
 use crate::state::{AppState, PENDING_TTL, PendingAuthorization, PendingKind, SharedState};
@@ -92,9 +92,16 @@ impl Engines {
                     PrefsBackend::Blob(url) => Arc::new(BlobPrefs::new(url.clone(), &key)?),
                 };
                 seed_prefs(prefs.as_ref(), &record).await;
+                let activity = match &cfg.activity {
+                    ActivityBackend::Dir(dir) => Activity::Dir(dir.join(user_hash_long(&key))),
+                    ActivityBackend::Blob(url) => {
+                        Activity::Blob(BlobActivity::new(url.clone(), &key)?)
+                    }
+                };
                 let host = Arc::new(HostedHost {
                     state: Arc::downgrade(state),
                     signin: key.clone(),
+                    activity,
                 });
                 User::new(user_hash(&key), store, prefs, providers, host)
             }
@@ -326,10 +333,89 @@ impl PrefsStore for BlobPrefs {
     }
 }
 
+/// Where one user's activity lines go.
+enum Activity {
+    Dir(std::path::PathBuf),
+    Blob(BlobActivity),
+}
+
+/// A user's activity log in Blob storage: one append blob per day,
+/// `<container>/<user hash>/<YYYY-MM-DD>.jsonl`.
+pub struct BlobActivity {
+    folder: String,
+    credential: Arc<dyn azure_core::credentials::TokenCredential>,
+    http: reqwest::Client,
+}
+
+impl BlobActivity {
+    pub fn new(container: url::Url, signin: &str) -> Result<Self> {
+        Ok(Self {
+            folder: format!(
+                "{}/{}",
+                container.as_str().trim_end_matches('/'),
+                user_hash_long(signin)
+            ),
+            credential: crate::secrets::azure_credential()?,
+            http: reqwest::Client::new(),
+        })
+    }
+
+    async fn append(&self, line: &str) -> Result<(), String> {
+        let token = self
+            .credential
+            .get_token(&["https://storage.azure.com/.default"], None)
+            .await
+            .map_err(|e| format!("storage token: {e}"))?;
+        let token = token.token.secret();
+        let url = format!(
+            "{}/{}",
+            self.folder,
+            pidge_engine::activity::day_file(Utc::now())
+        );
+        // The day's blob: created on its first line. 409 means it exists.
+        let created = self
+            .http
+            .put(&url)
+            .bearer_auth(token)
+            .header("x-ms-version", "2021-08-06")
+            .header("x-ms-blob-type", "AppendBlob")
+            .header("if-none-match", "*")
+            .header("content-type", "application/x-ndjson")
+            .header("content-length", "0")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !created.status().is_success() && created.status().as_u16() != 409 {
+            return Err(format!(
+                "activity store answered {}",
+                created.status().as_u16()
+            ));
+        }
+        let appended = self
+            .http
+            .put(format!("{url}?comp=appendblock"))
+            .bearer_auth(token)
+            .header("x-ms-version", "2021-08-06")
+            .body(format!("{line}\n"))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if appended.status().is_success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "activity store answered {}",
+                appended.status().as_u16()
+            ))
+        }
+    }
+}
+
 /// What the hosted frontend does for one user.
 pub struct HostedHost {
     state: Weak<AppState>,
     signin: String,
+    activity: Activity,
 }
 
 impl HostedHost {
@@ -543,6 +629,17 @@ impl Host for HostedHost {
         )
     }
 
+    async fn record(&self, line: String) {
+        let kept = match &self.activity {
+            Activity::Dir(dir) => pidge_engine::activity::append_line(dir, Utc::now(), &line)
+                .map_err(|e| e.to_string()),
+            Activity::Blob(blob) => blob.append(&line).await,
+        };
+        if let Err(e) = kept {
+            tracing::warn!(error = %e, "could not keep an activity line");
+        }
+    }
+
     async fn one_click_unsubscribe(&self, url: &str) -> Result<(), String> {
         let state = self.state().map_err(|e| e.message)?;
         state
@@ -648,6 +745,30 @@ mod tests {
         let user = h.state.engines.user(&h.state, JANE).await.unwrap();
         assert_eq!(user.addresses(), vec![JANE.to_string()]);
         assert!(user.provider(WORK).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_users_calls_land_in_their_own_activity_folder() {
+        let h = ToolHarness::new(&[JANE]).await;
+        let user = h.state.engines.user(&h.state, JANE).await.unwrap();
+        let op = pidge_engine::registry::find("intent").unwrap();
+        pidge_engine::registry::run(
+            &user,
+            &op,
+            serde_json::json!({ "summary": "Any new mail?" }),
+        )
+        .await
+        .unwrap();
+        user.drain().await;
+
+        let crate::config::ActivityBackend::Dir(root) = &h.state.config.engine.activity else {
+            panic!("tests log to a folder");
+        };
+        let file = root
+            .join(crate::users::user_hash_long(JANE))
+            .join(pidge_engine::activity::day_file(chrono::Utc::now()));
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("\"summary\":\"Any new mail?\""), "{text}");
     }
 
     #[tokio::test]

@@ -216,6 +216,7 @@ all appointments today", ...).
 | `calendar_act` | Many events at once: clear a day, cancel, decline, delete or move; always a plan first. |
 | `calendar_respond` | Accept, tentatively accept or decline an invitation (by event or by the invitation e-mail), with an optional note. |
 | `calendar_availability` | Free windows of a given length within working hours, optionally with other people's free/busy. |
+| `intent` | First call for every request: what the user asked, in a sentence or two. Returns an id (`i4kq2x`) that every other tool takes as `intent`. Requests and their calls are logged to improve pidge. |
 | `accounts` | The user's mailboxes and their health; `connect` (Microsoft or Google), `disconnect`, `ai` (set up the user's own AI key), `ai_off`, `sign_out_everywhere`. |
 
 How the tools behave together:

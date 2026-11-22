@@ -145,3 +145,8 @@ pidge mcp serve                                  # a local MCP server on stdio
 pidge op --list                                  # every operation
 pidge op mail_find --input '{"kind":"receipt"}'  # any operation with its exact MCP input
 ```
+
+Agents start each request with `pidge intent "what the user asked"` and pass the id it returns
+(`--intent i4kq2x`) on the calls for that request. pidge keeps each request and its calls, one JSON
+line each, in `~/.cache/pidge/activity/<date>.jsonl` (hosted: the server's `activity` container),
+so the tools can be tuned to how agents actually use them.

@@ -98,6 +98,18 @@ pub enum PrefsBackend {
     Dir(PathBuf),
 }
 
+/// Where the activity log (each request's intent and its tool calls) goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActivityBackend {
+    /// An Azure Blob container of append blobs, one per user per day,
+    /// authenticated with the ambient Azure identity.
+    /// `PIDGE_MCP_ACTIVITY_URL`, e.g. `https://<account>.blob.core.windows.net/activity`.
+    Blob(Url),
+    /// One folder per user under a directory (development); default
+    /// `<temp>/pidge-activity`.
+    Dir(PathBuf),
+}
+
 /// The engine's storage and the Google client.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
@@ -105,6 +117,7 @@ pub struct EngineConfig {
     /// `PIDGE_MCP_INDEX_DIR`, default `<temp>/pidge-index`.
     pub index_dir: PathBuf,
     pub prefs: PrefsBackend,
+    pub activity: ActivityBackend,
     /// A Google Cloud "Web application" OAuth client whose redirect URI is
     /// `<public url>/callback/google`. `PIDGE_GOOGLE_CLIENT_ID` and
     /// `PIDGE_GOOGLE_CLIENT_SECRET`; Gmail mailboxes cannot be connected
@@ -118,6 +131,7 @@ impl Default for EngineConfig {
         Self {
             index_dir: tmp.join("pidge-index"),
             prefs: PrefsBackend::Dir(tmp.join("pidge-prefs")),
+            activity: ActivityBackend::Dir(tmp.join("pidge-activity")),
             google: None,
         }
     }
@@ -272,6 +286,16 @@ impl Config {
                     engine.prefs = PrefsBackend::Dir(dir.join("prefs"));
                 }
             }
+        }
+        if let Some(url) = vars.get("PIDGE_MCP_ACTIVITY_URL").filter(|v| !v.is_empty()) {
+            let url: Url = url
+                .trim_end_matches('/')
+                .parse()
+                .context("PIDGE_MCP_ACTIVITY_URL must be an absolute URL")?;
+            if url.scheme() != "https" {
+                bail!("PIDGE_MCP_ACTIVITY_URL must use https");
+            }
+            engine.activity = ActivityBackend::Blob(url);
         }
         engine.google = match (
             vars.get("PIDGE_GOOGLE_CLIENT_ID").filter(|v| !v.is_empty()),
@@ -527,5 +551,30 @@ mod tests {
             err.to_string().contains("yaml"),
             "error should name the bad value: {err}"
         );
+    }
+
+    #[test]
+    fn activity_goes_to_the_named_container_over_https_only() {
+        let mut vars = base_map();
+        vars.insert(
+            "PIDGE_MCP_ACTIVITY_URL".to_string(),
+            "https://acct.blob.core.windows.net/activity/".to_string(),
+        );
+        let cfg = Config::from_map(&vars).unwrap();
+        assert_eq!(
+            cfg.engine.activity,
+            ActivityBackend::Blob(
+                "https://acct.blob.core.windows.net/activity"
+                    .parse()
+                    .unwrap()
+            )
+        );
+
+        vars.insert(
+            "PIDGE_MCP_ACTIVITY_URL".to_string(),
+            "http://acct.blob.core.windows.net/activity".to_string(),
+        );
+        let err = Config::from_map(&vars).unwrap_err();
+        assert!(err.to_string().contains("PIDGE_MCP_ACTIVITY_URL"), "{err}");
     }
 }

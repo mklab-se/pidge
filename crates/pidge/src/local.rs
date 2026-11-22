@@ -241,7 +241,7 @@ impl Host for LocalHost {
         let Some(dir) = pidge_core::paths::cache_dir().map(|d| d.join("activity")) else {
             return;
         };
-        if let Err(e) = append_line(&dir, Utc::now(), &line) {
+        if let Err(e) = pidge_engine::activity::append_line(&dir, Utc::now(), &line) {
             tracing::warn!(error = %e, "could not keep an activity line");
         }
     }
@@ -329,22 +329,11 @@ impl pidge_engine::mcp::UserSource for Local {
     }
 }
 
-/// Append one activity line to the day's file in `dir` (created if
-/// missing).
-fn append_line(dir: &std::path::Path, at: DateTime<Utc>, line: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    std::fs::create_dir_all(dir)?;
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(pidge_engine::activity::day_file(at)))?;
-    writeln!(file, "{line}")
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{append_line, safe_file_name};
+    use super::safe_file_name;
     use chrono::{DateTime, Utc};
+    use pidge_engine::activity::append_line;
 
     #[test]
     fn lines_are_appended_to_the_days_file() {

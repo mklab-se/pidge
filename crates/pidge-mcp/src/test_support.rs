@@ -246,6 +246,7 @@ pub(crate) fn test_state(
         engine: EngineConfig {
             index_dir: secrets_dir.join("index"),
             prefs: PrefsBackend::Dir(secrets_dir.join("prefs")),
+            activity: crate::config::ActivityBackend::Dir(secrets_dir.join("activity")),
             google: None,
         },
     };

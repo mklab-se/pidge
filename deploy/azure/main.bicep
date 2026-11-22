@@ -251,6 +251,16 @@ resource prefsContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   }
 }
 
+// Each request's intent and the tool calls that answered it, one append blob
+// per user per day. Kept; nothing deletes it.
+resource activityContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'activity'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 resource prefsWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storage.id, identity.id, roleStorageBlobDataContributor)
   scope: storage
@@ -331,6 +341,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
             { name: 'PIDGE_MCP_LEGACY_ISSUERS', value: legacyIssuers }
             { name: 'PIDGE_MCP_LOG_FORMAT', value: 'json' }
             { name: 'PIDGE_MCP_PREFS_URL', value: '${storage.properties.primaryEndpoints.blob}prefs' }
+            { name: 'PIDGE_MCP_ACTIVITY_URL', value: '${storage.properties.primaryEndpoints.blob}activity' }
             // The index is a cache rebuilt from the mailboxes: local disk is enough.
             { name: 'PIDGE_MCP_INDEX_DIR', value: '/tmp/pidge-index' }
           ], googleEnv)
@@ -378,6 +389,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = if (!empty(image)) {
     vaultSecretsOfficerApp
     prefsWriter
     prefsContainer
+    activityContainer
   ]
 }
 
