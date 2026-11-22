@@ -237,6 +237,15 @@ impl Host for LocalHost {
         Some(result)
     }
 
+    async fn record(&self, line: String) {
+        let Some(dir) = pidge_core::paths::cache_dir().map(|d| d.join("activity")) else {
+            return;
+        };
+        if let Err(e) = append_line(&dir, Utc::now(), &line) {
+            tracing::warn!(error = %e, "could not keep an activity line");
+        }
+    }
+
     async fn one_click_unsubscribe(&self, url: &str) -> Result<(), String> {
         self.graph
             .unsubscribe_one_click(url)
@@ -320,9 +329,37 @@ impl pidge_engine::mcp::UserSource for Local {
     }
 }
 
+/// Append one activity line to the day's file in `dir` (created if
+/// missing).
+fn append_line(dir: &std::path::Path, at: DateTime<Utc>, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::create_dir_all(dir)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(pidge_engine::activity::day_file(at)))?;
+    writeln!(file, "{line}")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::safe_file_name;
+    use super::{append_line, safe_file_name};
+    use chrono::{DateTime, Utc};
+
+    #[test]
+    fn lines_are_appended_to_the_days_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = DateTime::parse_from_rfc3339("2026-11-22T10:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let logs = dir.path().join("activity");
+
+        append_line(&logs, at, r#"{"n":1}"#).unwrap();
+        append_line(&logs, at, r#"{"n":2}"#).unwrap();
+
+        let text = std::fs::read_to_string(logs.join("2026-11-22.jsonl")).unwrap();
+        assert_eq!(text, "{\"n\":1}\n{\"n\":2}\n");
+    }
 
     #[test]
     fn attachment_names_cannot_escape_downloads() {
