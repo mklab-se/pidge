@@ -98,6 +98,10 @@ pub trait Host: Send + Sync {
         Ok("Run `pidge ai disable` in a terminal.".into())
     }
 
+    /// Keep one activity line (see `activity`). Never fails: a line that
+    /// cannot be kept is dropped with a warning.
+    async fn record(&self, _line: String) {}
+
     /// The outbox has an entry due at `at`. MCP frontends ignore this (the
     /// engine's own timer sends it); the CLI starts a detached runner.
     fn outbox_due(&self, _at: DateTime<Utc>) {}
@@ -178,6 +182,13 @@ impl User {
 
     pub fn frontend(&self) -> Frontend {
         self.host.frontend()
+    }
+
+    /// Hand an activity line to the host, after the answer: inline on the
+    /// CLI, on the user's worker on a server.
+    pub async fn record(self: &Arc<Self>, line: String) {
+        let u = self.clone();
+        self.enqueue(async move { u.host.record(line).await }).await;
     }
 
     // ---- providers --------------------------------------------------------

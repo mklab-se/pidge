@@ -333,6 +333,7 @@ impl Provider for Fake {
 
 struct TestHost {
     frontend: Frontend,
+    lines: Mutex<Vec<String>>,
 }
 
 #[async_trait]
@@ -367,6 +368,9 @@ impl Host for TestHost {
         _b: Vec<u8>,
     ) -> OpResult<String> {
         Ok("link".into())
+    }
+    async fn record(&self, line: String) {
+        self.lines.lock().unwrap().push(line);
     }
     async fn one_click_unsubscribe(&self, _url: &str) -> Result<(), String> {
         Ok(())
@@ -451,6 +455,7 @@ async fn setup() -> (Arc<User>, Arc<Fake>) {
         vec![fake.clone() as Arc<dyn Provider>],
         Arc::new(TestHost {
             frontend: Frontend::Mcp,
+            lines: Mutex::default(),
         }),
     );
     (user, fake)
@@ -555,6 +560,7 @@ async fn the_cli_answer_counts_what_actually_failed() {
         vec![fake.clone() as Arc<dyn Provider>],
         Arc::new(TestHost {
             frontend: Frontend::Cli,
+            lines: Mutex::default(),
         }),
     );
     call(&user, "mail_find", json!({})).await.unwrap();
@@ -795,6 +801,103 @@ async fn headers_are_shown_on_request_and_wrapped_as_untrusted() {
         out.text
     );
     assert_eq!(out.data["headers"][0]["name"], "Authentication-Results");
+}
+
+async fn setup_logged() -> (Arc<User>, Arc<TestHost>) {
+    let fake = Arc::new(Fake::default());
+    *fake.mail.lock().unwrap() = inbox();
+    let host = Arc::new(TestHost {
+        frontend: Frontend::Mcp,
+        lines: Mutex::default(),
+    });
+    let user = User::new(
+        "test",
+        Arc::new(Store::in_memory().unwrap()),
+        Arc::new(MemoryPrefs::default()),
+        vec![fake as Arc<dyn Provider>],
+        host.clone(),
+    );
+    (user, host)
+}
+
+fn logged(host: &TestHost) -> Vec<Value> {
+    host.lines
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+#[test]
+fn every_tool_but_intent_takes_an_intent_id() {
+    for op in crate::ops::all() {
+        let has = op.properties().contains_key("intent");
+        assert_eq!(has, op.name != "intent", "{}", op.name);
+    }
+    assert!(crate::ops::all().iter().any(|o| o.name == "intent"));
+}
+
+#[tokio::test]
+async fn an_intent_and_its_calls_are_logged() {
+    let (user, host) = setup_logged().await;
+    let out = call(
+        &user,
+        "intent",
+        json!({ "summary": "Find the mail from Anna." }),
+    )
+    .await
+    .unwrap();
+    let id = out.data["intent"].as_str().unwrap().to_string();
+    assert!(id.starts_with('i') && id.len() == 7, "{id}");
+
+    call(&user, "mail_find", json!({ "intent": id, "from": "anna" }))
+        .await
+        .unwrap();
+    user.drain().await;
+
+    let lines = logged(&host);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines[0]["kind"], "intent");
+    assert_eq!(lines[0]["intent"], id.as_str());
+    assert_eq!(lines[0]["summary"], "Find the mail from Anna.");
+    assert_eq!(lines[1]["kind"], "call");
+    assert_eq!(lines[1]["tool"], "mail_find");
+    assert_eq!(lines[1]["intent"], id.as_str());
+    assert_eq!(lines[1]["ok"], true);
+    assert_eq!(lines[1]["input"]["from"], "anna");
+    assert!(lines[1]["input"].get("intent").is_none());
+    assert!(lines[1]["ms"].is_u64());
+    assert!(lines[1]["bytes"].as_u64().unwrap() > 0);
+    assert!(lines[1]["t"].is_string());
+}
+
+#[tokio::test]
+async fn a_failed_call_is_logged_with_its_error() {
+    let (user, host) = setup_logged().await;
+    call(
+        &user,
+        "mail_read",
+        json!({ "id": "m999", "intent": "inever" }),
+    )
+    .await
+    .unwrap_err();
+    user.drain().await;
+
+    let lines = logged(&host);
+    assert_eq!(lines[0]["ok"], false);
+    assert_eq!(lines[0]["intent"], "inever");
+    assert!(!lines[0]["error"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn a_long_answer_is_capped_in_the_log() {
+    let answer = "å".repeat(5_000);
+    let line = crate::activity::call_line(None, "mail_find", &json!({}), 3, Ok(&answer));
+    let v: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(v["answer"].as_str().unwrap().chars().count(), 4_000);
+    assert_eq!(v["bytes"], answer.len());
+    assert_eq!(v["intent"], Value::Null);
 }
 
 #[tokio::test]

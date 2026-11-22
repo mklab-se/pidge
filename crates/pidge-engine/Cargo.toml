@@ -12,6 +12,7 @@ keywords = ["pidge", "email", "calendar", "mcp", "agent"]
 categories = ["email"]
 
 [dependencies]
+rand.workspace = true
 pidge-core.workspace = true
 pidge-store.workspace = true
 ailloy.workspace = true

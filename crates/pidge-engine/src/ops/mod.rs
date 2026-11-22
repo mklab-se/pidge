@@ -3,6 +3,7 @@
 
 pub mod accounts;
 pub mod calendar;
+pub mod intent;
 pub mod mail_act;
 pub mod mail_read;
 pub mod mail_setup;
@@ -44,6 +45,7 @@ pub fn all() -> Vec<OpDef> {
         calendar::respond(),
         calendar::availability(),
         accounts::accounts(),
+        intent::intent(),
     ]
 }
 

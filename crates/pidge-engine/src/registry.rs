@@ -108,7 +108,18 @@ where
     let mut settings = schemars::generate::SchemaSettings::draft2020_12();
     settings.inline_subschemas = true;
     let schema = settings.into_generator().into_root_schema_for::<I>();
-    let schema = serde_json::to_value(schema).unwrap_or(Value::Null);
+    let mut schema = serde_json::to_value(schema).unwrap_or(Value::Null);
+    if meta.name != "intent"
+        && let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        props.insert(
+            "intent".into(),
+            serde_json::json!({
+                "type": ["string", "null"],
+                "description": "The id from the intent call for this request (i4kq2x).",
+            }),
+        );
+    }
     let schema_for_coerce = schema.clone();
     let f = Arc::new(f);
     OpDef {
@@ -214,7 +225,34 @@ pub fn find(name: &str) -> Option<OpDef> {
 /// Run an operation for a user: due outbox entries go first, and notes
 /// waiting for the user (earlier background failures, sends that went out)
 /// are put on top of the answer.
-pub async fn run(user: &Arc<User>, op: &OpDef, input: Value) -> OpResult<Output> {
+pub async fn run(user: &Arc<User>, op: &OpDef, mut input: Value) -> OpResult<Output> {
+    let intent = match &mut input {
+        Value::Object(map) => match map.remove("intent") {
+            Some(Value::String(id)) if !id.trim().is_empty() => Some(id.trim().to_string()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let started = std::time::Instant::now();
+    let result = run_op(user, op, input.clone()).await;
+    let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let line = match (&result, op.name) {
+        (Ok(out), "intent") => crate::activity::intent_line(
+            out.data["intent"].as_str().unwrap_or_default(),
+            input["summary"].as_str().unwrap_or_default(),
+        ),
+        (Ok(out), _) => {
+            crate::activity::call_line(intent.as_deref(), op.name, &input, ms, Ok(&out.text))
+        }
+        (Err(e), _) => {
+            crate::activity::call_line(intent.as_deref(), op.name, &input, ms, Err(&e.message))
+        }
+    };
+    user.record(line).await;
+    result
+}
+
+async fn run_op(user: &Arc<User>, op: &OpDef, input: Value) -> OpResult<Output> {
     crate::outbox::tick(user).await;
     let result = op.run(user.clone(), input).await;
     let notes = user.store.take_notes().unwrap_or_default();

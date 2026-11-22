@@ -2838,6 +2838,7 @@ dependencies = [
  "futures",
  "pidge-core",
  "pidge-store",
+ "rand 0.10.3",
  "rmcp",
  "schemars",
  "serde",

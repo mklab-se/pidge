@@ -7,6 +7,7 @@
 //! [`registry`]. Behaviour, safety rules and wording are the same
 //! everywhere because they live here.
 
+pub mod activity;
 pub mod classify;
 pub mod ctx;
 pub mod error;
