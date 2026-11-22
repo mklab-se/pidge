@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Intent log:** each line also names the MCP client that made the call, as it introduced itself
+  when connecting (`"client": {"name": "...", "version": "..."}`; `null` from the CLI). Tools and
+  their inputs are unchanged.
+
 ## [2.1.0] - 2026-11-22
 
 ### Added

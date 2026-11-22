@@ -6,6 +6,14 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use rand::{Rng, rng};
 use serde_json::{Value, json};
 
+/// The program making the calls, as it names itself when it connects
+/// (MCP `clientInfo`): `claude-ai 0.1.0`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Client {
+    pub name: String,
+    pub version: String,
+}
+
 /// Most characters of an answer kept in a line.
 pub const ANSWER_CAP: usize = 4_000;
 
@@ -31,12 +39,14 @@ fn now() -> String {
 }
 
 /// The line for a new intent.
-pub fn intent_line(id: &str, summary: &str) -> String {
-    json!({ "t": now(), "kind": "intent", "intent": id, "summary": summary }).to_string()
+pub fn intent_line(client: Option<&Client>, id: &str, summary: &str) -> String {
+    json!({ "t": now(), "kind": "intent", "client": client, "intent": id, "summary": summary })
+        .to_string()
 }
 
 /// The line for one call: its answer text, or its error message.
 pub fn call_line(
+    client: Option<&Client>,
     intent: Option<&str>,
     tool: &str,
     input: &Value,
@@ -51,6 +61,7 @@ pub fn call_line(
     json!({
         "t": now(),
         "kind": "call",
+        "client": client,
         "intent": intent,
         "tool": tool,
         "input": input,

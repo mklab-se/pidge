@@ -77,11 +77,17 @@ impl<S: UserSource> PidgeServer<S> {
     }
 
     /// Run a tool for an already-known user (tests, and the HTTP layer).
-    pub async fn call_for(&self, user: &Arc<User>, name: &str, args: Value) -> CallToolResult {
+    pub async fn call_for(
+        &self,
+        user: &Arc<User>,
+        name: &str,
+        args: Value,
+        client: Option<&crate::activity::Client>,
+    ) -> CallToolResult {
         let Some(op) = self.ops.iter().find(|o| o.name == name) else {
             return CallToolResult::error(vec![ContentBlock::text(format!("unknown tool {name}"))]);
         };
-        match registry::run(user, op, args).await {
+        match registry::run_from(user, op, args, client).await {
             Ok(out) => CallToolResult::success(vec![ContentBlock::text(out.text)]),
             Err(e) => {
                 CallToolResult::error(vec![ContentBlock::text(format!("Error: {}", e.full()))])
@@ -113,7 +119,13 @@ impl<S: UserSource> ServerHandler for PidgeServer<S> {
         let name = request.name.to_string();
         let args = request.arguments.map(Value::Object).unwrap_or(Value::Null);
         let result = match self.source.user(&context).await {
-            Ok(user) => self.call_for(&user, &name, args).await,
+            Ok(user) => {
+                let client = context.peer.peer_info().map(|p| crate::activity::Client {
+                    name: p.client_info.name.clone(),
+                    version: p.client_info.version.clone(),
+                });
+                self.call_for(&user, &name, args, client.as_ref()).await
+            }
             Err(msg) => CallToolResult::error(vec![ContentBlock::text(msg)]),
         };
         let outcome = if result.is_error == Some(true) {

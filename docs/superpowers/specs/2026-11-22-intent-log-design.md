@@ -49,6 +49,9 @@ answers that make agents ask again.
 - The log is a new `Host` method (`record(line)`), so frontends decide where lines go: `HostedHost`
   appends to the user's blob; `LocalHost` appends to the local file. Writes happen on the user's
   background worker (inline on the CLI after the answer is printed is fine).
+- Each line also carries `client`, the MCP client's `clientInfo` (name and version) from the
+  session's initialize, or `null` (CLI). Added 2026-11-22; MCP does not say which model is behind a
+  client, so the model is not logged.
 - Line shape:
   `{"t":"2026-11-22T10:15:02Z","kind":"intent","intent":"i4kq2x","summary":"..."}`
   `{"t":"...","kind":"call","intent":"i4kq2x","tool":"mail_find","input":{...},"ms":412,"ok":true,"error":null,"bytes":1830,"answer":"..."}`

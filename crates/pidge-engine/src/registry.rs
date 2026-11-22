@@ -225,7 +225,17 @@ pub fn find(name: &str) -> Option<OpDef> {
 /// Run an operation for a user: due outbox entries go first, and notes
 /// waiting for the user (earlier background failures, sends that went out)
 /// are put on top of the answer.
-pub async fn run(user: &Arc<User>, op: &OpDef, mut input: Value) -> OpResult<Output> {
+pub async fn run(user: &Arc<User>, op: &OpDef, input: Value) -> OpResult<Output> {
+    run_from(user, op, input, None).await
+}
+
+/// [`run`], naming the program that made the call in the activity log.
+pub async fn run_from(
+    user: &Arc<User>,
+    op: &OpDef,
+    mut input: Value,
+    client: Option<&crate::activity::Client>,
+) -> OpResult<Output> {
     let intent = match &mut input {
         Value::Object(map) => match map.remove("intent") {
             Some(Value::String(id)) if !id.trim().is_empty() => Some(id.trim().to_string()),
@@ -238,15 +248,26 @@ pub async fn run(user: &Arc<User>, op: &OpDef, mut input: Value) -> OpResult<Out
     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let line = match (&result, op.name) {
         (Ok(out), "intent") => crate::activity::intent_line(
+            client,
             out.data["intent"].as_str().unwrap_or_default(),
             input["summary"].as_str().unwrap_or_default(),
         ),
-        (Ok(out), _) => {
-            crate::activity::call_line(intent.as_deref(), op.name, &input, ms, Ok(&out.text))
-        }
-        (Err(e), _) => {
-            crate::activity::call_line(intent.as_deref(), op.name, &input, ms, Err(&e.message))
-        }
+        (Ok(out), _) => crate::activity::call_line(
+            client,
+            intent.as_deref(),
+            op.name,
+            &input,
+            ms,
+            Ok(&out.text),
+        ),
+        (Err(e), _) => crate::activity::call_line(
+            client,
+            intent.as_deref(),
+            op.name,
+            &input,
+            ms,
+            Err(&e.message),
+        ),
     };
     user.record(line).await;
     result

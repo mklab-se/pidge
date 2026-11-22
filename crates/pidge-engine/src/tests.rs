@@ -873,6 +873,38 @@ async fn an_intent_and_its_calls_are_logged() {
 }
 
 #[tokio::test]
+async fn the_calling_client_is_logged_when_known() {
+    let (user, host) = setup_logged().await;
+    let client = crate::activity::Client {
+        name: "claude-ai".into(),
+        version: "0.1.0".into(),
+    };
+    let op = registry::find("intent").unwrap();
+    registry::run_from(
+        &user,
+        &op,
+        json!({ "summary": "Any new mail?" }),
+        Some(&client),
+    )
+    .await
+    .unwrap();
+    let op = registry::find("mail_find").unwrap();
+    registry::run_from(&user, &op, json!({}), Some(&client))
+        .await
+        .unwrap();
+    registry::run(&user, &op, json!({})).await.unwrap();
+    user.drain().await;
+
+    let lines = logged(&host);
+    assert_eq!(
+        lines[0]["client"],
+        json!({ "name": "claude-ai", "version": "0.1.0" })
+    );
+    assert_eq!(lines[1]["client"]["name"], "claude-ai");
+    assert_eq!(lines[2]["client"], Value::Null);
+}
+
+#[tokio::test]
 async fn a_failed_call_is_logged_with_its_error() {
     let (user, host) = setup_logged().await;
     call(
@@ -893,7 +925,7 @@ async fn a_failed_call_is_logged_with_its_error() {
 #[test]
 fn a_long_answer_is_capped_in_the_log() {
     let answer = "å".repeat(5_000);
-    let line = crate::activity::call_line(None, "mail_find", &json!({}), 3, Ok(&answer));
+    let line = crate::activity::call_line(None, None, "mail_find", &json!({}), 3, Ok(&answer));
     let v: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(v["answer"].as_str().unwrap().chars().count(), 4_000);
     assert_eq!(v["bytes"], answer.len());
