@@ -2734,7 +2734,7 @@ dependencies = [
 
 [[package]]
 name = "pidge"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "ailloy",
  "anyhow",
@@ -2772,7 +2772,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-client"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2795,7 +2795,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-core"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-engine"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "ailloy",
  "async-trait",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-gmail"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -2856,7 +2856,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-mcp"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "ailloy",
  "anyhow",
@@ -2898,7 +2898,7 @@ dependencies = [
 
 [[package]]
 name = "pidge-store"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "chrono",
  "pidge-core",
