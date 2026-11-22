@@ -43,6 +43,10 @@ struct Entry {
 #[derive(Default)]
 pub struct Engines {
     users: Mutex<HashMap<String, Entry>>,
+    /// One per user: calls that arrive together while a user is being set
+    /// up wait for that one setup, so a user never gets two index
+    /// connections (which lock each other out of the same file).
+    setup: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Engines {
@@ -59,14 +63,28 @@ impl Engines {
         }
     }
 
+    /// The kept user for `key`, and whether it is fresh.
+    fn existing(&self, key: &str) -> Option<(Arc<User>, bool)> {
+        let map = self.users.lock().unwrap_or_else(|p| p.into_inner());
+        map.get(key)
+            .map(|e| (e.user.clone(), e.refreshed.elapsed() < REFRESH))
+    }
+
     /// The engine user for `signin`.
     pub async fn user(&self, state: &SharedState, signin: &str) -> Result<Arc<User>> {
         let key = signin.to_ascii_lowercase();
-        let existing = {
-            let map = self.users.lock().unwrap_or_else(|p| p.into_inner());
-            map.get(&key)
-                .map(|e| (e.user.clone(), e.refreshed.elapsed() < REFRESH))
-        };
+        if let Some((user, true)) = self.existing(&key) {
+            return Ok(user);
+        }
+        let gate = self
+            .setup
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(key.clone())
+            .or_default()
+            .clone();
+        let _one_setup = gate.lock().await;
+        let existing = self.existing(&key);
         if let Some((user, true)) = existing {
             return Ok(user);
         }
@@ -769,6 +787,30 @@ mod tests {
             .join(pidge_engine::activity::day_file(chrono::Utc::now()));
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("\"summary\":\"Any new mail?\""), "{text}");
+    }
+
+    #[tokio::test]
+    async fn parallel_first_calls_share_one_engine_user() {
+        let h = ToolHarness::new(&[JANE]).await;
+        let e = &h.state.engines;
+        let s = &h.state;
+        let users = tokio::join!(
+            e.user(s, JANE),
+            e.user(s, JANE),
+            e.user(s, JANE),
+            e.user(s, JANE),
+            e.user(s, JANE),
+            e.user(s, JANE),
+        );
+        let users = [users.0, users.1, users.2, users.3, users.4, users.5];
+
+        let first = users[0].as_ref().unwrap();
+        for u in &users {
+            assert!(
+                std::sync::Arc::ptr_eq(first, u.as_ref().unwrap()),
+                "one index connection per user, not one per call"
+            );
+        }
     }
 
     #[tokio::test]

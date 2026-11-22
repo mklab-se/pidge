@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.2] - 2026-11-22
+
+### Fixed
+
+- **Hosted:** calls that arrived together for a user the server had not set up yet (right after a
+  restart, an agent searching in parallel) each set the user up with their own connection to the
+  same index, and one could fail with `index: database is locked`. They now wait for one setup.
+
 ## [2.1.1] - 2026-11-22
 
 ### Added
