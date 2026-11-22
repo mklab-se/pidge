@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.1.0] - 2026-11-22
 
 ### Added
 
@@ -11,6 +11,11 @@ All notable changes to this project will be documented in this file.
   Every call is logged with its intent, input, duration, outcome and answer (capped at 4,000
   characters), one JSON line each: `~/.cache/pidge/activity/` locally, the `activity` Blob container
   hosted (`PIDGE_MCP_ACTIVITY_URL`). Nothing is deleted.
+
+### Changed
+
+- Dependencies updated (Ailloy 3.3, Rust 1.100 toolchain); unused dependencies left over from 1.x
+  removed (the terminal UI and image crates, `linkify`, and a few per-crate leftovers).
 
 ## [2.0.0] - 2026-11-06
 

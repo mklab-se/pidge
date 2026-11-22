@@ -14,7 +14,7 @@ members = [
 default-members = ["crates/pidge"]
 
 [workspace.package]
-version = "2.0.0"
+version = "2.1.0"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -84,28 +84,13 @@ wiremock = "0.6"
 
 # Table output
 comfy-table = { version = "8", features = ["custom_styling"] }
-linkify = "0.11"
 sha2 = "0.11"
 
-# Inbox show: HTML rendering, image display, formatting
+# HTML rendering
 html2text = "0.17"
-viuer = "0.11"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
-humansize = "2"
 
 # Interactive prompts (`editor` feature enables `Editor` prompt that opens $EDITOR)
 inquire = { version = "0.9", features = ["editor"] }
-
-# Low-level terminal control. Match the version inquire pulls in to avoid
-# duplicate crates in the binary.
-crossterm = "0.29"
-
-# TUI framework + multi-line text-area widget for the in-pidge body editor.
-# ratatui pairs with crossterm (and ailloy's config-tui pulls the same pair);
-# versions are kept in sync so we don't bloat the build with two copies.
-# ratatui-textarea is the ratatui org's successor to tui-textarea (ratatui 0.30+).
-ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
-ratatui-textarea = { version = "0.9", default-features = false, features = ["crossterm"] }
 
 # Future combinators (for join_all in multi-account fetch)
 futures = "0.3"
@@ -147,9 +132,9 @@ azure_identity = "1"
 azure_security_keyvault_secrets = "1"
 
 # Internal crates
-pidge-core = { version = "2.0.0", path = "crates/pidge-core" }
-pidge-client = { version = "2.0.0", path = "crates/pidge-client" }
-pidge-store = { version = "2.0.0", path = "crates/pidge-store" }
-pidge-engine = { version = "2.0.0", path = "crates/pidge-engine" }
+pidge-core = { version = "2.1.0", path = "crates/pidge-core" }
+pidge-client = { version = "2.1.0", path = "crates/pidge-client" }
+pidge-store = { version = "2.1.0", path = "crates/pidge-store" }
+pidge-engine = { version = "2.1.0", path = "crates/pidge-engine" }
 
-pidge-gmail = { version = "2.0.0", path = "crates/pidge-gmail" }
+pidge-gmail = { version = "2.1.0", path = "crates/pidge-gmail" }
