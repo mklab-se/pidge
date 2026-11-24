@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.1] - 2026-11-24
+
+### Fixed
+
+- `pidge-engine` builds on its own, so 3.0 reaches crates.io (3.0.0 was published as binaries,
+  Homebrew formula and hosted server, but not as a crate).
+
 ## [3.0.0] - 2026-11-24
 
 Fast and natural, from what the activity log showed: few calls, instant answers, one deck at a time.

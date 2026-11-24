@@ -217,7 +217,7 @@ impl Default for Policy {
 
 /// Something the user said to always do: a rule for mail that arrives from
 /// now on. Mail that matters is never touched by one.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Always {
     /// `sender:<address>` or `domain:<domain>`.
