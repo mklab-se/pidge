@@ -75,13 +75,37 @@ const DELIVERED: &[&str] = &[
     "levererad",
     "levererat",
     "har levererats",
-    "är framme",
     "delivered",
     "utlämnad",
     "utlämnat",
     "uthämtat",
 ];
+/// Not (yet) delivered, though the word is there.
+const NOT_DELIVERED: &[&str] = &[
+    "kommer att levereras",
+    "ska levereras",
+    "blir levererad",
+    "will be delivered",
+    "to be delivered",
+    "being delivered",
+    "could not be delivered",
+    "couldn't be delivered",
+    "not be delivered",
+    "not delivered",
+    "failed",
+    "kunde inte",
+    "inte levererat",
+    "inte levererad",
+    "inte levererats",
+    "ej levererad",
+    "ej levererat",
+    "misslyckad",
+    "attempted",
+];
 const TO_COLLECT: &[&str] = &[
+    "ombud",
+    "framme hos",
+    "är framme",
     "att hämta",
     "kan hämtas",
     "redo att hämtas",
@@ -133,6 +157,10 @@ const NOT_A_PARCEL: &[&str] = &[
     "undelivered",
     "delivery status notification",
     "mail delivery",
+    "faktura",
+    "invoice",
+    "kvitto",
+    "receipt",
 ];
 
 fn has(text: &str, words: &[&str]) -> bool {
@@ -144,9 +172,9 @@ fn stage(text: &str) -> Option<Status> {
         Some(Status::ToCollect)
     } else if has(text, OUT) {
         Some(Status::OutForDelivery)
-    } else if has(text, DELIVERED) {
+    } else if has(text, DELIVERED) && !has(text, NOT_DELIVERED) {
         Some(Status::Delivered)
-    } else if has(text, ON_ITS_WAY) {
+    } else if has(text, ON_ITS_WAY) || has(text, NOT_DELIVERED) {
         Some(Status::OnItsWay)
     } else {
         None
@@ -250,6 +278,21 @@ pub(crate) mod tests {
     fn real_subjects_say_where_the_parcel_is() {
         for (from, subject, want) in [
             (
+                "no@dhl.se",
+                "Your parcel will be delivered tomorrow",
+                Status::OnItsWay,
+            ),
+            (
+                "no@dhl.se",
+                "Your parcel could not be delivered",
+                Status::OnItsWay,
+            ),
+            (
+                "no@postnord.se",
+                "Ditt paket är framme hos ditt ombud",
+                Status::ToCollect,
+            ),
+            (
                 "e@fedex.com",
                 "Vi har tagit emot din begäran om att behålla din försändelse för upphämtning 123456789012",
                 Status::OnItsWay,
@@ -320,6 +363,7 @@ pub(crate) mod tests {
     #[test]
     fn offers_and_bounces_are_not_parcels() {
         for (from, subject) in [
+            ("a@shop.se", "Din faktura för beställning 1234 har skickats"),
             (
                 "noreply@food.example.com",
                 "Maten är redo för upphämtning Exempelkrogen",

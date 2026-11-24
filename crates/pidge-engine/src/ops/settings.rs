@@ -540,7 +540,17 @@ async fn run_settings(user: Arc<User>, input: SettingsInput) -> OpResult<Output>
                             _ => return Err(OpError::usage("send is hold, confirm, allow or deny")),
                         }
                     }
-                    "notify" => pol.notify = mode(&value)?,
+                    "notify" => {
+                        pol.notify = match mode(&value)? {
+                            // The same goes for e-mailing others without a plan.
+                            Mode::Allow => {
+                                return Err(OpError::usage(
+                                    "notify=allow (no plan before others are e-mailed) can only be set by the user in prefs.json; confirm is the default",
+                                ));
+                            }
+                            m => m,
+                        }
+                    }
                     "bulk" => pol.bulk = mode(&value)?,
                     "delete" => pol.delete = mode(&value)?,
                     "ask_over" => pol.ask_over = value.parse().map_err(|_| OpError::usage("a number"))?,

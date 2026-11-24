@@ -503,13 +503,20 @@ pub(crate) fn kql(q: &SearchQuery) -> String {
 }
 
 fn when_json(when: &EventWhen) -> (Value, Value, bool) {
-    let fmt = |d: DateTime<Utc>| d.format("%Y-%m-%dT%H:%M:%S").to_string();
+    // The clock where the event is, not in UTC: a series keeps its time of day
+    // through daylight saving.
+    let at = |t: &pidge_core::EventTime| match t.tz.parse::<chrono_tz::Tz>() {
+        Ok(tz) => json!({
+            "dateTime": t.at.with_timezone(&tz).format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timeZone": tz.name(),
+        }),
+        Err(_) => json!({
+            "dateTime": t.at.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            "timeZone": "UTC",
+        }),
+    };
     match when {
-        EventWhen::Timed { start, end } => (
-            json!({ "dateTime": fmt(start.at), "timeZone": "UTC" }),
-            json!({ "dateTime": fmt(end.at), "timeZone": "UTC" }),
-            false,
-        ),
+        EventWhen::Timed { start, end } => (at(start), at(end), false),
         EventWhen::AllDay { first, last } => {
             let end = *last + Duration::days(1);
             (
@@ -1147,7 +1154,17 @@ impl Provider for GraphProvider {
             .create_event(&self.address, None, &new)
             .await
             .map_err(|e| self.err(e))?;
-        self.get_event(&id).await
+        // It exists now: a failed read must not look like a failed create.
+        for wait in [0, 400, 1500] {
+            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            if let Ok(e) = self.get_event(&id).await {
+                return Ok(e);
+            }
+        }
+        Err(ProviderError::Invalid(format!(
+            "\"{}\" was created, but could not be read back; look at the calendar before trying again",
+            spec.title
+        )))
     }
 
     async fn update_event(&self, id: &str, patch: &EventPatch) -> ProviderResult<Event> {

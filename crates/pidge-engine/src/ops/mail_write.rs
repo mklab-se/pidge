@@ -350,8 +350,20 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResul
     if existing.is_none() {
         check_cap(user, 1).await?;
     }
-    let approved = how == SendHow::Approve;
-    let now = how != SendHow::Hold;
+    // The second yes is to the mail the user was asked about, as it was.
+    let content = serde_json::to_string(&(
+        &draft.to,
+        &draft.cc,
+        &draft.bcc,
+        &draft.subject,
+        &draft.body_text,
+    ))
+    .unwrap_or_default();
+    let asked_about: Option<String> = user.store.get_doc("approval", &t.handle)?;
+    let approved = how == SendHow::Approve
+        && existing.as_ref().is_some_and(|e| e.status == "approval")
+        && asked_about.as_deref() == Some(content.as_str());
+    let now = how == SendHow::Now || approved;
     let needs_approval = risk.level == Level::Approval || prefs.policy.send == SendMode::Confirm;
     let mut entry = OutboxEntry {
         draft: t.handle.clone(),
@@ -370,6 +382,12 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResul
     if needs_approval && !approved {
         entry.status = "approval".into();
         user.store.put_outbox(&entry)?;
+        user.store.put_doc(
+            "approval",
+            &t.handle,
+            &content,
+            Some(Utc::now() + chrono::Duration::days(7)),
+        )?;
         let why = if risk.reasons.is_empty() {
             "your policy asks for a confirmation before sending".to_string()
         } else {

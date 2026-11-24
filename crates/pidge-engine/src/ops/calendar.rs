@@ -22,7 +22,7 @@ use crate::error::{ErrorKind, OpError, OpResult};
 use crate::ops::mail_act::check_cap;
 use crate::ops::{resolve_event, resolve_message, resolve_people};
 use crate::prefs::Mode;
-use crate::queue::{self, CalChange, CalJob, Job, Submitted};
+use crate::queue::{self, CalChange, CalJob, Job, Submitted, TakeBack};
 use crate::registry::{Meta, OpDef, Output, op};
 use crate::render;
 
@@ -67,10 +67,79 @@ fn made(sub: Submitted) -> OpResult<String> {
     Ok(sub.id)
 }
 
+/// The first and last day of an all-day event.
+fn days_of(e: &Event) -> (NaiveDate, NaiveDate) {
+    let first = render::day_of(&e.start);
+    let last = render::day_of(&EventTime {
+        at: e.end.at - Duration::seconds(1),
+        tz: e.end.tz.clone(),
+    });
+    (first, last.max(first))
+}
+
+/// An event's time moved by `by`. A whole-day event moves by whole days.
+fn shifted(e: &Event, by: Duration) -> OpResult<EventWhen> {
+    if e.all_day {
+        let days = by.num_days();
+        if Duration::days(days) != by {
+            return Err(OpError::usage(format!(
+                "\"{}\" is a whole-day event: it moves by whole days (+1d)",
+                render::inline(&e.subject)
+            )));
+        }
+        let (first, last) = days_of(e);
+        let d = Duration::days(days);
+        return Ok(EventWhen::AllDay {
+            first: first + d,
+            last: last + d,
+        });
+    }
+    let at = |t: &EventTime| EventTime {
+        at: t.at + by,
+        tz: t.tz.clone(),
+    };
+    Ok(EventWhen::Timed {
+        start: at(&e.start),
+        end: at(&e.end),
+    })
+}
+
+/// An event as it is once the changes on their way are made.
+async fn fetched(user: &User, account: &str, id: &str) -> OpResult<Event> {
+    let e = user.provider(account)?.get_event(id).await?;
+    let mut one = vec![e];
+    overlay(user, &mut one);
+    one.pop()
+        .ok_or_else(|| OpError::not_found("that event is being removed").with_hint("undo stops it"))
+}
+
+/// The user's policy on what e-mails other people.
+async fn may_notify(user: &User) -> OpResult<Mode> {
+    match user.prefs().await.policy.notify {
+        Mode::Deny => Err(OpError::new(
+            ErrorKind::GuardrailDenied,
+            "the user's policy does not allow invitations, answers or cancellations that e-mail others",
+        )),
+        mode => Ok(mode),
+    }
+}
+
+/// An event's notes as plain text.
+fn notes_of(e: &Event) -> Option<String> {
+    let text = match e.body_content_type {
+        pidge_core::BodyContentType::Text => e.body_content.clone(),
+        pidge_core::BodyContentType::Html => pidge_core::render::render_html(
+            &e.body_content,
+            100,
+            pidge_core::render::LinkStyle::Inline,
+        ),
+    };
+    Some(text).filter(|t| !t.trim().is_empty())
+}
+
 fn when_of(e: &Event) -> EventWhen {
     if e.all_day {
-        let first = e.start.at.date_naive();
-        let last = (e.end.at - Duration::seconds(1)).date_naive();
+        let (first, last) = days_of(e);
         EventWhen::AllDay {
             first,
             last: last.max(first),
@@ -112,31 +181,32 @@ fn taking_back(e: &Event, change: &CalChange) -> Option<CalJob> {
                     title: e.subject.clone(),
                     when: when_of(e),
                     location: e.location.clone(),
-                    body: Some(e.body_content.clone()).filter(|b| {
-                        !b.trim().is_empty()
-                            && e.body_content_type == pidge_core::BodyContentType::Text
-                    }),
+                    body: notes_of(e),
                     attendees: Vec::new(),
                     online_meeting: false,
                 },
             },
         ),
-        CalChange::Update { patch } => job(
-            &e.id,
-            CalChange::Update {
-                patch: EventPatch {
-                    title: patch.title.is_some().then(|| e.subject.clone()),
-                    when: patch.when.is_some().then(|| when_of(e)),
-                    location: patch
-                        .location
-                        .is_some()
-                        .then(|| e.location.clone().unwrap_or_default()),
-                    body: None,
-                    attendees: patch.attendees.is_some().then(|| people_of(e)),
-                    online_meeting: None,
-                },
-            },
-        ),
+        CalChange::Update { patch } => {
+            let back = EventPatch {
+                title: patch.title.is_some().then(|| e.subject.clone()),
+                when: patch.when.is_some().then(|| when_of(e)),
+                location: patch
+                    .location
+                    .is_some()
+                    .then(|| e.location.clone().unwrap_or_default()),
+                body: patch
+                    .body
+                    .is_some()
+                    .then(|| notes_of(e).unwrap_or_default()),
+                attendees: patch.attendees.is_some().then(|| people_of(e)),
+                online_meeting: None,
+            };
+            if back == EventPatch::default() {
+                return None;
+            }
+            job(&e.id, CalChange::Update { patch: back })
+        }
         CalChange::Respond { notify, .. } => {
             let response = match e.response_status {
                 ResponseStatus::Accepted => Rsvp::Accept,
@@ -166,7 +236,10 @@ async fn change(
     let mut job = Job::default();
     for (e, c) in changes {
         user.store.upsert_events(std::slice::from_ref(&e))?;
-        job.undo_cal.extend(taking_back(&e, &c));
+        job.undo_cal.extend(taking_back(&e, &c).map(|job| TakeBack {
+            of: e.id.clone(),
+            job,
+        }));
         job.cal.push(CalJob {
             account: e.account.clone(),
             id: e.id.clone(),
@@ -578,10 +651,16 @@ async fn run_act(user: Arc<User>, mut input: CalendarInput) -> OpResult<Output> 
                 .and_then(parse_duration)
                 .ok_or_else(|| OpError::usage("move needs shift, e.g. +30m or -1h"))?;
             let t = resolve_event(&user, &id)?;
-            let e = user.provider(&t.account)?.get_event(&t.id).await?;
-            let start = (e.start.at + by).with_timezone(&user.tz().await);
-            input.start = Some(start.format("%Y-%m-%dT%H:%M").to_string());
+            let e = fetched(&user, &t.account, &t.id).await?;
             input.end = None;
+            input.start = Some(match shifted(&e, by)? {
+                EventWhen::AllDay { first, .. } => first.to_string(),
+                EventWhen::Timed { start, .. } => start
+                    .at
+                    .with_timezone(&user.tz().await)
+                    .format("%Y-%m-%dT%H:%M")
+                    .to_string(),
+            });
             run_event(user, event_input("update".into(), input), false).await
         }
         ("clear" | "cancel" | "delete" | "decline" | "move", None) => {
@@ -678,6 +757,7 @@ fn notifies(input: &EventInput, existing: Option<&Event>) -> Vec<String> {
                 && (changes_time
                     || input.title.is_some()
                     || input.location.is_some()
+                    || input.attendees.is_some()
                     || input.remove_attendees.is_some())
                 && e.is_organizer
             {
@@ -701,6 +781,45 @@ fn notifies(input: &EventInput, existing: Option<&Event>) -> Vec<String> {
     who
 }
 
+/// A whole series gets a new time of day; its days stay.
+fn series_time(
+    input: &mut EventInput,
+    occurrence: &Event,
+    series: &Event,
+    tz: Tz,
+    now: DateTime<Utc>,
+) -> OpResult<()> {
+    let only_time = || {
+        OpError::usage(
+            "a whole series can get a new time of day, not other days; that is done in the calendar app",
+        )
+    };
+    if series.all_day {
+        return Err(only_time());
+    }
+    let start = match &input.start {
+        Some(s) => {
+            let (start, date) = parse_start(s, tz, now)?;
+            let same_day = start.with_timezone(&tz).date_naive()
+                == occurrence.start.at.with_timezone(&tz).date_naive();
+            if date.is_some() || !same_day {
+                return Err(only_time());
+            }
+            start
+        }
+        None => occurrence.start.at,
+    };
+    let length = match &input.end {
+        Some(e) => parse_end(e, start, tz, now)? - start,
+        None => occurrence.end.at - occurrence.start.at,
+    };
+    let day = series.start.at.with_timezone(&tz).date_naive();
+    let clock = start.with_timezone(&tz).format("%H:%M");
+    input.start = Some(format!("{day}T{clock}"));
+    input.end = Some(format!("+{}m", length.num_minutes().max(1)));
+    Ok(())
+}
+
 async fn run_event(user: Arc<User>, mut input: EventInput, confirmed: bool) -> OpResult<Output> {
     let tz = user.tz().await;
     let now = Utc::now();
@@ -713,15 +832,24 @@ async fn run_event(user: Arc<User>, mut input: EventInput, confirmed: bool) -> O
         return Box::pin(run_event(user, saved, true)).await;
     }
     input.action = input.action.trim().to_ascii_lowercase();
-    let existing = match &input.id {
+    let asked = input.clone();
+    let id = input.id.clone();
+    let existing = match &id {
         Some(id) => {
             let t = resolve_event(&user, id)?;
-            let p = user.provider(&t.account)?;
-            let mut ev = p.get_event(&t.id).await?;
+            let mut ev = fetched(&user, &t.account, &t.id).await?;
             if input.scope.as_deref() == Some("series")
                 && let Some(master) = ev.series_master_id.clone()
             {
-                ev = p.get_event(&master).await?;
+                let whole = fetched(&user, &t.account, &master).await?;
+                if input.start.is_some() || input.end.is_some() {
+                    series_time(&mut input, &ev, &whole, tz, now)?;
+                }
+                ev = whole;
+            }
+            // Taking a meeting off the organizer's calendar tells everyone.
+            if input.action == "delete" && ev.is_organizer && others(&ev) > 0 {
+                input.action = "cancel".into();
             }
             Some((t, ev))
         }
@@ -730,6 +858,9 @@ async fn run_event(user: Arc<User>, mut input: EventInput, confirmed: bool) -> O
     // Policy for mail to other people.
     let who = notifies(&input, existing.as_ref().map(|(_, e)| e));
     let prefs = user.prefs().await;
+    if !who.is_empty() && confirmed {
+        may_notify(&user).await?;
+    }
     if !who.is_empty() && !confirmed {
         match prefs.policy.notify {
             Mode::Deny => {
@@ -746,7 +877,7 @@ async fn run_event(user: Arc<User>, mut input: EventInput, confirmed: bool) -> O
                 resolve_people(&user, input.add_attendees.as_deref().unwrap_or_default())?;
                 let pid = format!("cal-{}", now.timestamp_millis());
                 let handle = user.store.handle(HandleKind::Plan, "", &pid)?;
-                let mut saved = input.clone();
+                let mut saved = asked.clone();
                 saved.plan = None;
                 user.store.put_doc(
                     "calplan",
@@ -834,6 +965,66 @@ async fn run_event(user: Arc<User>, mut input: EventInput, confirmed: bool) -> O
     }
 }
 
+/// A time zone by its IANA name, or by the name Windows has for it.
+fn zone(name: &str) -> Option<Tz> {
+    if let Ok(tz) = name.parse() {
+        return Some(tz);
+    }
+    let iana = match name {
+        "W. Europe Standard Time" => "Europe/Stockholm",
+        "Romance Standard Time" => "Europe/Paris",
+        "Central Europe Standard Time" => "Europe/Budapest",
+        "Central European Standard Time" => "Europe/Warsaw",
+        "E. Europe Standard Time" => "Europe/Chisinau",
+        "GTB Standard Time" => "Europe/Bucharest",
+        "FLE Standard Time" => "Europe/Helsinki",
+        "GMT Standard Time" => "Europe/London",
+        "Greenwich Standard Time" => "Atlantic/Reykjavik",
+        "Turkey Standard Time" => "Europe/Istanbul",
+        "Russian Standard Time" => "Europe/Moscow",
+        "Eastern Standard Time" => "America/New_York",
+        "Central Standard Time" => "America/Chicago",
+        "Mountain Standard Time" => "America/Denver",
+        "Pacific Standard Time" => "America/Los_Angeles",
+        "Atlantic Standard Time" => "America/Halifax",
+        "E. South America Standard Time" => "America/Sao_Paulo",
+        "India Standard Time" => "Asia/Kolkata",
+        "China Standard Time" => "Asia/Shanghai",
+        "Tokyo Standard Time" => "Asia/Tokyo",
+        "Singapore Standard Time" => "Asia/Singapore",
+        "Arabian Standard Time" => "Asia/Dubai",
+        "AUS Eastern Standard Time" => "Australia/Sydney",
+        "New Zealand Standard Time" => "Pacific/Auckland",
+        "UTC" | "Coordinated Universal Time" => "UTC",
+        _ => return None,
+    };
+    iana.parse().ok()
+}
+
+/// An iCalendar `DURATION`: `PT1H30M`, `P1D`.
+fn ics_duration(s: &str) -> Option<Duration> {
+    let s = s.trim().strip_prefix('P')?;
+    let (days, time) = s.split_once('T').unwrap_or((s, ""));
+    let mut total = Duration::zero();
+    let mut num = String::new();
+    for c in days.chars().chain(time.chars()) {
+        if c.is_ascii_digit() {
+            num.push(c);
+            continue;
+        }
+        let n: i64 = std::mem::take(&mut num).parse().ok()?;
+        total += match c {
+            'W' => Duration::try_weeks(n)?,
+            'D' => Duration::try_days(n)?,
+            'H' => Duration::try_hours(n)?,
+            'M' => Duration::try_minutes(n)?,
+            'S' => Duration::try_seconds(n)?,
+            _ => return None,
+        };
+    }
+    Some(total).filter(|d| *d > Duration::zero())
+}
+
 /// The first VEVENT of an iCalendar text: (title, start, end, all-day, location).
 fn parse_ics(text: &str, tz: Tz) -> Option<(String, EventWhen, Option<String>)> {
     // Unfold continuation lines.
@@ -849,6 +1040,7 @@ fn parse_ics(text: &str, tz: Tz) -> Option<(String, EventWhen, Option<String>)> 
     }
     let mut in_event = false;
     let (mut title, mut start, mut end, mut loc) = (None, None, None, None);
+    let mut length = None;
     for l in lines {
         if l == "BEGIN:VEVENT" {
             in_event = true;
@@ -872,6 +1064,7 @@ fn parse_ics(text: &str, tz: Tz) -> Option<(String, EventWhen, Option<String>)> 
         match name {
             "SUMMARY" => title = Some(unescape(value)),
             "LOCATION" => loc = Some(unescape(value)).filter(|s| !s.is_empty()),
+            "DURATION" => length = ics_duration(value),
             "DTSTART" | "DTEND" => {
                 let at: Option<(DateTime<Utc>, Option<NaiveDate>)> =
                     if params.contains("VALUE=DATE") || value.len() == 8 {
@@ -889,7 +1082,7 @@ fn parse_ics(text: &str, tz: Tz) -> Option<(String, EventWhen, Option<String>)> 
                         let zone: Tz = params
                             .split(';')
                             .find_map(|p| p.strip_prefix("TZID="))
-                            .and_then(|z| z.trim_matches('"').parse().ok())
+                            .and_then(|z| zone(z.trim_matches('"')))
                             .unwrap_or(tz);
                         NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%S")
                             .ok()
@@ -906,6 +1099,8 @@ fn parse_ics(text: &str, tz: Tz) -> Option<(String, EventWhen, Option<String>)> 
         }
     }
     let (s, sd) = start?;
+    let end =
+        end.or_else(|| length.map(|d| (s + d, sd.map(|day| day + Duration::days(d.num_days())))));
     let when = match sd {
         Some(first) => {
             let last = end
@@ -977,10 +1172,13 @@ async fn create(
             && let Some(h) = s.happening
         {
             when = Some(if h.all_day {
-                let day = h.start.with_timezone(&tz).date_naive();
+                let first = h.start.with_timezone(&tz).date_naive();
+                let last = h.end.map_or(first, |e| {
+                    (e - Duration::seconds(1)).with_timezone(&tz).date_naive()
+                });
                 EventWhen::AllDay {
-                    first: day,
-                    last: day,
+                    first,
+                    last: last.max(first),
                 }
             } else {
                 let zoned = |at| EventTime {
@@ -1062,10 +1260,13 @@ async fn create(
         CalChange::Cancel { message: None }
     };
     let job = Job {
-        undo_cal: vec![CalJob {
-            account: ev.account.clone(),
-            id: ev.id.clone(),
-            change: back,
+        undo_cal: vec![TakeBack {
+            of: ev.id.clone(),
+            job: CalJob {
+                account: ev.account.clone(),
+                id: ev.id.clone(),
+                change: back,
+            },
         }],
         done: true,
         ..Default::default()
@@ -1123,38 +1324,71 @@ async fn update(
         online_meeting: input.online_meeting,
         ..Default::default()
     };
+    let zoned = |at| EventTime {
+        at,
+        tz: tz.name().to_string(),
+    };
+    // The last day of whole days: a date, or a length in days.
+    let last_day = |first: NaiveDate, e: &str| -> OpResult<NaiveDate> {
+        let last = match parse_duration(e) {
+            Some(d) => first + Duration::days((d.num_days() - 1).max(0)),
+            None => parse_start(e, tz, now)?
+                .1
+                .ok_or_else(|| OpError::usage("the end of whole days is a date"))?,
+        };
+        if last < first {
+            return Err(OpError::usage("the end is before the start"));
+        }
+        Ok(last)
+    };
     if let Some(s) = &input.start {
         let (start, date) = parse_start(s, tz, now)?;
-        patch.when = Some(if ev.all_day || date.is_some() {
+        let whole_days = match input.all_day {
+            Some(w) => w,
+            // A time given to a whole-day event makes it a timed one.
+            None => date.is_some(),
+        };
+        patch.when = Some(if whole_days {
             let first = date.unwrap_or_else(|| start.with_timezone(&tz).date_naive());
-            EventWhen::AllDay { first, last: first }
+            let last = match &input.end {
+                Some(e) => last_day(first, e)?,
+                None if ev.all_day => {
+                    let (a, b) = days_of(&ev);
+                    first + (b - a)
+                }
+                None => first,
+            };
+            EventWhen::AllDay { first, last }
         } else {
             let end = match &input.end {
                 Some(e) => parse_end(e, start, tz, now)?,
+                None if ev.all_day => start + Duration::hours(1),
                 None => start + (ev.end.at - ev.start.at),
             };
+            if end <= start {
+                return Err(OpError::usage("the end is before the start"));
+            }
             EventWhen::Timed {
-                start: EventTime {
-                    at: start,
-                    tz: tz.name().to_string(),
-                },
-                end: EventTime {
-                    at: end,
-                    tz: tz.name().to_string(),
-                },
+                start: zoned(start),
+                end: zoned(end),
             }
         });
     } else if let Some(e) = &input.end {
-        let end = parse_end(e, ev.start.at, tz, now)?;
-        patch.when = Some(EventWhen::Timed {
-            start: EventTime {
-                at: ev.start.at,
-                tz: tz.name().to_string(),
-            },
-            end: EventTime {
-                at: end,
-                tz: tz.name().to_string(),
-            },
+        patch.when = Some(if ev.all_day {
+            let (first, _) = days_of(&ev);
+            EventWhen::AllDay {
+                first,
+                last: last_day(first, e)?,
+            }
+        } else {
+            let end = parse_end(e, ev.start.at, tz, now)?;
+            if end <= ev.start.at {
+                return Err(OpError::usage("the end is before the start"));
+            }
+            EventWhen::Timed {
+                start: zoned(ev.start.at),
+                end: zoned(end),
+            }
         });
     }
     if input.attendees.is_some()
@@ -1235,6 +1469,7 @@ async fn run_cal_act(user: Arc<User>, input: CalActInput) -> OpResult<Output> {
             .filter(|(_, _, w)| w != "delete" && w != "move-silent")
             .count();
         if notifying > 0 {
+            may_notify(&user).await?;
             check_cap(&user, notifying).await?;
             user.store.record_sends(notifying)?;
         }
@@ -1242,8 +1477,14 @@ async fn run_cal_act(user: Arc<User>, input: CalActInput) -> OpResult<Output> {
         let message = plan.input.message.clone();
         let mut changes = Vec::new();
         for (account, id, what) in &plan.items {
-            let Some(e) = user.store.event(account, id)? else {
+            let Some(listed) = user.store.event(account, id)? else {
                 continue;
+            };
+            // A list leaves the notes out; undo would lose them.
+            let e = if what == "delete" {
+                fetched(&user, account, id).await.unwrap_or(listed)
+            } else {
+                listed
             };
             let c = match (what.as_str(), shift) {
                 ("cancel", _) => CalChange::Cancel {
@@ -1255,21 +1496,12 @@ async fn run_cal_act(user: Arc<User>, input: CalActInput) -> OpResult<Output> {
                     notify: true,
                 },
                 ("delete", _) => CalChange::Delete,
-                ("move" | "move-silent", Some(d)) => {
-                    let at = |t: &EventTime| EventTime {
-                        at: t.at + d,
-                        tz: t.tz.clone(),
-                    };
-                    CalChange::Update {
-                        patch: EventPatch {
-                            when: Some(EventWhen::Timed {
-                                start: at(&e.start),
-                                end: at(&e.end),
-                            }),
-                            ..Default::default()
-                        },
-                    }
-                }
+                ("move" | "move-silent", Some(d)) => CalChange::Update {
+                    patch: EventPatch {
+                        when: Some(shifted(&e, d)?),
+                        ..Default::default()
+                    },
+                },
                 _ => continue,
             };
             changes.push((e, c));
@@ -1322,6 +1554,8 @@ async fn run_cal_act(user: Arc<User>, input: CalActInput) -> OpResult<Output> {
             ("clear" | "cancel", true, true) => "cancel",
             ("clear" | "delete", true, false) | ("cancel", true, false) => "delete",
             ("clear" | "decline", false, _) => "decline",
+            // Taking a meeting off the organizer's calendar tells everyone.
+            ("delete", true, true) => "cancel",
             ("delete", _, _) => "delete",
             ("move", true, false) => "move-silent",
             ("move", true, true) => "move",
@@ -1360,6 +1594,19 @@ async fn run_cal_act(user: Arc<User>, input: CalActInput) -> OpResult<Output> {
     }
     told.sort();
     told.dedup();
+    if !told.is_empty() {
+        may_notify(&user).await?;
+    }
+    if let Some(by) = input.shift.as_deref().and_then(parse_duration)
+        && action == "move"
+    {
+        for (_, e) in events
+            .iter()
+            .filter(|(_, e)| items.iter().any(|i| i.1 == e.id))
+        {
+            shifted(e, by)?;
+        }
+    }
     let pid = format!("calact-{}", now.timestamp_millis());
     let handle = user.store.handle(HandleKind::Plan, "", &pid)?;
     user.store.put_doc(
@@ -1398,6 +1645,9 @@ async fn respond(
         _ => Rsvp::Decline,
     };
     let notify = input.notify.unwrap_or(true);
+    if notify {
+        may_notify(user).await?;
+    }
     let mut changes = Vec::new();
     let mut handles = Vec::new();
     for id in ids.split(',').map(str::trim).filter(|i| !i.is_empty()) {
@@ -1416,10 +1666,15 @@ async fn respond(
             let t = resolve_event(user, id)?;
             (t.account, t.id, t.handle)
         };
-        let e = match user.store.event(&account, &event_id)? {
+        let mut e = match user.store.event(&account, &event_id)? {
             Some(e) => e,
-            None => user.provider(&account)?.get_event(&event_id).await?,
+            None => fetched(user, &account, &event_id).await?,
         };
+        if input.scope.as_deref() == Some("series")
+            && let Some(master) = e.series_master_id.clone()
+        {
+            e = fetched(user, &account, &master).await?;
+        }
         changes.push((
             Event { account, ..e },
             CalChange::Respond {
@@ -1648,6 +1903,40 @@ mod tests {
         assert_eq!(parse_duration("1h30m"), Some(Duration::minutes(90)));
         assert_eq!(parse_duration("-1h"), Some(Duration::hours(-1)));
         assert_eq!(parse_duration("90"), None);
+    }
+
+    #[test]
+    fn ics_with_a_windows_zone_and_a_length() {
+        let ics = "BEGIN:VEVENT\nSUMMARY:Call\nDTSTART;TZID=Eastern Standard Time:20261120T090000\nDURATION:PT1H30M\nEND:VEVENT";
+        match parse_ics(ics, tz()).unwrap().1 {
+            EventWhen::Timed { start, end } => {
+                assert_eq!(start.at.to_rfc3339(), "2026-11-20T14:00:00+00:00");
+                assert_eq!(end.at - start.at, Duration::minutes(90));
+            }
+            _ => panic!("timed"),
+        }
+    }
+
+    #[test]
+    fn whole_days_are_read_in_the_zone_they_are_given_in() {
+        let mut e = crate::tests::event("E", "Ledig", true, &[], 1);
+        e.all_day = true;
+        // Midnight in Stockholm, as one service has it.
+        for t in [&mut e.start, &mut e.end] {
+            t.tz = "Europe/Stockholm".into();
+        }
+        e.start.at = "2026-11-25T23:00:00Z".parse().unwrap();
+        e.end.at = "2026-11-26T23:00:00Z".parse().unwrap();
+        let day = NaiveDate::from_ymd_opt(2026, 11, 26).unwrap();
+        assert_eq!(days_of(&e), (day, day));
+        assert!(shifted(&e, Duration::hours(1)).is_err());
+        assert_eq!(
+            shifted(&e, Duration::days(1)).unwrap(),
+            EventWhen::AllDay {
+                first: day + Duration::days(1),
+                last: day + Duration::days(1)
+            }
+        );
     }
 
     #[test]

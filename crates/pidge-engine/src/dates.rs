@@ -80,7 +80,7 @@ fn month_words() -> String {
 static ISO: LazyLock<Regex> = LazyLock::new(|| re(r"\b(20\d\d)-(\d{1,2})-(\d{1,2})\b"));
 static DAY_MONTH: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(
-        r"(?i)\b(\d{{1,2}})(?:\.|:e|e|st|nd|rd|th)?\s+(?:of\s+)?({})\b\.?(?:,?\s+(20\d\d)\b)?",
+        r"(?i)\b(?:(\d{{1,2}})\s*[-\u{{2013}}]\s*)?(\d{{1,2}})(?:\.|:e|e|st|nd|rd|th)?\s+(?:of\s+)?({})\b\.?(?:,?\s+(20\d\d)\b)?",
         month_words()
     ))
 });
@@ -92,6 +92,22 @@ static MONTH_DAY: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// `26/11` says a date only next to a time or a weekday.
 static SLASH: LazyLock<Regex> = LazyLock::new(|| re(r"\b(\d{1,2})/(\d{1,2})(?:[/-](20\d\d))?\b"));
+/// `12.12.2026`.
+static DOTTED: LazyLock<Regex> = LazyLock::new(|| re(r"\b(\d{1,2})\.(\d{1,2})\.(20\d\d)\b"));
+/// A weekday these come before is not one ahead, or not a certain one.
+static NOT_AHEAD: LazyLock<Regex> = LazyLock::new(|| {
+    re(r"(?i)\b(last|past|previous|every|each|next|förra|varje|alla|nästa|i)\s+$")
+});
+static NEXT_WEEK: LazyLock<Regex> =
+    LazyLock::new(|| re(r"(?i)^\s*(?:i\s+)?(?:nästa vecka|next week)\b"));
+/// What follows makes a number an amount or a length, not a time.
+static NOT_A_TIME: LazyLock<Regex> = LazyLock::new(|| {
+    re(
+        r"(?i)^\s*(?:kr\b|sek\b|:-|€|eur\b|usd\b|nok\b|dkk\b|\$|£|%|kg\b|km\b|st\b|(?:arbets|bank)?dag|business|working|days?\b|hours?\b|timm|min\b|minut|weeks?\b|veck|månad|months?\b|person|people|gäst|guests?|\.\d)",
+    )
+});
+static ZONE: LazyLock<Regex> =
+    LazyLock::new(|| re(r"^\s*\(?(UTC|GMT|BST|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT)\b"));
 static DAY_WORD: LazyLock<Regex> = LazyLock::new(|| {
     re(&format!(
         r"(?i)\b({}|idag|i dag|ikväll|i kväll|today|tonight|imorgon|i morgon|tomorrow)\b",
@@ -127,7 +143,20 @@ fn clock(hour: &str, minute: Option<&str>, half: Option<&str>) -> Option<NaiveTi
     NaiveTime::from_hms_opt(h, m, 0)
 }
 
-type Times = (NaiveTime, Option<NaiveTime>);
+type Times = (NaiveTime, Option<NaiveTime>, Option<Tz>);
+
+/// The zone a time is said in, when it is not the user's.
+fn said_zone(after: &str) -> Option<Tz> {
+    let c = ZONE.captures(after)?;
+    Some(match &c[1] {
+        "UTC" | "GMT" => chrono_tz::UTC,
+        "BST" => chrono_tz::Europe::London,
+        "ET" | "EST" | "EDT" => chrono_tz::America::New_York,
+        "CT" | "CST" | "CDT" => chrono_tz::America::Chicago,
+        "MT" | "MST" | "MDT" => chrono_tz::America::Denver,
+        _ => chrono_tz::America::Los_Angeles,
+    })
+}
 
 /// `12-17` right after a date is a time though nothing says so.
 static BARE_RANGE: LazyLock<Regex> =
@@ -136,7 +165,7 @@ static BARE_RANGE: LazyLock<Regex> =
 fn bare_range(after: &str) -> Option<Times> {
     let c = BARE_RANGE.captures(after)?;
     let (a, b) = (clock(&c[1], None, None)?, clock(&c[2], None, None)?);
-    (b > a).then_some((a, Some(b)))
+    (b > a && !NOT_A_TIME.is_match(&after[c.get(2)?.end()..])).then_some((a, Some(b), None))
 }
 
 /// A time range or a time in a short stretch of text.
@@ -148,12 +177,23 @@ fn times(text: &str) -> Option<Times> {
         if !spoken && half.is_none() {
             continue;
         }
-        let (Some(a), Some(b)) = (clock(g(2)?, g(3), half), clock(g(5)?, g(6), g(7).or(g(4))))
+        let end = c.get(0).map_or(0, |m| m.end());
+        if NOT_A_TIME.is_match(&text[end..]) {
+            continue;
+        }
+        let (Some(mut a), Some(b)) = (clock(g(2)?, g(3), half), clock(g(5)?, g(6), g(7).or(g(4))))
         else {
             continue;
         };
+        // "11 - 2 pm" starts before noon.
+        if a >= b
+            && g(4).is_none()
+            && let Some(am) = clock(g(2)?, g(3), None)
+        {
+            a = am;
+        }
         if b > a {
-            return Some((a, Some(b)));
+            return Some((a, Some(b), said_zone(&text[end..])));
         }
     }
     for c in TIME.captures_iter(text) {
@@ -161,8 +201,12 @@ fn times(text: &str) -> Option<Times> {
         if g(1).is_none() && g(3).is_none() && g(4).is_none() {
             continue;
         }
+        let end = c.get(0).map_or(0, |m| m.end());
+        if NOT_A_TIME.is_match(&text[end..]) {
+            continue;
+        }
         if let Some(t) = clock(g(2)?, g(3), g(4)) {
-            return Some((t, None));
+            return Some((t, None, said_zone(&text[end..])));
         }
     }
     None
@@ -231,6 +275,8 @@ pub fn find(text: &str, received: DateTime<Utc>, tz: Tz) -> Vec<Found> {
     let day = received.with_timezone(&tz).date_naive();
     // (position, end, date, needs a time to count)
     let mut dates: Vec<(usize, usize, NaiveDate, bool)> = Vec::new();
+    // The last day of dates that are several days, by position.
+    let mut lasts: std::collections::HashMap<usize, NaiveDate> = Default::default();
     let mut add = |c: &Captures<'_>, date: Option<NaiveDate>, needs_time: bool| {
         if let (Some(m), Some(d)) = (c.get(0), date)
             && d >= day
@@ -253,8 +299,21 @@ pub fn find(text: &str, received: DateTime<Utc>, tz: Tz) -> Vec<Found> {
         }
     };
     for c in DAY_MONTH.captures_iter(text) {
-        let m = c.get(2).and_then(|m| month(m.as_str()));
-        let d = of(m, num(&c, 1), num(&c, 3));
+        let m = c.get(3).and_then(|m| month(m.as_str()));
+        let last = of(m, num(&c, 2), num(&c, 4));
+        let first = c.get(1).and_then(|_| of(m, num(&c, 1), num(&c, 4)));
+        match (first, last) {
+            (Some(a), Some(b)) if a < b => {
+                if let Some(p) = c.get(0) {
+                    lasts.insert(p.start(), b);
+                }
+                add(&c, Some(a), false);
+            }
+            _ => add(&c, last, false),
+        }
+    }
+    for c in DOTTED.captures_iter(text) {
+        let d = of(num(&c, 2), num(&c, 1), num(&c, 3));
         add(&c, d, false);
     }
     for c in MONTH_DAY.captures_iter(text) {
@@ -267,7 +326,16 @@ pub fn find(text: &str, received: DateTime<Utc>, tz: Tz) -> Vec<Found> {
         add(&c, d, true);
     }
     for c in DAY_WORD.captures_iter(text) {
-        let d = c.get(1).and_then(|m| day_word(m.as_str(), day));
+        let Some(m) = c.get(1) else { continue };
+        let weekday = DAYS.iter().any(|(d, _)| m.as_str().to_lowercase() == *d);
+        if weekday && NOT_AHEAD.is_match(&text[..m.start()]) {
+            continue;
+        }
+        let mut d = day_word(m.as_str(), day);
+        if weekday && NEXT_WEEK.is_match(&text[m.end()..]) {
+            let monday = day + Duration::days(7 - i64::from(day.weekday().num_days_from_monday()));
+            d = d.map(|d| monday + Duration::days(i64::from(d.weekday().num_days_from_monday())));
+        }
         add(&c, d, true);
     }
     dates.sort_by_key(|d| (d.0, std::cmp::Reverse(d.1)));
@@ -305,24 +373,31 @@ pub fn find(text: &str, received: DateTime<Utc>, tz: Tz) -> Vec<Found> {
         if needs_time && t.is_none() {
             continue;
         }
-        let at = |t: NaiveTime| {
-            tz.from_local_datetime(&date.and_time(t))
+        let at = |t: NaiveTime, zone: Option<Tz>| {
+            zone.unwrap_or(tz)
+                .from_local_datetime(&date.and_time(t))
                 .earliest()
                 .map(|d| d.with_timezone(&Utc))
         };
         let when = match t {
-            Some((a, b)) => match at(a) {
+            Some((a, b, zone)) => match at(a, zone) {
                 Some(start) => Happening {
                     start,
-                    end: b.and_then(at),
+                    end: b.and_then(|b| at(b, zone)),
                     all_day: false,
                 },
                 None => continue,
             },
-            None => match at(NaiveTime::MIN) {
+            None => match at(NaiveTime::MIN, None) {
                 Some(start) => Happening {
                     start,
-                    end: None,
+                    end: lasts.get(&from).and_then(|last| {
+                        tz.from_local_datetime(
+                            &(*last + Duration::days(1)).and_time(NaiveTime::MIN),
+                        )
+                        .earliest()
+                        .map(|d| d.with_timezone(&Utc))
+                    }),
                     all_day: true,
                 },
                 None => continue,
@@ -347,6 +422,10 @@ pub fn find(text: &str, received: DateTime<Utc>, tz: Tz) -> Vec<Found> {
 pub fn words(h: &Happening, tz: Tz) -> String {
     let s = h.start.with_timezone(&tz);
     if h.all_day {
+        if let Some(e) = h.end {
+            let last = (e - Duration::seconds(1)).with_timezone(&tz);
+            return format!("{} - {}", s.format("%a %-d %b"), last.format("%a %-d %b"));
+        }
         return s.format("%a %-d %b").to_string();
     }
     match h.end {
@@ -455,7 +534,7 @@ mod tests {
         );
         assert_eq!(
             found("måndag och tisdag den 21\u{2013}22 december."),
-            ["Tue 22 Dec"]
+            ["Mon 21 Dec - Tue 22 Dec"]
         );
         assert_eq!(
             found(
@@ -463,6 +542,27 @@ mod tests {
             ),
             ["Tue 1 Dec", "Thu 26 Nov"]
         );
+    }
+
+    #[test]
+    fn what_looks_like_a_time_and_is_not() {
+        assert_eq!(found("2026-12-01. Att betala 14.50 kr"), ["Tue 1 Dec"]);
+        assert_eq!(
+            found("Leverans från 1 december mellan 2 och 4 arbetsdagar"),
+            ["Tue 1 Dec"]
+        );
+        assert!(found("We met last Friday at 3 pm").is_empty());
+        assert!(found("Öppet varje fredag kl 10").is_empty());
+        assert_eq!(found("Fredag den 12.12.2026 kl 18"), ["Sat 12 Dec 18:00"]);
+    }
+
+    #[test]
+    fn next_week_other_zones_and_spans() {
+        assert_eq!(found("fredag nästa vecka kl 10"), ["Fri 4 Dec 10:00"]);
+        assert_eq!(found("Mon 30 Nov 1 pm ET"), ["Mon 30 Nov 19:00"]);
+        assert_eq!(found("30 November 15:00 UTC"), ["Mon 30 Nov 16:00"]);
+        assert_eq!(found("12-14 december"), ["Sat 12 Dec - Mon 14 Dec"]);
+        assert_eq!(found("30 November, 11 - 2 pm"), ["Mon 30 Nov 11:00-14:00"]);
     }
 
     #[test]

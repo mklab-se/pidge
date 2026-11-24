@@ -488,12 +488,11 @@ pub async fn create_event(
         Some(id) => format!("{base_url}/me/calendars/{id}/events"),
         None => format!("{base_url}/me/calendar/events"),
     };
-    let resp = super::send_with_retry(
-        http.post(&url)
-            .bearer_auth(access_token)
-            .json(&event.to_graph_json()),
-    )
-    .await?;
+    let mut body = event.to_graph_json();
+    // A retry after a lost answer must not make a second event.
+    body["transactionId"] = format!("{:032x}", rand::random::<u128>()).into();
+    let resp =
+        super::send_with_retry(http.post(&url).bearer_auth(access_token).json(&body)).await?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();

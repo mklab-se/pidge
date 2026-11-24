@@ -149,6 +149,15 @@ pub fn local(t: DateTime<Utc>, tz: Tz) -> String {
     t.with_timezone(&tz).format("%Y-%m-%d %H:%M").to_string()
 }
 
+/// The day an all-day event's start or end means: in the zone it is given in
+/// (one service says midnight UTC, another midnight where the user is).
+pub fn day_of(t: &pidge_core::EventTime) -> chrono::NaiveDate {
+    match t.tz.parse::<Tz>() {
+        Ok(z) => t.at.with_timezone(&z).date_naive(),
+        Err(_) => t.at.date_naive(),
+    }
+}
+
 fn my_response(e: &Event) -> &'static str {
     if e.is_organizer {
         return "organizer";
@@ -166,7 +175,7 @@ fn my_response(e: &Event) -> &'static str {
 pub fn event_line(handle: &str, e: &Event, tz: Tz, show_account: bool) -> String {
     let time = if e.all_day {
         // All-day dates are floating; take them as they are.
-        format!("all day {}", e.start.at.format("%a %-d %b"))
+        format!("all day {}", day_of(&e.start).format("%a %-d %b"))
     } else {
         let s = e.start.at.with_timezone(&tz);
         let en = e.end.at.with_timezone(&tz);

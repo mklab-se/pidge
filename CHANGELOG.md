@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.2] - 2026-11-24
+
+What a second independent review found, mostly in the calendar (several older than 3.0).
+
+### Fixed
+
+- A second change to an event within half a minute undid the first.
+- Undoing a delete the calendar had refused made a second event; an undo that could take back only
+  part said it took back all.
+- Policy `notify=deny` now holds for answers and for `clear`; an agent cannot switch the plan before
+  e-mailing others off (`notify=allow` is for the user, in `prefs.json`).
+- Deleting a meeting others are invited to tells them, so it is a cancellation with a plan first.
+  Replacing the attendees names those who are taken off.
+- `mail_send action=approve` sends only a mail the user was asked about, unchanged since.
+- Whole-day events keep their days when changed, moved or restored, at Microsoft and Google.
+- A whole series keeps its time of day through daylight saving, and gets a new time without moving
+  its days. `scope=series` works for answers.
+- Creating an event is safe to repeat after a lost answer; `.ics` files with Windows time zones or a
+  `DURATION` are read right.
+- Parcels that could not be delivered, will be, or are at a pickup point are not "delivered".
+- Dates: "next week", other time zones, several days, dotted dates, and amounts or lengths that look
+  like times.
+
 ## [3.0.1] - 2026-11-24
 
 ### Fixed

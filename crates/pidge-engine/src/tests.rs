@@ -24,6 +24,8 @@ struct Fake {
     sent: Mutex<Vec<String>>,
     cal_calls: Mutex<Vec<String>>,
     fail_apply: Mutex<bool>,
+    /// The calendar refuses every delete.
+    refuse_delete: Mutex<bool>,
     /// Ids the mailbox is too busy for.
     busy: Mutex<Vec<String>>,
     /// Ids the mailbox does not have (any more).
@@ -73,7 +75,13 @@ pub(crate) fn mail(
     }
 }
 
-fn event(id: &str, title: &str, organizer: bool, attendees: &[&str], start_h: i64) -> Event {
+pub(crate) fn event(
+    id: &str,
+    title: &str,
+    organizer: bool,
+    attendees: &[&str],
+    start_h: i64,
+) -> Event {
     let start = Utc::now() + Duration::hours(start_h);
     Event {
         account: ME.into(),
@@ -359,6 +367,19 @@ impl Provider for Fake {
                 })
                 .collect();
         }
+        match &patch.when {
+            Some(EventWhen::Timed { start, end }) => {
+                e.start = start.clone();
+                e.end = end.clone();
+            }
+            Some(EventWhen::AllDay { first, last }) => {
+                self.cal_calls
+                    .lock()
+                    .unwrap()
+                    .push(format!("days {first} {last}"));
+            }
+            None => {}
+        }
         self.cal_calls.lock().unwrap().push(format!("update {id}"));
         Ok(e.clone())
     }
@@ -367,6 +388,9 @@ impl Provider for Fake {
         Ok(())
     }
     async fn delete_event(&self, id: &str) -> ProviderResult<()> {
+        if *self.refuse_delete.lock().unwrap() {
+            return Err(ProviderError::Invalid("refused".into()));
+        }
         self.cal_calls.lock().unwrap().push(format!("delete {id}"));
         Ok(())
     }
@@ -1547,6 +1571,200 @@ async fn an_answer_to_an_invitation_can_be_taken_back() {
         .await
         .unwrap();
     assert_eq!(shown.data["events"].as_array().unwrap().len(), 1);
+}
+
+async fn event_handle(user: &Arc<User>) -> String {
+    let agenda = call(user, "calendar_agenda", json!({ "range": "2d" }))
+        .await
+        .unwrap();
+    agenda.data["events"][0]["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_second_change_builds_on_the_first() {
+    let (user, fake) = setup().await;
+    let gym = event("E1", "Gym", true, &[], 3);
+    let start = gym.start.at;
+    *fake.events.lock().unwrap() = vec![gym];
+    let e = event_handle(&user).await;
+    for _ in 0..2 {
+        call(
+            &user,
+            "calendar_act",
+            json!({ "action": "move", "id": e, "shift": "+1h" }),
+        )
+        .await
+        .unwrap();
+    }
+    settle(&user).await;
+    let now = fake.events.lock().unwrap()[0].start.at;
+    assert!(
+        (now - start - Duration::hours(2)).num_minutes().abs() <= 1,
+        "moved {}",
+        now - start
+    );
+}
+
+#[tokio::test]
+async fn undoing_a_delete_that_was_refused_makes_no_second_event() {
+    let (user, fake) = setup().await;
+    *fake.events.lock().unwrap() = vec![event("E1", "Gym", true, &[], 3)];
+    *fake.refuse_delete.lock().unwrap() = true;
+    let e = event_handle(&user).await;
+    let out = call(
+        &user,
+        "calendar_act",
+        json!({ "action": "delete", "id": e }),
+    )
+    .await
+    .unwrap();
+    settle(&user).await;
+    let _ = call(&user, "undo", json!({ "id": out.data["ids"][0] })).await;
+    settle(&user).await;
+    assert!(
+        fake.cal_calls.lock().unwrap().is_empty(),
+        "{:?}",
+        fake.cal_calls.lock().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_policy_against_telling_others_holds_everywhere() {
+    let (user, fake) = setup().await;
+    *fake.events.lock().unwrap() = vec![event("E1", "Team", true, &["anna@example.se"], 1)];
+    let e = event_handle(&user).await;
+    let plan = call(&user, "calendar_act", json!({ "action": "clear", "from": Utc::now().to_rfc3339(), "to": (Utc::now() + Duration::hours(12)).to_rfc3339() })).await.unwrap();
+    call(
+        &user,
+        "settings",
+        json!({ "action": "policy", "key": "notify", "value": "deny" }),
+    )
+    .await
+    .unwrap();
+    call(&user, "calendar_act", json!({ "plan": plan.data["plan"] }))
+        .await
+        .unwrap_err();
+    call(
+        &user,
+        "calendar_act",
+        json!({ "action": "decline", "id": e }),
+    )
+    .await
+    .unwrap_err();
+    settle(&user).await;
+    assert!(fake.cal_calls.lock().unwrap().is_empty());
+    // And an agent cannot switch the question off.
+    call(
+        &user,
+        "settings",
+        json!({ "action": "policy", "key": "notify", "value": "allow" }),
+    )
+    .await
+    .unwrap_err();
+}
+
+#[tokio::test]
+async fn deleting_a_meeting_others_are_invited_to_is_cancelling_it() {
+    let (user, fake) = setup().await;
+    *fake.events.lock().unwrap() = vec![event("E1", "Team", true, &["anna@example.se"], 1)];
+    let e = event_handle(&user).await;
+    let plan = call(
+        &user,
+        "calendar_act",
+        json!({ "action": "delete", "id": e }),
+    )
+    .await
+    .unwrap();
+    assert!(plan.text.starts_with("Plan p"), "{}", plan.text);
+    assert!(plan.text.contains("anna@example.se"), "{}", plan.text);
+    call(&user, "calendar_act", json!({ "plan": plan.data["plan"] }))
+        .await
+        .unwrap();
+    settle(&user).await;
+    assert_eq!(*fake.cal_calls.lock().unwrap(), ["cancel E1"]);
+}
+
+#[tokio::test]
+async fn whole_days_stay_whole_days() {
+    let (user, fake) = setup().await;
+    let day = (Utc::now() + Duration::days(1)).date_naive();
+    let mut e = event("E1", "Semester", true, &[], 24);
+    e.all_day = true;
+    e.start.at = day.and_hms_opt(0, 0, 0).unwrap().and_utc();
+    e.end.at = e.start.at + Duration::days(3);
+    *fake.events.lock().unwrap() = vec![e];
+    let h = call(&user, "calendar_agenda", json!({ "range": "5d" }))
+        .await
+        .unwrap()
+        .data["events"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let last = day + Duration::days(4);
+    call(
+        &user,
+        "calendar_act",
+        json!({ "action": "update", "id": h, "end": last.to_string() }),
+    )
+    .await
+    .unwrap();
+    settle(&user).await;
+    assert_eq!(
+        fake.cal_calls.lock().unwrap()[0],
+        format!("days {day} {last}")
+    );
+}
+
+#[tokio::test]
+async fn an_undo_says_what_it_could_not_take_back() {
+    let (user, fake) = setup().await;
+    *fake.events.lock().unwrap() = vec![
+        event("E1", "Team", true, &["anna@example.se"], 1),
+        event("E3", "Gym", true, &[], 3),
+    ];
+    let plan = call(&user, "calendar_act", json!({ "action": "clear", "from": Utc::now().to_rfc3339(), "to": (Utc::now() + Duration::hours(12)).to_rfc3339() })).await.unwrap();
+    call(&user, "calendar_act", json!({ "plan": plan.data["plan"] }))
+        .await
+        .unwrap();
+    settle(&user).await;
+    let out = call(&user, "undo", json!({})).await.unwrap();
+    assert!(out.text.contains("Undone in part"), "{}", out.text);
+    assert!(out.text.contains("1 of the 2"), "{}", out.text);
+}
+
+#[tokio::test]
+async fn a_second_yes_needs_a_first_question_about_that_very_mail() {
+    let (user, fake) = setup().await;
+    call(&user, "mail_find", json!({})).await.unwrap();
+    let d = call(&user, "mail_draft", json!({ "kind": "new", "to": ["new@example.com"], "subject": "x", "body": "lösenord: hemligt" })).await.unwrap();
+    let draft = d.data["draft"].as_str().unwrap().to_string();
+    let first = call(
+        &user,
+        "mail_send",
+        json!({ "draft": draft, "action": "approve" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.data["status"], "approval", "{}", first.text);
+    assert!(fake.sent.lock().unwrap().is_empty());
+    // Changed after the question: it is asked again.
+    fake.drafts.lock().unwrap()[0].body_text = "lösenord: något annat".into();
+    let again = call(
+        &user,
+        "mail_send",
+        json!({ "draft": draft, "action": "approve" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(again.data["status"], "approval", "{}", again.text);
+    let sent = call(
+        &user,
+        "mail_send",
+        json!({ "draft": draft, "action": "approve" }),
+    )
+    .await
+    .unwrap();
+    assert!(sent.text.starts_with("Sent"), "{}", sent.text);
 }
 
 #[tokio::test]

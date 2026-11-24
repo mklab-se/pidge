@@ -59,6 +59,14 @@ pub struct CalJob {
     pub change: CalChange,
 }
 
+/// What takes back the change to one event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TakeBack {
+    /// The event whose change this takes back.
+    pub of: String,
+    pub job: CalJob,
+}
+
 /// What an instruction does, and what takes it back.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -70,7 +78,7 @@ pub struct Job {
     /// The events as the index had them before.
     pub events_before: Vec<Event>,
     /// What undoes a calendar change once it has been made.
-    pub undo_cal: Vec<CalJob>,
+    pub undo_cal: Vec<TakeBack>,
     /// A draft in the outbox this instruction sends.
     pub draft: Option<String>,
     /// Already carried out when it was recorded.
@@ -220,6 +228,8 @@ pub fn patch_event(e: &mut Event, p: &EventPatch) {
         }
         Some(EventWhen::AllDay { first, last }) => {
             let at = |d: &chrono::NaiveDate| d.and_hms_opt(0, 0, 0).unwrap_or_default().and_utc();
+            e.start.tz = "UTC".into();
+            e.end.tz = "UTC".into();
             e.start.at = at(first);
             e.end.at = at(last) + Duration::days(1);
             e.all_day = true;
@@ -472,23 +482,19 @@ async fn run_row(user: &Arc<User>, row: QueueRow) -> usize {
     }
     let mut cal_failed: Vec<(CalJob, String)> = Vec::new();
     for c in work.cal {
-        // Asked twice, these would tell people twice or make two events: only
-        // a clear refusal is tried again.
+        // Asked twice, these would tell people twice or make two events.
         let once = !matches!(
             c.change,
             CalChange::Update { .. } | CalChange::Delete | CalChange::Respond { notify: false, .. }
         );
         match run_cal(user, &c).await {
             Ok(()) => done += 1,
-            Err(e) => {
-                let refused = matches!(e, ProviderError::Throttled { .. });
-                match went(e) {
-                    // Someone else removed it: cancelled, deleted, declined.
-                    Went::Gone | Went::Done => done += 1,
-                    Went::Again(_) if may_retry && (refused || !once) => again.cal.push(c),
-                    Went::Again(why) | Went::Failed(why) => cal_failed.push((c, why)),
-                }
-            }
+            Err(e) => match went(e) {
+                // Someone else removed it: cancelled, deleted, declined.
+                Went::Gone | Went::Done => done += 1,
+                Went::Again(_) if may_retry && !once => again.cal.push(c),
+                Went::Again(why) | Went::Failed(why) => cal_failed.push((c, why)),
+            },
         }
     }
     for (m, why) in &failed {
@@ -515,7 +521,7 @@ async fn run_row(user: &Arc<User>, row: QueueRow) -> usize {
             let _ = user.store.upsert_events(std::slice::from_ref(e));
         }
         job.cal.retain(|x| x != c);
-        job.undo_cal.retain(|u| c.id.is_empty() || u.id != c.id);
+        job.undo_cal.retain(|u| c.id.is_empty() || u.of != c.id);
     }
     let n_failed = failed.len() + cal_failed.len();
     if n_failed > 0 {
@@ -717,13 +723,22 @@ pub async fn undo(user: &Arc<User>, id: Option<&str>) -> OpResult<(Output, Vec<(
         let undo_cal: Vec<CalJob> = job
             .undo_cal
             .iter()
-            .filter(|u| u.id.is_empty() || !left.cal.iter().any(|c| c.id == u.id))
-            .cloned()
+            .filter(|u| !left.cal.iter().any(|c| c.id == u.of))
+            .map(|u| u.job.clone())
             .collect();
-        if !job.cal.is_empty() && undo_cal.is_empty() && left.cal.len() < job.cal.len() {
+        let made = job.cal.len().saturating_sub(left.cal.len());
+        if made > 0 && undo_cal.is_empty() {
             return Err(OpError::usage(
                 "too late: that cannot be taken back once it is done; make the change you want instead",
             ));
+        }
+        if made > undo_cal.len() && !job.cal.is_empty() {
+            said = format!(
+                "Undone in part: {} ({}); {} of the {made} calendar changes cannot be taken back (others have been told).",
+                row.label,
+                row.id,
+                made - undo_cal.len()
+            );
         }
         let mut finished = job.clone();
         finished.before.retain(|b| !not_done(b));
