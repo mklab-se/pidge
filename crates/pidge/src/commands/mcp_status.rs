@@ -103,7 +103,7 @@ pub async fn run(
 async fn accounts_list(rpc: &mut RefreshingRpc) -> Result<String> {
     rpc.initialize().await?;
     Ok(rpc
-        .call_tool("accounts", json!({ "action": "list" }))
+        .call_tool("settings", json!({ "action": "list" }))
         .await?
         .text)
 }

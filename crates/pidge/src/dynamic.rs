@@ -1,6 +1,6 @@
-//! `pidge mail ...`, `pidge calendar ...` and `pidge accounts`, built at
+//! `pidge mail ...`, `pidge calendar ...` `pidge undo` and `pidge settings`, built at
 //! runtime from the engine's operations: every input field becomes a flag
-//! (`set_kind` → `--set-kind`), booleans are switches, lists repeat or take
+//! (`mark_seen` → `--mark-seen`), booleans are switches, lists repeat or take
 //! commas, and the operation's `positional` fields come first. So the CLI
 //! takes exactly what the MCP tools take, with the same names.
 
@@ -102,7 +102,7 @@ pub fn command_for(op: &OpDef) -> Command {
     cmd
 }
 
-/// The groups (`mail`, `calendar`) and top-level operations (`accounts`).
+/// The groups (`mail`, `calendar`) and top-level operations (`undo`, `settings`).
 pub fn commands(ops: &[OpDef]) -> Vec<Command> {
     let mut groups: Vec<(String, Command)> = Vec::new();
     let mut top = Vec::new();
@@ -114,10 +114,8 @@ pub fn commands(ops: &[OpDef]) -> Vec<Command> {
                     Some(i) => i,
                     None => {
                         let about = match *group {
-                            "mail" => {
-                                "E-mail: what's new, find, read, go through, act, write, send"
-                            }
-                            "calendar" => "Calendar: agenda, events, invitations, free time",
+                            "mail" => "E-mail: the inbox, find, read, act, write, send",
+                            "calendar" => "Calendar: agenda, changes, free time",
                             other => other,
                         };
                         groups.push((
@@ -156,7 +154,7 @@ pub fn resolve<'a>(ops: &'a [OpDef], matches: &ArgMatches) -> Option<(&'a OpDef,
 /// The default operation for a bare group.
 pub fn default_for(group: &str) -> Option<&'static str> {
     match group {
-        "mail" => Some("mail_brief"),
+        "mail" => Some("mail_inbox"),
         "calendar" => Some("calendar_agenda"),
         _ => None,
     }
@@ -185,6 +183,12 @@ fn input_from(op: &OpDef, m: &ArgMatches) -> Value {
                 if let Some(vals) = m.get_many::<String>(id) {
                     let list: Vec<Value> = vals
                         .flat_map(|v| {
+                            // A list of things with fields comes as JSON.
+                            if v.trim_start().starts_with('[')
+                                && let Ok(Value::Array(items)) = serde_json::from_str(v)
+                            {
+                                return items;
+                            }
                             v.split(',')
                                 .map(str::trim)
                                 .filter(|s| !s.is_empty())
@@ -251,19 +255,31 @@ mod tests {
         let (op, input) = parse(&[
             "pidge",
             "calendar",
-            "event",
+            "act",
             "update",
             "--id",
             "e3",
             "--add-attendees",
             "anna,bob",
         ]);
-        assert_eq!(op, "calendar_event");
+        assert_eq!(op, "calendar_act");
         assert_eq!(input["add_attendees"], serde_json::json!(["anna", "bob"]));
-        let (_, input) = parse(&["pidge", "mail", "brief", "--mark-seen=false"]);
+        let (_, input) = parse(&["pidge", "mail", "inbox", "--mark-seen=false"]);
         assert_eq!(input, serde_json::json!({ "mark_seen": false }));
-        let (op, _) = parse(&["pidge", "accounts"]);
-        assert_eq!(op, "accounts");
+        let (op, input) = parse(&["pidge", "undo", "q7", "--instead", "archive"]);
+        assert_eq!(op, "undo");
+        assert_eq!(
+            input,
+            serde_json::json!({ "id": "q7", "instead": "archive" })
+        );
+        let (_, input) = parse(&[
+            "pidge",
+            "mail",
+            "act",
+            "--actions",
+            r#"[{"action":"archive","ids":["g4"]},{"action":"flag","ids":["m1"]}]"#,
+        ]);
+        assert_eq!(input["actions"][1]["action"], "flag");
     }
 
     #[test]

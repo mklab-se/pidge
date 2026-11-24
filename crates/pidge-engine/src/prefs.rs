@@ -192,12 +192,12 @@ pub struct Policy {
     /// changes, time changes of meetings, cancellations. (RSVPs and
     /// unsubscribe e-mails are not planned, but count against the cap.)
     pub notify: Mode,
-    /// Changes to more than `bulk_threshold` messages or events, and every
-    /// selector-based change.
+    /// Changes to messages the user described rather than named, when there
+    /// are more than `ask_over` of them.
     pub bulk: Mode,
     /// Deleting a single message (always to Deleted Items).
     pub delete: Mode,
-    pub bulk_threshold: usize,
+    pub ask_over: usize,
     /// Outgoing messages (sends and notifications) per rolling hour.
     pub sends_per_hour: usize,
 }
@@ -209,10 +209,29 @@ impl Default for Policy {
             notify: Mode::Confirm,
             bulk: Mode::Confirm,
             delete: Mode::Allow,
-            bulk_threshold: 5,
+            ask_over: 50,
             sends_per_hour: 30,
         }
     }
+}
+
+/// Something the user said to always do: a rule for mail that arrives from
+/// now on. Mail that matters is never touched by one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct Always {
+    /// `sender:<address>` or `domain:<domain>`.
+    pub sender: Option<String>,
+    /// A kind (`newsletter`, `delivery`, ...).
+    pub kind: Option<String>,
+    /// For deliveries: only parcels with this status (`delivered`, ...).
+    pub status: Option<String>,
+    /// archive, delete, read, move, categorize, file
+    pub action: String,
+    pub to: Option<String>,
+    pub categories: Vec<String>,
+    /// Only mail received after the user said it.
+    pub since: Option<DateTime<Utc>>,
 }
 
 /// Non-secret state of the user's own AI key.
@@ -225,6 +244,12 @@ pub struct AiState {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<DateTime<Utc>>,
+    /// The day `asked` counts.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub day: String,
+    /// Questions asked that day.
+    #[serde(default)]
+    pub asked: u32,
 }
 
 /// Everything durable about one user.
@@ -253,6 +278,11 @@ pub struct Prefs {
     /// Working hours for availability: [start hour, end hour].
     pub working_hours: Option<[u32; 2]>,
     pub ai: AiState,
+    /// What the user said to always do.
+    pub always: Vec<Always>,
+    /// Where the next new database starts its handles, so that none comes
+    /// back meaning something else.
+    pub handle_base: u64,
     /// Days of mail kept in the index.
     pub window_days: Option<u32>,
 }

@@ -109,14 +109,12 @@ where
     settings.inline_subschemas = true;
     let schema = settings.into_generator().into_root_schema_for::<I>();
     let mut schema = serde_json::to_value(schema).unwrap_or(Value::Null);
-    if meta.name != "intent"
-        && let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut)
-    {
+    if let Some(props) = schema.get_mut("properties").and_then(Value::as_object_mut) {
         props.insert(
             "intent".into(),
             serde_json::json!({
                 "type": ["string", "null"],
-                "description": "The id from the intent call for this request (i4kq2x).",
+                "description": "What the user asked for, in a few words (the same on every call for one request).",
             }),
         );
     }
@@ -243,32 +241,15 @@ pub async fn run_from(
         },
         _ => None,
     };
+    user.called();
     let started = std::time::Instant::now();
     let result = run_op(user, op, input.clone()).await;
     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let line = match (&result, op.name) {
-        (Ok(out), "intent") => crate::activity::intent_line(
-            client,
-            out.data["intent"].as_str().unwrap_or_default(),
-            input["summary"].as_str().unwrap_or_default(),
-        ),
-        (Ok(out), _) => crate::activity::call_line(
-            client,
-            intent.as_deref(),
-            op.name,
-            &input,
-            ms,
-            Ok(&out.text),
-        ),
-        (Err(e), _) => crate::activity::call_line(
-            client,
-            intent.as_deref(),
-            op.name,
-            &input,
-            ms,
-            Err(&e.message),
-        ),
+    let answer = match &result {
+        Ok(out) => Ok(out.text.as_str()),
+        Err(e) => Err(e.message.as_str()),
     };
+    let line = crate::activity::call_line(client, intent.as_deref(), op.name, &input, ms, answer);
     user.record(line).await;
     result
 }

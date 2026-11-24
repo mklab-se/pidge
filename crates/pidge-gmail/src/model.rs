@@ -8,8 +8,15 @@ use pidge_core::provider::{BulkHint, Folder, MailItem};
 use serde::Deserialize;
 
 /// The metadata headers every list/sync fetch asks for.
-pub(crate) const METADATA_HEADERS: &[&str] =
-    &["From", "To", "Cc", "Subject", "Date", "List-Unsubscribe"];
+pub(crate) const METADATA_HEADERS: &[&str] = &[
+    "From",
+    "To",
+    "Cc",
+    "Subject",
+    "Date",
+    "List-Unsubscribe",
+    "Message-ID",
+];
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -275,6 +282,10 @@ pub(crate) fn mail_item(
             .header("List-Unsubscribe")
             .is_some_and(|v| !v.trim().is_empty()),
         is_invite: false,
+        message_id: m
+            .header("Message-ID")
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default(),
     }
 }
 

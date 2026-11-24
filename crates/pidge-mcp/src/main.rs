@@ -33,6 +33,9 @@ use crate::oauth::jwt::Signer;
 use crate::secrets::{FileSecrets, KeyVaultSecrets, SIGNING_KEY_SECRET, SharedSecrets};
 use crate::state::{AppState, SharedState};
 
+/// Container Apps stops a container 30 s after asking it to.
+const FINISH_TIME: std::time::Duration = std::time::Duration::from_secs(22);
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Diagnostic: `pidge-mcp --convert-check <path>` converts a local file
@@ -115,12 +118,31 @@ async fn main() -> Result<()> {
         .with_context(|| format!("binding {addr}"))?;
     tracing::info!(%addr, "listening");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown_signal().await;
-            cancel.cancel();
-        })
-        .await?;
+    let warming = state.clone();
+    tokio::spawn(async move { warming.engines.warm(&warming).await });
+
+    let finishing = state.clone();
+    let stopped = Arc::new(tokio::sync::Notify::new());
+    let stopping = stopped.clone();
+    let serving = axum::serve(listener, app).with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        cancel.cancel();
+        stopping.notify_one();
+    });
+    // An open connection must not keep promised work from being finished.
+    tokio::select! {
+        ended = serving.into_future() => ended?,
+        () = async {
+            stopped.notified().await;
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        } => {}
+    }
+    if tokio::time::timeout(FINISH_TIME, finishing.engines.finish())
+        .await
+        .is_err()
+    {
+        tracing::warn!("stopped before everything on its way was done");
+    }
     Ok(())
 }
 

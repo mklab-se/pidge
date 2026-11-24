@@ -27,7 +27,7 @@ use super::mail::Outgoing;
 use crate::error::ClientError;
 
 /// Properties the index needs, nothing more (no bodies).
-const ITEM_SELECT: &str = "id,conversationId,parentFolderId,from,toRecipients,ccRecipients,\
+const ITEM_SELECT: &str = "id,internetMessageId,conversationId,parentFolderId,from,toRecipients,ccRecipients,\
 subject,receivedDateTime,bodyPreview,isRead,flag,hasAttachments,categories,\
 inferenceClassification,isDraft";
 
@@ -463,6 +463,7 @@ pub(crate) fn item_from_value(v: &Value, account: &str, folder: Folder) -> Optio
         list_unsubscribe: false,
         is_invite: v.get("@odata.type").and_then(Value::as_str)
             == Some("#microsoft.graph.eventMessageRequest"),
+        message_id: str_of(v, "internetMessageId").unwrap_or_default(),
     })
 }
 
@@ -631,6 +632,26 @@ impl Provider for GraphProvider {
         }
         items.sort_by_key(|i| std::cmp::Reverse(i.received_at));
         Ok(items)
+    }
+
+    async fn find_by_message_id(&self, message_id: &str) -> ProviderResult<Vec<MailItem>> {
+        let filter = format!("internetMessageId eq '{}'", message_id.replace('\'', "''"));
+        let body = self
+            .get_json(
+                &self.url("/me/messages"),
+                &[
+                    ("$select", ITEM_SELECT),
+                    ("$top", "10"),
+                    ("$filter", filter.as_str()),
+                ],
+            )
+            .await?;
+        let values = body
+            .get("value")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        Ok(self.items(&values).await)
     }
 
     async fn get_items(&self, ids: &[String]) -> ProviderResult<Vec<MailItem>> {

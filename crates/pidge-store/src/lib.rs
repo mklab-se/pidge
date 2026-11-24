@@ -5,8 +5,9 @@
 //! - **the index**: message metadata for the synced window and pidge's own
 //!   classification of each message (kind, category, importance);
 //! - **events** seen in agendas (for handles);
-//! - short-lived working state: **plans**, the **undo** log, the **outbox**,
-//!   triage **sessions**, pending **notes**, and the **send log** for caps.
+//! - short-lived working state: **plans**, the **queue** of changes on their
+//!   way to the provider (and what undoes them), the **outbox**, the current
+//!   **deck**, pending **notes**, and the **send log** for caps.
 //!
 //! Everything here is a cache or short-lived: the provider is the source of
 //! truth and the user's durable preferences live elsewhere (see
@@ -25,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bump when the schema changes: an older database is dropped and rebuilt
 /// (it is a cache).
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -46,7 +47,10 @@ pub enum HandleKind {
     Event,
     Draft,
     Plan,
-    Session,
+    /// A group of messages in a deck.
+    Group,
+    /// An instruction: a change the user asked for.
+    Queue,
 }
 
 impl HandleKind {
@@ -56,7 +60,8 @@ impl HandleKind {
             Self::Event => 'e',
             Self::Draft => 'd',
             Self::Plan => 'p',
-            Self::Session => 's',
+            Self::Group => 'g',
+            Self::Queue => 'q',
         }
     }
 
@@ -66,7 +71,8 @@ impl HandleKind {
             Self::Event => "event",
             Self::Draft => "draft",
             Self::Plan => "plan",
-            Self::Session => "session",
+            Self::Group => "group",
+            Self::Queue => "queue",
         }
     }
 
@@ -77,7 +83,8 @@ impl HandleKind {
             'e' => Self::Event,
             'd' => Self::Draft,
             'p' => Self::Plan,
-            's' => Self::Session,
+            'g' => Self::Group,
+            'q' => Self::Queue,
             _ => return None,
         };
         let rest = chars.as_str();
@@ -110,6 +117,17 @@ pub struct Classification {
     pub reasons: Vec<String>,
 }
 
+/// Something that happens at a time, found in a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Happening {
+    pub start: DateTime<Utc>,
+    /// When the message says so.
+    #[serde(default)]
+    pub end: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub all_day: bool,
+}
+
 /// A message in the index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stored {
@@ -118,6 +136,10 @@ pub struct Stored {
     pub class: Classification,
     /// When pidge classified it (None: not yet).
     pub classified_at: Option<DateTime<Utc>>,
+    /// It is about something that happens to the user at this time.
+    pub happening: Option<Happening>,
+    /// pidge has looked for a time in it.
+    pub time_checked: bool,
 }
 
 /// A query over the index. Empty fields do not filter.
@@ -130,12 +152,17 @@ pub struct Filter {
     pub unread: Option<bool>,
     pub flagged: Option<bool>,
     pub has_attachments: Option<bool>,
-    /// Substring of the sender's name or address.
+    /// Part of the sender's name or address; alternatives with ` OR `, `|`
+    /// or commas.
     pub from: Option<String>,
     /// Any of these sender addresses (exact, lowercase).
     pub from_any: Vec<String>,
-    /// Substring of subject, preview or sender.
+    /// Words in subject, preview or sender; alternatives with ` OR ` or `|`.
     pub text: Option<String>,
+    /// Only messages about something that happens at a time.
+    pub happening: bool,
+    /// Only messages not yet searched for a time.
+    pub time_unchecked: bool,
     pub kinds: Vec<String>,
     pub category: Option<String>,
     pub min_importance: Option<u8>,
@@ -167,6 +194,20 @@ pub struct UndoEntry {
     pub unread: bool,
     pub flagged: bool,
     pub categories: Vec<String>,
+}
+
+/// An instruction in the queue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueRow {
+    pub seq: i64,
+    /// `q7`.
+    pub id: String,
+    pub label: String,
+    /// queued, running, done, failed, undone
+    pub status: String,
+    pub attempts: u32,
+    pub created_at: DateTime<Utc>,
+    pub json: String,
 }
 
 /// One outbox entry: a draft waiting to go out.
@@ -252,6 +293,10 @@ CREATE TABLE IF NOT EXISTS messages (
     bulk_hint TEXT,
     list_unsubscribe INTEGER NOT NULL,
     is_invite INTEGER NOT NULL,
+    message_id TEXT NOT NULL DEFAULT '',
+    found INTEGER NOT NULL DEFAULT 0,
+    happening_json TEXT,
+    time_checked INTEGER NOT NULL DEFAULT 0,
     kind TEXT,
     kind_source TEXT,
     category TEXT,
@@ -265,6 +310,7 @@ CREATE INDEX IF NOT EXISTS messages_received ON messages (received_at);
 CREATE INDEX IF NOT EXISTS messages_folder ON messages (folder, received_at);
 CREATE INDEX IF NOT EXISTS messages_thread ON messages (thread_id);
 CREATE INDEX IF NOT EXISTS messages_from ON messages (from_addr);
+CREATE INDEX IF NOT EXISTS messages_msgid ON messages (message_id);
 CREATE TABLE IF NOT EXISTS sync (
     account TEXT PRIMARY KEY,
     cursor TEXT,
@@ -288,13 +334,23 @@ CREATE TABLE IF NOT EXISTS docs (
     json TEXT NOT NULL,
     PRIMARY KEY (kind, id)
 );
-CREATE TABLE IF NOT EXISTS undo (
+CREATE TABLE IF NOT EXISTS queue (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
-    grp TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
+    id TEXT NOT NULL UNIQUE,
     label TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    due INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
     json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending (
+    seq INTEGER NOT NULL,
+    account TEXT NOT NULL,
+    id TEXT NOT NULL,
+    change_json TEXT
+);
+CREATE INDEX IF NOT EXISTS pending_target ON pending (account, id);
 CREATE TABLE IF NOT EXISTS outbox (
     draft TEXT PRIMARY KEY,
     json TEXT NOT NULL
@@ -315,7 +371,7 @@ CREATE TABLE IF NOT EXISTS people_hints (
 const MSG_COLS: &str = "account, id, handle, thread_id, folder, from_name, from_addr, to_json, \
 cc_json, subject, received_at, preview, unread, flagged, has_attachments, categories_json, \
 bulk_hint, list_unsubscribe, is_invite, kind, kind_source, category, category_source, \
-importance, reasons_json, classified_at";
+importance, reasons_json, classified_at, message_id, happening_json, time_checked";
 
 fn row_to_stored(r: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
     let to_json: String = r.get(7)?;
@@ -324,6 +380,7 @@ fn row_to_stored(r: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
     let reasons: String = r.get(24)?;
     let hint: Option<String> = r.get(16)?;
     let classified_at: Option<i64> = r.get(25)?;
+    let happening: Option<String> = r.get(27)?;
     Ok(Stored {
         handle: r.get(2)?,
         item: MailItem {
@@ -347,6 +404,7 @@ fn row_to_stored(r: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
             bulk_hint: hint.as_deref().and_then(BulkHint::parse),
             list_unsubscribe: r.get(17)?,
             is_invite: r.get(18)?,
+            message_id: r.get(26)?,
         },
         class: Classification {
             kind: r.get(19)?,
@@ -357,7 +415,62 @@ fn row_to_stored(r: &rusqlite::Row<'_>) -> rusqlite::Result<Stored> {
             reasons: serde_json::from_str(&reasons).unwrap_or_default(),
         },
         classified_at: classified_at.map(from_ts),
+        happening: happening.and_then(|j| serde_json::from_str(&j).ok()),
+        time_checked: r.get(28)?,
     })
+}
+
+/// ` OR ` and `|` separate alternatives; an alternative is all its words.
+fn alternatives(text: &str) -> Vec<Vec<String>> {
+    text.replace(" OR ", "|")
+        .split('|')
+        .map(|alt| {
+            alt.split_whitespace()
+                .map(|w| w.trim_matches('"').to_lowercase())
+                .filter(|w| !w.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .filter(|words| !words.is_empty())
+        .collect()
+}
+
+/// The alternatives in a text query, as written.
+pub fn text_alternatives(text: &str) -> Vec<String> {
+    alternatives(text).iter().map(|a| a.join(" ")).collect()
+}
+
+/// The alternatives in a sender query: ` OR `, `|` or commas.
+pub fn from_alternatives(from: &str) -> Vec<String> {
+    from.replace(" OR ", "|")
+        .split(['|', ','])
+        .map(|f| f.trim().to_lowercase())
+        .filter(|f| !f.is_empty())
+        .collect()
+}
+
+/// Make one change to one row.
+fn change_row(conn: &Connection, account: &str, id: &str, change: &MailChange) -> StoreResult<()> {
+    let set = |sql: &str, v: rusqlite::types::Value| -> rusqlite::Result<()> {
+        conn.execute(
+            &format!("UPDATE messages SET {sql} = ?3 WHERE account = ?1 AND id = ?2"),
+            params![account, id, v],
+        )?;
+        Ok(())
+    };
+    use rusqlite::types::Value as V;
+    match change {
+        MailChange::MarkRead => set("unread", V::Integer(0))?,
+        MailChange::MarkUnread => set("unread", V::Integer(1))?,
+        MailChange::Flag { .. } => set("flagged", V::Integer(1))?,
+        MailChange::Unflag => set("flagged", V::Integer(0))?,
+        MailChange::Move { to } => set("folder", V::Text(to.key()))?,
+        MailChange::Delete => set("folder", V::Text(Folder::Deleted.key()))?,
+        MailChange::SetCategories { categories } => set(
+            "categories_json",
+            V::Text(serde_json::to_string(categories)?),
+        )?,
+    }
+    Ok(())
 }
 
 impl Store {
@@ -387,6 +500,7 @@ impl Store {
                  DROP TABLE IF EXISTS messages; DROP TABLE IF EXISTS sync; \
                  DROP TABLE IF EXISTS events; DROP TABLE IF EXISTS docs; \
                  DROP TABLE IF EXISTS undo; DROP TABLE IF EXISTS outbox; \
+                 DROP TABLE IF EXISTS queue; DROP TABLE IF EXISTS pending; \
                  DROP TABLE IF EXISTS notes; DROP TABLE IF EXISTS sends; \
                  DROP TABLE IF EXISTS people_hints;",
             )?;
@@ -439,6 +553,34 @@ impl Store {
             params![handle, kind.key(), account, pid],
         )?;
         Ok(handle)
+    }
+
+    /// Whether this database has never handed out a handle.
+    pub fn is_fresh(&self) -> StoreResult<bool> {
+        let n: i64 = self
+            .conn()
+            .query_row("SELECT COUNT(*) FROM meta", [], |r| r.get(0))?;
+        Ok(n == 0)
+    }
+
+    /// Start every kind of handle at `base`, so that no handle from an
+    /// earlier database comes back meaning something else.
+    pub fn start_handles_at(&self, base: u64) -> StoreResult<()> {
+        let conn = self.conn();
+        for kind in [
+            HandleKind::Message,
+            HandleKind::Event,
+            HandleKind::Draft,
+            HandleKind::Plan,
+            HandleKind::Group,
+            HandleKind::Queue,
+        ] {
+            conn.execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES (?1, ?2)",
+                params![format!("next_{}", kind.key()), base.to_string()],
+            )?;
+        }
+        Ok(())
     }
 
     /// The handle for a provider id, created on first sight.
@@ -517,54 +659,174 @@ impl Store {
 
     // ---- messages ---------------------------------------------------------
 
-    /// Insert or refresh messages; pidge's classification is kept.
+    /// Insert or refresh messages from a sync; pidge's classification is
+    /// kept, and changes still on their way to the provider stay visible.
     pub fn upsert_items(&self, items: &[MailItem]) -> StoreResult<Vec<String>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let mut handles = Vec::with_capacity(items.len());
         for i in items {
-            let handle = Self::handle_in(&tx, HandleKind::Message, &i.account, &i.id)?;
-            tx.execute(
-                &format!(
-                    "INSERT INTO messages ({MSG_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, \
-                     ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, NULL, NULL, NULL, NULL, 1, '[]', NULL) \
-                     ON CONFLICT(account, id) DO UPDATE SET thread_id = excluded.thread_id, \
-                     folder = excluded.folder, from_name = excluded.from_name, \
-                     from_addr = excluded.from_addr, to_json = excluded.to_json, \
-                     cc_json = excluded.cc_json, subject = excluded.subject, \
-                     received_at = excluded.received_at, preview = excluded.preview, \
-                     unread = excluded.unread, flagged = excluded.flagged, \
-                     has_attachments = excluded.has_attachments, \
-                     categories_json = excluded.categories_json, bulk_hint = excluded.bulk_hint, \
-                     list_unsubscribe = MAX(messages.list_unsubscribe, excluded.list_unsubscribe), \
-                     is_invite = excluded.is_invite"
-                ),
-                params![
-                    i.account,
-                    i.id,
-                    handle,
-                    i.thread_id,
-                    i.folder.key(),
-                    i.from.name,
-                    i.from.address.to_ascii_lowercase(),
-                    serde_json::to_string(&i.to)?,
-                    serde_json::to_string(&i.cc)?,
-                    i.subject,
-                    ts(i.received_at),
-                    i.preview,
-                    i.unread,
-                    i.flagged,
-                    i.has_attachments,
-                    serde_json::to_string(&i.categories)?,
-                    i.bulk_hint.map(BulkHint::as_str),
-                    i.list_unsubscribe,
-                    i.is_invite,
-                ],
-            )?;
-            handles.push(handle);
+            // A search may have seen it first, under another id.
+            if !i.message_id.is_empty() {
+                let twin: Option<String> = tx
+                    .query_row(
+                        "SELECT id FROM messages WHERE account = ?1 AND message_id = ?2 \
+                         AND id != ?3 AND found = 1 AND (folder = 'sent') = ?4",
+                        params![i.account, i.message_id, i.id, i.folder == Folder::Sent],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if let Some(old) = twin {
+                    Self::rename_in(&tx, &i.account, &old, &i.id)?;
+                }
+            }
+            handles.push(Self::upsert_in(&tx, i, false)?);
         }
         tx.commit()?;
         Ok(handles)
+    }
+
+    /// Take in what a provider search found; returns the ids the messages
+    /// have in the index. A message the index knows (by id or Message-ID)
+    /// is left as the sync reported it. A hit in a synced folder, inside the
+    /// synced window, that the sync does not know is stale and left out: the
+    /// provider's search index lags behind the mailbox.
+    pub fn adopt_found(&self, items: &[MailItem]) -> StoreResult<Vec<String>> {
+        let mut states: std::collections::HashMap<String, SyncState> = Default::default();
+        for i in items {
+            if !states.contains_key(&i.account) {
+                states.insert(i.account.clone(), self.sync_state(&i.account)?);
+            }
+        }
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let mut ids = Vec::new();
+        for i in items {
+            let known: Option<(String, bool)> = tx
+                .query_row(
+                    "SELECT id, found FROM messages WHERE account = ?1 AND (id = ?2 OR \
+                     (message_id != '' AND message_id = ?3 AND (folder = 'sent') = ?4)) \
+                     ORDER BY found, id != ?2 LIMIT 1",
+                    params![i.account, i.id, i.message_id, i.folder == Folder::Sent],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            match known {
+                Some((id, found)) => {
+                    if found && id == i.id {
+                        Self::upsert_in(&tx, i, true)?;
+                    }
+                    ids.push(id);
+                }
+                None => {
+                    let synced = matches!(i.folder, Folder::Inbox | Folder::Archive | Folder::Sent);
+                    let stale = states.get(&i.account).is_some_and(|st| {
+                        synced
+                            && st.complete
+                            && st
+                                .window_start
+                                .is_some_and(|w| i.received_at > w + chrono::Duration::days(1))
+                            && st
+                                .synced_at
+                                .is_some_and(|t| i.received_at < t - chrono::Duration::minutes(2))
+                    });
+                    if !stale {
+                        Self::upsert_in(&tx, i, true)?;
+                        ids.push(i.id.clone());
+                    }
+                }
+            }
+        }
+        tx.commit()?;
+        Ok(ids)
+    }
+
+    fn upsert_in(tx: &Connection, i: &MailItem, found: bool) -> StoreResult<String> {
+        let handle = Self::handle_in(tx, HandleKind::Message, &i.account, &i.id)?;
+        tx.execute(
+            "INSERT INTO messages (account, id, handle, thread_id, folder, from_name, from_addr, \
+             to_json, cc_json, subject, received_at, preview, unread, flagged, has_attachments, \
+             categories_json, bulk_hint, list_unsubscribe, is_invite, message_id, found) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, \
+             ?18, ?19, ?20, ?21) \
+             ON CONFLICT(account, id) DO UPDATE SET thread_id = excluded.thread_id, \
+             folder = excluded.folder, from_name = excluded.from_name, \
+             from_addr = excluded.from_addr, to_json = excluded.to_json, \
+             cc_json = excluded.cc_json, subject = excluded.subject, \
+             received_at = excluded.received_at, preview = excluded.preview, \
+             unread = excluded.unread, flagged = excluded.flagged, \
+             has_attachments = excluded.has_attachments, \
+             categories_json = excluded.categories_json, bulk_hint = excluded.bulk_hint, \
+             list_unsubscribe = MAX(messages.list_unsubscribe, excluded.list_unsubscribe), \
+             is_invite = excluded.is_invite, message_id = excluded.message_id, \
+             found = MIN(messages.found, excluded.found)",
+            params![
+                i.account,
+                i.id,
+                handle,
+                i.thread_id,
+                i.folder.key(),
+                i.from.name,
+                i.from.address.to_ascii_lowercase(),
+                serde_json::to_string(&i.to)?,
+                serde_json::to_string(&i.cc)?,
+                i.subject,
+                ts(i.received_at),
+                i.preview,
+                i.unread,
+                i.flagged,
+                i.has_attachments,
+                serde_json::to_string(&i.categories)?,
+                i.bulk_hint.map(BulkHint::as_str),
+                i.list_unsubscribe,
+                i.is_invite,
+                i.message_id,
+                found,
+            ],
+        )?;
+        let waiting: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT change_json FROM pending WHERE account = ?1 AND id = ?2 \
+                 AND change_json IS NOT NULL ORDER BY seq, rowid",
+            )?;
+            stmt.query_map(params![i.account, i.id], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        for json in waiting {
+            change_row(tx, &i.account, &i.id, &serde_json::from_str(&json)?)?;
+        }
+        Ok(handle)
+    }
+
+    /// The provider calls this message something else now.
+    pub fn rename_item(&self, account: &str, old: &str, new: &str) -> StoreResult<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        Self::rename_in(&tx, account, old, new)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn rename_in(tx: &Connection, account: &str, old: &str, new: &str) -> StoreResult<()> {
+        // Keep the handle the user's agent has seen, unless the new id has
+        // its own already.
+        tx.execute(
+            "UPDATE OR IGNORE handles SET pid = ?3 WHERE kind = 'message' AND account = ?1 AND pid = ?2",
+            params![account, old, new],
+        )?;
+        tx.execute(
+            "UPDATE OR IGNORE messages SET id = ?3 WHERE account = ?1 AND id = ?2",
+            params![account, old, new],
+        )?;
+        tx.execute(
+            "DELETE FROM messages WHERE account = ?1 AND id = ?2",
+            params![account, old],
+        )?;
+        tx.execute(
+            "UPDATE pending SET id = ?3 WHERE account = ?1 AND id = ?2",
+            params![account, old, new],
+        )?;
+        Ok(())
     }
 
     pub fn remove_items(&self, account: &str, ids: &[String]) -> StoreResult<()> {
@@ -655,15 +917,6 @@ impl Store {
         if let Some(u) = f.has_attachments {
             push(&mut sql, " AND has_attachments = ?", V::Integer(u as i64));
         }
-        if let Some(from) = &f.from {
-            let like = format!("%{}%", from.to_lowercase());
-            push(
-                &mut sql,
-                " AND (lower(from_name) LIKE ?",
-                V::Text(like.clone()),
-            );
-            push(&mut sql, " OR from_addr LIKE ?)", V::Text(like));
-        }
         if !f.from_any.is_empty() {
             sql.push_str(" AND from_addr IN (");
             for (n, a) in f.from_any.iter().enumerate() {
@@ -673,23 +926,6 @@ impl Store {
                 push(&mut sql, "?", V::Text(a.to_lowercase()));
             }
             sql.push(')');
-        }
-        if let Some(text) = &f.text {
-            for word in text.split_whitespace() {
-                let like = format!("%{}%", word.to_lowercase());
-                push(
-                    &mut sql,
-                    " AND (lower(subject) LIKE ?",
-                    V::Text(like.clone()),
-                );
-                push(&mut sql, " OR lower(preview) LIKE ?", V::Text(like.clone()));
-                push(
-                    &mut sql,
-                    " OR lower(from_name) LIKE ?",
-                    V::Text(like.clone()),
-                );
-                push(&mut sql, " OR from_addr LIKE ?)", V::Text(like));
-            }
         }
         if !f.kinds.is_empty() {
             sql.push_str(" AND kind IN (");
@@ -717,18 +953,46 @@ impl Store {
         if f.unclassified {
             sql.push_str(" AND classified_at IS NULL");
         }
+        if f.happening {
+            sql.push_str(" AND happening_json IS NOT NULL");
+        }
+        if f.time_unchecked {
+            sql.push_str(" AND time_checked = 0");
+        }
         sql.push_str(if f.oldest_first {
             " ORDER BY received_at ASC"
         } else {
             " ORDER BY received_at DESC"
         });
-        if let Some(limit) = f.limit {
-            sql.push_str(&format!(" LIMIT {limit}"));
-        }
         let conn = self.conn();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(args), row_to_stored)?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        let mut out = rows.collect::<Result<Vec<_>, _>>()?;
+        // Words are matched here: SQLite lower-cases ASCII only.
+        let from = f.from.as_deref().map(from_alternatives).unwrap_or_default();
+        if !from.is_empty() {
+            out.retain(|m| {
+                let who = format!("{} {}", m.item.from.name, m.item.from.address).to_lowercase();
+                from.iter().any(|f| who.contains(f))
+            });
+        }
+        let text = f.text.as_deref().map(alternatives).unwrap_or_default();
+        if !text.is_empty() {
+            out.retain(|m| {
+                let i = &m.item;
+                let all = format!(
+                    "{}\n{}\n{}\n{}",
+                    i.subject, i.preview, i.from.name, i.from.address
+                )
+                .to_lowercase();
+                text.iter()
+                    .any(|words| words.iter().all(|w| all.contains(w)))
+            });
+        }
+        if let Some(limit) = f.limit {
+            out.truncate(limit);
+        }
+        Ok(out)
     }
 
     /// Count per folder / unread for the inbox map.
@@ -780,6 +1044,24 @@ impl Store {
         Ok(())
     }
 
+    /// What pidge found when it looked for a time in a message.
+    pub fn set_happening(
+        &self,
+        account: &str,
+        id: &str,
+        happening: Option<&Happening>,
+    ) -> StoreResult<()> {
+        self.conn().execute(
+            "UPDATE messages SET happening_json = ?3, time_checked = 1 WHERE account = ?1 AND id = ?2",
+            params![
+                account,
+                id,
+                happening.map(serde_json::to_string).transpose()?
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Forget every classification (the user's categories or rules changed).
     pub fn reset_classifications(&self) -> StoreResult<()> {
         self.conn()
@@ -788,17 +1070,26 @@ impl Store {
     }
 
     /// Reflect a change in the index at once, before the provider has done
-    /// it (fire-and-forget actions). Returns what undo needs, per message.
+    /// it. With `seq` (the instruction it belongs to) it also stays visible
+    /// through syncs until the instruction is finished. Returns what undo
+    /// needs, per message.
     pub fn apply_local(
         &self,
         account: &str,
         ids: &[String],
         change: &MailChange,
+        seq: Option<i64>,
     ) -> StoreResult<Vec<UndoEntry>> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         let mut before = Vec::new();
         for id in ids {
+            if let Some(seq) = seq {
+                tx.execute(
+                    "INSERT INTO pending (seq, account, id, change_json) VALUES (?1, ?2, ?3, ?4)",
+                    params![seq, account, id, serde_json::to_string(change)?],
+                )?;
+            }
             let row = tx
                 .query_row(
                     &format!("SELECT {MSG_COLS} FROM messages WHERE account = ?1 AND id = ?2"),
@@ -810,55 +1101,12 @@ impl Store {
             before.push(UndoEntry {
                 account: account.to_string(),
                 id: id.clone(),
-                folder: row.item.folder.clone(),
+                folder: row.item.folder,
                 unread: row.item.unread,
                 flagged: row.item.flagged,
-                categories: row.item.categories.clone(),
+                categories: row.item.categories,
             });
-            match change {
-                MailChange::MarkRead => {
-                    tx.execute(
-                        "UPDATE messages SET unread = 0 WHERE account = ?1 AND id = ?2",
-                        params![account, id],
-                    )?;
-                }
-                MailChange::MarkUnread => {
-                    tx.execute(
-                        "UPDATE messages SET unread = 1 WHERE account = ?1 AND id = ?2",
-                        params![account, id],
-                    )?;
-                }
-                MailChange::Flag { .. } => {
-                    tx.execute(
-                        "UPDATE messages SET flagged = 1 WHERE account = ?1 AND id = ?2",
-                        params![account, id],
-                    )?;
-                }
-                MailChange::Unflag => {
-                    tx.execute(
-                        "UPDATE messages SET flagged = 0 WHERE account = ?1 AND id = ?2",
-                        params![account, id],
-                    )?;
-                }
-                MailChange::Move { to } => {
-                    tx.execute(
-                        "UPDATE messages SET folder = ?3 WHERE account = ?1 AND id = ?2",
-                        params![account, id, to.key()],
-                    )?;
-                }
-                MailChange::Delete => {
-                    tx.execute(
-                        "UPDATE messages SET folder = ?3 WHERE account = ?1 AND id = ?2",
-                        params![account, id, Folder::Deleted.key()],
-                    )?;
-                }
-                MailChange::SetCategories { categories } => {
-                    tx.execute(
-                        "UPDATE messages SET categories_json = ?3 WHERE account = ?1 AND id = ?2",
-                        params![account, id, serde_json::to_string(categories)?],
-                    )?;
-                }
-            }
+            change_row(&tx, account, id, change)?;
         }
         tx.commit()?;
         Ok(before)
@@ -878,6 +1126,25 @@ impl Store {
                 serde_json::to_string(&e.categories)?
             ],
         )?;
+        Ok(())
+    }
+
+    /// [`Store::restore_local`], keeping what later instructions than `seq`
+    /// have changed since.
+    pub fn restore_under(&self, e: &UndoEntry, seq: i64) -> StoreResult<()> {
+        self.restore_local(e)?;
+        let conn = self.conn();
+        let later: Vec<String> = {
+            let mut stmt = conn.prepare(
+                "SELECT change_json FROM pending WHERE account = ?1 AND id = ?2 AND seq > ?3 \
+                 AND change_json IS NOT NULL ORDER BY seq, rowid",
+            )?;
+            stmt.query_map(params![e.account, e.id, seq], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        for json in later {
+            change_row(&conn, &e.account, &e.id, &serde_json::from_str(&json)?)?;
+        }
         Ok(())
     }
 
@@ -943,6 +1210,69 @@ impl Store {
             out.push(handle);
         }
         tx.commit()?;
+        Ok(out)
+    }
+
+    /// The calendar of one mailbox between `from` and `to`, as the provider
+    /// has it now: what it no longer lists is gone.
+    pub fn replace_events(
+        &self,
+        account: &str,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        events: &[pidge_core::Event],
+    ) -> StoreResult<()> {
+        let ids: std::collections::HashSet<&str> = events.iter().map(|e| e.id.as_str()).collect();
+        let gone: Vec<String> = {
+            let conn = self.conn();
+            let mut stmt = conn.prepare(
+                "SELECT id FROM events WHERE account = ?1 AND start_at >= ?2 AND start_at < ?3",
+            )?;
+            let rows = stmt.query_map(params![account, ts(from), ts(to)], |r| {
+                r.get::<_, String>(0)
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        for id in gone.iter().filter(|id| !ids.contains(id.as_str())) {
+            self.remove_event(account, id)?;
+        }
+        self.upsert_events(events)?;
+        Ok(())
+    }
+
+    /// Known events of the mailboxes that overlap `[from, to)`, with their
+    /// handles, earliest first.
+    pub fn events_between(
+        &self,
+        accounts: &[String],
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StoreResult<Vec<(String, pidge_core::Event)>> {
+        let conn = self.conn();
+        // Two weeks back covers what started earlier and is still on.
+        let mut stmt = conn.prepare(
+            "SELECT account, handle, json FROM events WHERE start_at >= ?1 AND start_at < ?2 \
+             ORDER BY start_at",
+        )?;
+        let rows = stmt.query_map(params![ts(from) - 14 * 24 * 3600, ts(to)], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (account, handle, json) = row?;
+            if !accounts.contains(&account) {
+                continue;
+            }
+            if let Ok(e) = serde_json::from_str::<pidge_core::Event>(&json)
+                && e.end.at > from
+            {
+                out.push((handle, e));
+            }
+        }
         Ok(out)
     }
 
@@ -1039,51 +1369,198 @@ impl Store {
             "DELETE FROM docs WHERE expires_at IS NOT NULL AND expires_at < ?1",
             [now],
         )?;
-        conn.execute("DELETE FROM undo WHERE created_at < ?1", [now - 24 * 3600])?;
+        conn.execute(
+            "DELETE FROM queue WHERE created_at < ?1 AND status NOT IN ('new', 'queued', 'running')",
+            [now - 24 * 3600],
+        )?;
+        conn.execute(
+            "DELETE FROM pending WHERE seq NOT IN (SELECT seq FROM queue)",
+            [],
+        )?;
         conn.execute("DELETE FROM notes WHERE created_at < ?1", [now - 24 * 3600])?;
         conn.execute("DELETE FROM sends WHERE at < ?1", [now - 24 * 3600])?;
         Ok(())
     }
 
-    // ---- undo -------------------------------------------------------------
+    // ---- queue ------------------------------------------------------------
 
-    pub fn push_undo(&self, group: &str, label: &str, entries: &[UndoEntry]) -> StoreResult<()> {
-        if entries.is_empty() {
-            return Ok(());
-        }
+    /// Note an instruction; returns its sequence number. Nothing carries it
+    /// out until [`Store::release_queued`].
+    pub fn enqueue(
+        &self,
+        id: &str,
+        label: &str,
+        due: DateTime<Utc>,
+        json: &str,
+    ) -> StoreResult<i64> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO queue (id, label, status, due, created_at, json) \
+             VALUES (?1, ?2, 'new', ?3, ?4, ?5)",
+            params![id, label, due.timestamp_millis(), ts(Utc::now()), json],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// An instruction touches this event (or whatever `id` names): a later
+    /// one that does too waits for it.
+    pub fn touch(&self, seq: i64, account: &str, id: &str) -> StoreResult<()> {
         self.conn().execute(
-            "INSERT INTO undo (grp, created_at, label, json) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                group,
-                ts(Utc::now()),
-                label,
-                serde_json::to_string(entries)?
-            ],
+            "INSERT INTO pending (seq, account, id, change_json) VALUES (?1, ?2, ?3, NULL)",
+            params![seq, account, id],
         )?;
         Ok(())
     }
 
-    /// Take the most recent undo group: (label, entries).
-    pub fn pop_undo(&self) -> StoreResult<Option<(String, Vec<UndoEntry>)>> {
-        let conn = self.conn();
-        let grp: Option<String> = conn
-            .query_row("SELECT grp FROM undo ORDER BY seq DESC LIMIT 1", [], |r| {
-                r.get(0)
-            })
+    fn queue_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<QueueRow> {
+        Ok(QueueRow {
+            seq: r.get(0)?,
+            id: r.get(1)?,
+            label: r.get(2)?,
+            status: r.get(3)?,
+            attempts: r.get::<_, i64>(4)?.max(0) as u32,
+            created_at: from_ts(r.get(5)?),
+            json: r.get(6)?,
+        })
+    }
+
+    /// Claim the next instruction due at `now` (queued → running). One that
+    /// touches a message an earlier unfinished one touches waits for it.
+    pub fn claim_queued(&self, now: DateTime<Utc>) -> StoreResult<Option<QueueRow>> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let row = tx
+            .query_row(
+                "SELECT seq, id, label, status, attempts, created_at, json FROM queue q \
+                 WHERE status = 'queued' AND due <= ?1 AND NOT EXISTS ( \
+                   SELECT 1 FROM pending p JOIN pending o ON o.account = p.account AND o.id = p.id \
+                   JOIN queue e ON e.seq = o.seq \
+                   WHERE p.seq = q.seq AND o.seq < q.seq AND e.status IN ('new', 'queued', 'running')) \
+                 ORDER BY due, seq LIMIT 1",
+                [now.timestamp_millis()],
+                Self::queue_row,
+            )
             .optional()?;
-        let Some(grp) = grp else { return Ok(None) };
-        let mut stmt = conn.prepare("SELECT label, json FROM undo WHERE grp = ?1 ORDER BY seq")?;
-        let rows: Vec<(String, String)> = stmt
-            .query_map([&grp], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<_, _>>()?;
-        drop(stmt);
-        conn.execute("DELETE FROM undo WHERE grp = ?1", [&grp])?;
-        let label = rows.first().map(|r| r.0.clone()).unwrap_or_default();
-        let mut entries = Vec::new();
-        for (_, json) in rows {
-            entries.extend(serde_json::from_str::<Vec<UndoEntry>>(&json)?);
+        if let Some(row) = &row {
+            tx.execute(
+                "UPDATE queue SET status = 'running' WHERE seq = ?1",
+                [row.seq],
+            )?;
         }
-        Ok(Some((label, entries)))
+        tx.commit()?;
+        Ok(row)
+    }
+
+    /// The instruction is complete: it is carried out when it is due.
+    pub fn release_queued(&self, seq: i64) -> StoreResult<()> {
+        self.conn().execute(
+            "UPDATE queue SET status = 'queued' WHERE seq = ?1 AND status = 'new'",
+            [seq],
+        )?;
+        Ok(())
+    }
+
+    /// Replace what an instruction carries (its undo entries are known only
+    /// after the index has been changed).
+    pub fn set_queued_json(&self, seq: i64, json: &str) -> StoreResult<()> {
+        self.conn().execute(
+            "UPDATE queue SET json = ?2 WHERE seq = ?1",
+            params![seq, json],
+        )?;
+        Ok(())
+    }
+
+    /// Try again at `due`.
+    pub fn requeue(&self, seq: i64, due: DateTime<Utc>, json: &str) -> StoreResult<()> {
+        self.conn().execute(
+            "UPDATE queue SET status = 'queued', attempts = attempts + 1, due = ?2, json = ?3 \
+             WHERE seq = ?1",
+            params![seq, due.timestamp_millis(), json],
+        )?;
+        Ok(())
+    }
+
+    /// The instruction is finished, one way or another.
+    pub fn finish_queued(&self, seq: i64, status: &str) -> StoreResult<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE queue SET status = ?2 WHERE seq = ?1",
+            params![seq, status],
+        )?;
+        conn.execute("DELETE FROM pending WHERE seq = ?1", [seq])?;
+        Ok(())
+    }
+
+    /// Stop an instruction that has not started. False when it has.
+    pub fn cancel_queued(&self, seq: i64) -> StoreResult<bool> {
+        let conn = self.conn();
+        let n = conn.execute(
+            "UPDATE queue SET status = 'undone' WHERE seq = ?1 AND status = 'queued'",
+            [seq],
+        )?;
+        if n > 0 {
+            conn.execute("DELETE FROM pending WHERE seq = ?1", [seq])?;
+        }
+        Ok(n > 0)
+    }
+
+    pub fn queued(&self, id: &str) -> StoreResult<Option<QueueRow>> {
+        Ok(self
+            .conn()
+            .query_row(
+                "SELECT seq, id, label, status, attempts, created_at, json FROM queue WHERE id = ?1",
+                [id],
+                Self::queue_row,
+            )
+            .optional()?)
+    }
+
+    /// Instructions, newest first.
+    pub fn queue(&self, limit: usize) -> StoreResult<Vec<QueueRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT seq, id, label, status, attempts, created_at, json FROM queue \
+             ORDER BY seq DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit as i64], Self::queue_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// When the next queued instruction is due.
+    pub fn next_queued(&self) -> StoreResult<Option<DateTime<Utc>>> {
+        let due: Option<i64> = self.conn().query_row(
+            "SELECT MIN(due) FROM queue WHERE status = 'queued'",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(due.and_then(DateTime::from_timestamp_millis))
+    }
+
+    /// Give up on instructions a process left half done `since` or earlier.
+    /// They would hold up later ones on the same messages.
+    pub fn abandon_stuck(&self, since: DateTime<Utc>) -> StoreResult<usize> {
+        let conn = self.conn();
+        let n = conn.execute(
+            "UPDATE queue SET status = 'failed' WHERE status IN ('new', 'running') AND created_at <= ?1",
+            [ts(since)],
+        )?;
+        conn.execute(
+            "DELETE FROM pending WHERE seq IN (SELECT seq FROM queue WHERE status = 'failed')",
+            [],
+        )?;
+        Ok(n)
+    }
+
+    /// These instructions are due now (the process that took them is ending).
+    pub fn hurry_queue(&self, seqs: &[i64]) -> StoreResult<()> {
+        let conn = self.conn();
+        for seq in seqs {
+            conn.execute(
+                "UPDATE queue SET due = 0 WHERE seq = ?1 AND status = 'queued'",
+                [seq],
+            )?;
+        }
+        Ok(())
     }
 
     // ---- outbox -----------------------------------------------------------
@@ -1119,6 +1596,32 @@ impl Store {
             })
             .optional()?;
         Ok(json.and_then(|j| serde_json::from_str(&j).ok()))
+    }
+
+    /// Everything held is due at `now`. Entries being sent, or removed
+    /// meanwhile, are left alone.
+    pub fn hurry_outbox(&self, now: DateTime<Utc>) -> StoreResult<()> {
+        let mut conn = self.conn();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let rows: Vec<String> = {
+            let mut stmt = tx.prepare("SELECT json FROM outbox")?;
+            stmt.query_map([], |r| r.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        for json in rows {
+            let Ok(mut e) = serde_json::from_str::<OutboxEntry>(&json) else {
+                continue;
+            };
+            if e.status == "held" {
+                e.send_at = Some(now);
+                tx.execute(
+                    "UPDATE outbox SET json = ?2 WHERE draft = ?1",
+                    params![e.draft, serde_json::to_string(&e)?],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Claim a due entry for sending (status held → sending), atomically, so
@@ -1394,6 +1897,7 @@ mod tests {
             bulk_hint: Some(BulkHint::Other),
             list_unsubscribe: false,
             is_invite: false,
+            message_id: String::new(),
         }
     }
 
@@ -1479,34 +1983,189 @@ mod tests {
     }
 
     #[test]
-    fn local_changes_record_undo_and_restore() {
+    fn local_changes_are_recorded_and_restored() {
         let s = Store::in_memory().unwrap();
         s.upsert_items(&[item("me@x", "1", Folder::Inbox, "a@b", "x", 1)])
             .unwrap();
-        let undo = s
-            .apply_local(
-                "me@x",
-                &["1".into()],
-                &MailChange::Move {
-                    to: Folder::Archive,
-                },
-            )
-            .unwrap();
+        let to = MailChange::Move {
+            to: Folder::Archive,
+        };
+        let before = s.apply_local("me@x", &["1".into()], &to, None).unwrap();
         assert_eq!(
             s.get("me@x", "1").unwrap().unwrap().item.folder,
             Folder::Archive
         );
-        s.push_undo("g1", "archive", &undo).unwrap();
-        let (label, entries) = s.pop_undo().unwrap().unwrap();
-        assert_eq!(label, "archive");
-        for e in &entries {
+        for e in &before {
             s.restore_local(e).unwrap();
         }
         assert_eq!(
             s.get("me@x", "1").unwrap().unwrap().item.folder,
             Folder::Inbox
         );
-        assert!(s.pop_undo().unwrap().is_none());
+    }
+
+    #[test]
+    fn a_change_on_its_way_survives_a_sync_until_it_is_finished() {
+        let s = Store::in_memory().unwrap();
+        let i = item("me@x", "1", Folder::Inbox, "a@b", "x", 1);
+        s.upsert_items(std::slice::from_ref(&i)).unwrap();
+        let seq = s.enqueue("q1", "archive", Utc::now(), "{}").unwrap();
+        let to = MailChange::Move {
+            to: Folder::Archive,
+        };
+        s.apply_local("me@x", &["1".into()], &to, Some(seq))
+            .unwrap();
+        s.upsert_items(std::slice::from_ref(&i)).unwrap();
+        let folder = || s.get("me@x", "1").unwrap().unwrap().item.folder;
+        assert_eq!(folder(), Folder::Archive);
+
+        s.finish_queued(seq, "done").unwrap();
+        s.upsert_items(std::slice::from_ref(&i)).unwrap();
+        assert_eq!(folder(), Folder::Inbox);
+    }
+
+    #[test]
+    fn an_instruction_waits_for_an_earlier_one_on_the_same_message() {
+        let s = Store::in_memory().unwrap();
+        let now = Utc::now();
+        let late = now + Duration::seconds(60);
+        let one = s.enqueue("q1", "delete", late, "1").unwrap();
+        s.touch(one, "me@x", "1").unwrap();
+        s.release_queued(one).unwrap();
+        let two = s.enqueue("q2", "archive", now, "2").unwrap();
+        s.touch(two, "me@x", "1").unwrap();
+        s.release_queued(two).unwrap();
+        let other = s.enqueue("q3", "archive", now, "3").unwrap();
+        s.touch(other, "me@x", "2").unwrap();
+        s.release_queued(other).unwrap();
+
+        assert_eq!(s.claim_queued(now).unwrap().unwrap().id, "q3");
+        assert!(s.claim_queued(now).unwrap().is_none());
+        assert_eq!(s.claim_queued(late).unwrap().unwrap().id, "q1");
+        assert!(s.claim_queued(late).unwrap().is_none());
+        s.finish_queued(one, "done").unwrap();
+        assert_eq!(s.claim_queued(late).unwrap().unwrap().id, "q2");
+        assert!(!s.cancel_queued(two).unwrap(), "it has started");
+    }
+
+    #[test]
+    fn what_a_stopped_process_left_half_done_holds_nothing_up() {
+        let s = Store::in_memory().unwrap();
+        let now = Utc::now();
+        let one = s.enqueue("q1", "archive", now, "1").unwrap();
+        s.touch(one, "me@x", "1").unwrap();
+        s.release_queued(one).unwrap();
+        s.claim_queued(now).unwrap().unwrap();
+        let two = s.enqueue("q2", "archive", now, "2").unwrap();
+        s.touch(two, "me@x", "1").unwrap();
+        s.release_queued(two).unwrap();
+        assert!(s.claim_queued(now).unwrap().is_none());
+        assert_eq!(s.abandon_stuck(now).unwrap(), 1);
+        assert_eq!(s.claim_queued(now).unwrap().unwrap().id, "q2");
+    }
+
+    fn synced(s: &Store) {
+        s.save_sync(&SyncState {
+            account: "me@x".into(),
+            cursor: Some("c".into()),
+            synced_at: Some(Utc::now()),
+            window_start: Some(Utc::now() - Duration::days(90)),
+            complete: true,
+        })
+        .unwrap();
+    }
+
+    fn with_message_id(mut i: MailItem, id: &str) -> MailItem {
+        i.message_id = id.into();
+        i
+    }
+
+    #[test]
+    fn a_search_hit_the_index_knows_by_message_id_is_that_message() {
+        let s = Store::in_memory().unwrap();
+        let known = with_message_id(item("me@x", "A", Folder::Inbox, "a@b", "x", 5), "<1@b>");
+        s.upsert_items(std::slice::from_ref(&known)).unwrap();
+        synced(&s);
+        let mut hit = known.clone();
+        hit.id = "B".into();
+        hit.unread = false;
+        assert_eq!(s.adopt_found(&[hit]).unwrap(), vec!["A".to_string()]);
+        assert_eq!(s.query(&Filter::default()).unwrap().len(), 1);
+        assert!(s.get("me@x", "A").unwrap().unwrap().item.unread);
+    }
+
+    #[test]
+    fn a_stale_search_hit_is_left_out_and_an_old_one_is_taken_in() {
+        let s = Store::in_memory().unwrap();
+        synced(&s);
+        let stale = with_message_id(item("me@x", "S", Folder::Inbox, "a@b", "x", 5), "<s@b>");
+        let old = with_message_id(
+            item("me@x", "O", Folder::Inbox, "a@b", "x", 24 * 200),
+            "<o@b>",
+        );
+        let filed = with_message_id(
+            item("me@x", "F", Folder::Other("f".into()), "a@b", "x", 5),
+            "<f@b>",
+        );
+        assert_eq!(
+            s.adopt_found(&[stale, old, filed]).unwrap(),
+            vec!["O".to_string(), "F".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_sync_takes_over_a_row_a_search_found_first_and_keeps_its_handle() {
+        let s = Store::in_memory().unwrap();
+        let hit = with_message_id(item("me@x", "B", Folder::Inbox, "a@b", "x", 5), "<1@b>");
+        s.adopt_found(std::slice::from_ref(&hit)).unwrap();
+        let mut real = hit.clone();
+        real.id = "A".into();
+        let h = s.upsert_items(&[real]).unwrap();
+        assert_eq!(h, vec!["m1".to_string()]);
+        assert_eq!(s.query(&Filter::default()).unwrap().len(), 1);
+        assert_eq!(s.resolve("m1").unwrap().unwrap().id, "A");
+    }
+
+    #[test]
+    fn a_new_database_never_repeats_an_old_handle() {
+        let s = Store::in_memory().unwrap();
+        assert!(s.is_fresh().unwrap());
+        s.start_handles_at(40_000).unwrap();
+        assert!(!s.is_fresh().unwrap());
+        let h = s.handle(HandleKind::Message, "me@x", "AAA").unwrap();
+        assert_eq!(h, format!("m{}", to_base36(40_000)));
+    }
+
+    #[test]
+    fn words_match_in_any_alternative_and_any_case() {
+        let s = Store::in_memory().unwrap();
+        s.upsert_items(&[
+            item("me@x", "1", Folder::Inbox, "no@dhl.se", "Åter på väg", 1),
+            item("me@x", "2", Folder::Inbox, "npm@npm.io", "Published", 2),
+            item("me@x", "3", Folder::Inbox, "a@b.se", "Hej", 3),
+        ])
+        .unwrap();
+        let ids = |f: Filter| -> Vec<String> {
+            s.query(&f)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.item.id)
+                .collect()
+        };
+        assert_eq!(
+            ids(Filter {
+                text: Some("åter väg OR published".into()),
+                ..Default::default()
+            }),
+            vec!["1", "2"]
+        );
+        assert_eq!(
+            ids(Filter {
+                from: Some("npm, dhl".into()),
+                ..Default::default()
+            }),
+            vec!["1", "2"]
+        );
     }
 
     #[test]

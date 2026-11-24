@@ -162,8 +162,16 @@ fn domain(a: &str) -> String {
     a.rsplit('@').next().unwrap_or("").to_ascii_lowercase()
 }
 
-/// How risky is sending this draft from `from`? `forward`: it forwards.
-pub async fn assess(user: &User, draft: &Draft, from: &str, forward: bool, reply: bool) -> Risk {
+/// How risky is sending this draft from `from`? `forward`: it forwards;
+/// `answers`: a reply, and who the mail it answers was from and to.
+pub async fn assess(
+    user: &Arc<User>,
+    draft: &Draft,
+    from: &str,
+    forward: bool,
+    answers: Option<&[String]>,
+) -> Risk {
+    let reply = answers.is_some();
     let mut level = Level::Normal;
     let mut reasons = Vec::new();
     let all: Vec<&pidge_core::MessageFrom> =
@@ -206,7 +214,13 @@ pub async fn assess(user: &User, draft: &Draft, from: &str, forward: bool, reply
         raise(&mut level, Level::High);
         reasons.push("attachments".into());
     }
-    let findings = sensitive_findings(&draft.body_text);
+    let quoted_is_known = answers.is_some_and(|a| to_the_same_people(user, draft, a));
+    let text = if quoted_is_known {
+        own_text(&draft.body_text)
+    } else {
+        draft.body_text.clone()
+    };
+    let findings = sensitive_findings(&text);
     if !findings.is_empty() {
         raise(&mut level, Level::Approval);
         reasons.push(format!("it contains {}", findings.join(", ")));
@@ -214,7 +228,7 @@ pub async fn assess(user: &User, draft: &Draft, from: &str, forward: bool, reply
     if level == Level::Normal
         && reply
         && all.len() == 1
-        && draft.body_text.chars().count() < 1500
+        && text.chars().count() < 1500
         && reasons.is_empty()
     {
         level = Level::Low;
@@ -239,8 +253,9 @@ pub async fn assess(user: &User, draft: &Draft, from: &str, forward: bool, reply
         let state = json!({ "email": {
             "to": all.iter().map(|r| &r.address).collect::<Vec<_>>(),
             "subject": draft.subject,
-            "body": draft.body_text.chars().take(4000).collect::<String>(),
+            "body": text.chars().take(4000).collect::<String>(),
         }});
+        user.record(crate::activity::ai_line("send", 1)).await;
         if let Ok(Ok(resp)) =
             tokio::time::timeout(Duration::from_secs(8), client.eval(state, &q)).await
             && let Some(score) = resp
@@ -286,6 +301,66 @@ pub async fn tick(user: &Arc<User>) {
             }
         }
     }
+}
+
+/// Send everything held now (the server is stopping). Mail that waits for
+/// the user's approval stays a draft.
+pub async fn flush(user: &Arc<User>) {
+    let _ = user.store.hurry_outbox(Utc::now());
+    tick(user).await;
+}
+
+/// The part of a draft the user wrote: quoted history to the same people has
+/// been sent to its readers before. What is typed between or below quoted
+/// lines is the user's.
+pub fn own_text(body: &str) -> String {
+    let lines: Vec<&str> = body.lines().collect();
+    let starts = |l: &str, words: &[&str]| words.iter().any(|w| l.trim_start().starts_with(w));
+    let mut own = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        if t.starts_with('>') {
+            continue;
+        }
+        let header = starts(t, &["From:", "Från:"])
+            && lines[i + 1..(i + 5).min(lines.len())].iter().any(|l| {
+                starts(
+                    l,
+                    &["Sent:", "Skickat:", "Date:", "Datum:", "Subject:", "Ämne:"],
+                )
+            });
+        let wrote = (t.starts_with("On ") && t.ends_with("wrote:"))
+            || (t.starts_with("Den ") && t.ends_with("skrev:"));
+        if header {
+            break;
+        }
+        if wrote {
+            // Quoted line by line: answers may stand in between.
+            let quoted = lines[i + 1..]
+                .iter()
+                .find(|l| !l.trim().is_empty())
+                .is_some_and(|l| l.trim_start().starts_with('>'));
+            if quoted {
+                continue;
+            }
+            break;
+        }
+        own.push(*line);
+    }
+    own.join("\n")
+}
+
+/// Whether a reply goes only to people the mail it answers was from or to.
+fn to_the_same_people(user: &User, draft: &Draft, among: &[String]) -> bool {
+    let own: Vec<String> = user.addresses();
+    let known = |a: &str| among.iter().chain(&own).any(|x| x.eq_ignore_ascii_case(a));
+    !among.is_empty()
+        && draft
+            .to
+            .iter()
+            .chain(&draft.cc)
+            .chain(&draft.bcc)
+            .all(|r| known(&r.address))
 }
 
 /// Make sure what is held goes out on time.
@@ -374,6 +449,22 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("IBAN"))
         );
+    }
+
+    #[test]
+    fn a_reply_is_checked_on_what_the_user_wrote() {
+        let body = "Tack, det passar bra!\n\nFrån: Butiken <x@y.se>\nSkickat: den 20 november\nTill: mig\nÄmne: Order\n\nKort 4111 1111 1111 1111";
+        assert!(sensitive_findings(&own_text(body)).is_empty());
+        assert!(!sensitive_findings(body).is_empty());
+    }
+
+    #[test]
+    fn what_is_typed_below_a_quote_is_checked_too() {
+        let body =
+            "Hej!\n\nOn Mon, Nov 23, 2026 Bob wrote:\n> Vilket kort?\n\nKort 4111 1111 1111 1111";
+        assert!(!sensitive_findings(&own_text(body)).is_empty());
+        let from = "From: here it is\nKort 4111 1111 1111 1111";
+        assert!(!sensitive_findings(&own_text(from)).is_empty());
     }
 
     #[test]

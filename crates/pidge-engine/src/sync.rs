@@ -10,16 +10,18 @@ use chrono::Utc;
 use pidge_core::provider::{Provider, ProviderError};
 use pidge_store::SyncState;
 
-use crate::classify::classify_pending;
-use crate::ctx::User;
+use crate::classify::sort_new;
+use crate::ctx::{Frontend, User};
 
 /// A mailbox synced this recently is not asked again.
 const FRESH: chrono::Duration = chrono::Duration::seconds(15);
-/// Time the AI may take on new mail before an answer goes out anyway. A
-/// server's requests carry on in the background; a CLI process would kill
-/// them on exit, so it waits for them.
-const CLASSIFY_BUDGET: Duration = Duration::from_secs(4);
-const CLASSIFY_BUDGET_CLI: Duration = Duration::from_secs(30);
+/// A read is answered from an index this fresh without waiting.
+const RECENT: chrono::Duration = chrono::Duration::seconds(90);
+/// Otherwise it waits this long before it is answered anyway.
+const STALE_BUDGET: Duration = Duration::from_secs(3);
+/// How often an active user's index is brought up to date, and an idle one's.
+const ACTIVE: Duration = Duration::from_secs(60);
+const IDLE_ROUNDS: u32 = 10;
 
 /// What a read should mention about the index.
 #[derive(Debug, Default, Clone)]
@@ -79,8 +81,15 @@ async fn sync_account(user: Arc<User>, provider: Arc<dyn Provider>) -> Result<()
             Err(e) => return Err(e),
         };
         let store_err = |e: pidge_store::StoreError| ProviderError::Other(e.to_string());
+        // A message that only moved leaves one folder and shows up in another.
+        let gone: Vec<String> = page
+            .removed
+            .iter()
+            .filter(|id| !page.upserts.iter().any(|u| u.id == **id))
+            .cloned()
+            .collect();
         user.store
-            .remove_items(&account, &page.removed)
+            .remove_items(&account, &gone)
             .map_err(store_err)?;
         user.store.upsert_items(&page.upserts).map_err(store_err)?;
         st.cursor = Some(page.cursor);
@@ -125,42 +134,99 @@ async fn refresh_people(user: &User, provider: &dyn Provider) {
     );
 }
 
-/// Bring the given mailboxes up to date, waiting at most `budget`, then
-/// classify what is new.
+/// Bring the given mailboxes up to date and sort what is new. A read of an
+/// index that is recent does not wait; one that is older waits a moment; a
+/// first load waits up to `budget`.
 pub async fn ensure(
     user: &Arc<User>,
     providers: &[Arc<dyn Provider>],
     budget: Duration,
 ) -> SyncReport {
+    let now = Utc::now();
+    let server = user.frontend() == Frontend::Mcp;
+    let start = tokio::time::Instant::now();
     let mut handles = Vec::new();
     for p in providers {
-        let (u, p) = (user.clone(), p.clone());
         let account = p.address().to_string();
-        handles.push((account, tokio::spawn(sync_account(u, p))));
+        let state = user.store.sync_state(&account).ok();
+        let loaded = state.as_ref().is_some_and(|s| s.complete);
+        let recent = state
+            .and_then(|s| s.synced_at)
+            .is_some_and(|t| now - t < RECENT);
+        let wait = match (server && loaded, recent) {
+            (true, true) => Duration::ZERO,
+            (true, false) => STALE_BUDGET,
+            (false, _) => budget,
+        };
+        let task = tokio::spawn(sync_account(user.clone(), p.clone()));
+        handles.push((account, loaded, start + wait, task));
     }
-    let deadline = tokio::time::Instant::now() + budget;
     let mut report = SyncReport::default();
-    for (account, handle) in handles {
-        match tokio::time::timeout_at(deadline, handle).await {
+    for (account, loaded, deadline, task) in handles {
+        match tokio::time::timeout_at(deadline, task).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(ProviderError::Auth { .. }))) => report.failed.push((
                 account,
-                "needs to sign in again (accounts action=connect)".into(),
+                "needs to sign in again (settings action=connect)".into(),
             )),
             Ok(Ok(Err(e))) => report
                 .failed
                 .push((account, format!("could not sync: {e}"))),
             Ok(Err(_)) => report.failed.push((account, "sync stopped".into())),
             // Still running: it carries on in the background.
+            Err(_) if loaded => {}
             Err(_) => report.loading.push(account),
         }
     }
-    let classify = match user.frontend() {
-        crate::ctx::Frontend::Cli => CLASSIFY_BUDGET_CLI,
-        crate::ctx::Frontend::Mcp => CLASSIFY_BUDGET,
-    };
-    classify_pending(user, classify).await;
+    sort_new(user).await;
+    if server {
+        keep(user);
+    }
     report
+}
+
+/// Keep the user's index current while they are active, and (on a server
+/// that is always on) now and then while they are not.
+pub fn keep(user: &Arc<User>) {
+    let mut slot = user.keeper.lock().unwrap_or_else(|p| p.into_inner());
+    if slot.as_ref().is_some_and(|t| !t.is_finished()) {
+        return;
+    }
+    let weak = Arc::downgrade(user);
+    *slot = Some(tokio::spawn(async move {
+        let mut round = 0_u32;
+        loop {
+            let Some(user) = weak.upgrade() else { return };
+            round = round.wrapping_add(1);
+            let active = user.is_active();
+            if !active && !user.host.always_on() {
+                return;
+            }
+            if round % IDLE_ROUNDS == 1 {
+                let _ = user.store.housekeeping();
+            }
+            if active || round % IDLE_ROUNDS == 1 {
+                refresh(&user).await;
+            }
+            drop(user);
+            tokio::time::sleep(ACTIVE).await;
+        }
+    }));
+}
+
+/// One round in the background: mail, sorting, the calendar.
+pub async fn refresh(user: &Arc<User>) {
+    let providers = user.providers();
+    let syncs = providers
+        .iter()
+        .map(|p| sync_account(user.clone(), p.clone()));
+    for r in futures::future::join_all(syncs).await {
+        if let Err(e) = r {
+            tracing::debug!(error = %e, "background sync failed");
+        }
+    }
+    sort_new(user).await;
+    crate::happenings::refresh_calendar(user, &providers).await;
 }
 
 /// The default budget: a CLI can wait for a full bootstrap, a voice

@@ -10,7 +10,10 @@
 pub mod activity;
 pub mod classify;
 pub mod ctx;
+pub mod dates;
+pub mod delivery;
 pub mod error;
+pub mod happenings;
 pub mod kinds;
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -18,8 +21,10 @@ pub mod ops;
 pub mod outbox;
 pub mod playbooks;
 pub mod prefs;
+pub mod queue;
 pub mod registry;
 pub mod render;
+pub mod rules;
 pub mod sync;
 
 pub use ctx::{AccountInfo, Frontend, Host, User};

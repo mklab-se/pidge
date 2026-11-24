@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0] - 2026-11-24
+
+Fast and natural, from what the activity log showed: few calls, instant answers, one deck at a time.
+Design: `docs/superpowers/specs/2026-11-24-pidge-3-fast-and-natural-design.md`. Tool and command
+names change (reconnect or refresh pidge in your client); mailboxes, tokens and settings carry over.
+
+### Added
+
+- **`mail_inbox`** (was `mail_brief` and `mail_triage`): the inbox in groups with a suggestion each, a
+  deck at a time, to be talked through without further calls. Groups (`g4`) stand for their messages.
+- **One `mail_act` settles a deck:** `actions=[...]`, groups as ids, `next=true` for the next deck.
+- **`undo`** for mail, calendar and mail on its way, whether or not it has been carried out, with
+  `instead=` to do something else.
+- **"Always do that":** `always=sender` or `kind` makes a standing rule for mail that comes later.
+- **Happenings:** mail about something that happens at a time says when, and whether that is free,
+  clashes or is already booked; `calendar_act action=create from_message=m12` adds it.
+- **Parcels:** kind `delivery`; `mail_find kind=delivery` says where each parcel is.
+- `mail_find` takes alternatives (`OR`, commas) and `everywhere`; `mail_read` takes several ids and
+  cuts long tracking links to where they lead.
+- The activity log names the pidge version on every line, marks server starts, and logs what the
+  queue carried out and what the AI was asked.
+
+### Changed
+
+- **Every change is queued with an id (`q7`)** and answered at once; retried if the service hiccups,
+  in order per message, finished on shutdown. A message that was already gone counts as done.
+- **Plans only** for descriptions that match more than 50 messages (`ask_over`) and for calendar
+  changes that e-mail others. Messages the user named are never asked about again.
+- **Reads answer from the index**, which keeps itself current in the background and shows changes
+  still on their way. Sorting, the AI and sender lookups never hold up an answer.
+- 12 tools instead of 16: `calendar_act` (was `calendar_event`, `calendar_act`, `calendar_respond`),
+  `settings` (was `accounts`, `mail_setup`), `intent` is now a field on every tool. `mail_act
+  categorize` is the one way to categorize, and teaches pidge (`classify` is gone).
+- Replies are checked for sensitive content on the user's own text, not the quoted history.
+
+### Fixed
+
+- Duplicates and phantom messages from the mail service's search: a hit is matched by Message-ID,
+  and stale hits are left out.
+- A handle from before a restart could mean another message; now it is unknown.
+- A message that moved between folders lost what pidge knew about it.
+- Case-insensitive search for words with å, ä, ö.
+
 ## [2.1.2] - 2026-11-22
 
 ### Fixed

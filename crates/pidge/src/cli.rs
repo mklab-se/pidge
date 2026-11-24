@@ -1,6 +1,6 @@
 //! The CLI's fixed commands (setup, servers, completion). The mail and
 //! calendar commands (`pidge mail ...`, `pidge calendar ...`,
-//! `pidge accounts`) are built at runtime from the engine's operations; see
+//! `pidge settings`) are built at runtime from the engine's operations; see
 //! `dynamic.rs`.
 
 use clap::{Parser, Subcommand, ValueEnum};

@@ -39,33 +39,36 @@ what's new, go through the inbox with you, find that one e-mail, clear out recei
 the reply, and run the calendar, across every mailbox you have.
 
 ```text
-You:    Anything important today?
-Agent:  (mail_brief importance=high)
-        Two things: Anna asks you to sign the contract before Friday, and Bob's
-        invitation for Thursday 14:00 is still unanswered.
-You:    Clear out the rest of my inbox.
-Agent:  (mail_triage scope=all)
-        41 messages. First, 23 newsletters and promotions: archive them all?
-You:    Yes.
-Agent:  Done. Next, 4 receipts: Telia 449 kr, SL 970 kr, Apple 29 kr, Spotify 119 kr. File them?
+You:    What's in my inbox?
+Agent:  (mail_inbox scope=all)
+        Anna asks you to sign the contract before Friday. The dentist offers Thursday 14:00,
+        which is free. Two parcels are on their way and three have come. The rest is eleven
+        ads and nine newsletters: shall I delete the ads and archive the others?
+You:    Yes, and the parcels that came. Put the dentist in, and always archive delivered parcels.
+Agent:  (mail_act, calendar_act)
+        Done. On to the next twenty.
+You:    No wait, keep the newsletters.
+Agent:  (undo)  They are back.
 ```
 
 ## Why pidge
 
-- **Made for agents, by asking what people say.** Fifteen operations, each answering something
+- **Made for agents, by asking what people say.** Twelve tools, each answering something
   people actually ask ("anything new?", "clear my inbox", "archive all invoices", "cancel all my
   appointments today") in one or two calls. Short ids (`m12`, `e3`), compact text output, and a
   `next:` line telling the agent what to do.
 - **It remembers.** pidge keeps a small local index of your recent mail, synced from your mailboxes:
   "new" means new since you last looked, and "all receipts" or "all commercials" is one query, not
   a hundred judgements.
-- **Snappy.** Archive, delete, flag: pidge answers at once and does it in the background; a failure
-  is reported on the next answer.
-- **Safe by construction.** Changes to many messages, and anything that e-mails other people, are a
-  plan you approve first. Sending is held for a few seconds to two minutes depending on risk, so
-  you can still say "cancel", and mail that looks sensitive waits for a second yes. Undo is one
-  call. Nothing is deleted permanently, and mail content is marked untrusted so your agent
-  summarises it instead of obeying it.
+- **Snappy.** Few calls and instant answers: a whole deck of mail is told in one answer and settled
+  with one call. Archive, delete, flag: pidge answers at once and does it in the background, and
+  anything can be undone.
+- **It prepares.** Mail about an appointment says whether the time is free, clashes or is already
+  booked; parcels say where they are; what you always do, pidge does for you.
+- **Safe by construction.** Anything that e-mails other people is a plan you approve first. Mail you
+  regret can be stopped for a little while, and mail that looks sensitive waits for a second yes.
+  Nothing is deleted permanently, and mail content is marked untrusted so your agent summarises it
+  instead of obeying it.
 - **All your mailboxes in one view.** Microsoft 365, Outlook.com and Gmail, with calendars, merged.
 - **Everywhere your agent is.** A CLI and skill for terminal agents, a local MCP server for desktop
   apps, and a hosted MCP server for Claude.ai and ChatGPT, all one engine with the same behaviour.
@@ -96,10 +99,10 @@ Then connect your agent:
 ```bash
 pidge                                      # what's new, and today's calendar
 pidge mail find avtal --from anna          # find a message
-pidge mail triage                          # go through the inbox, step by step
-pidge mail act archive --kind receipt      # a plan for every receipt; apply it with --plan
+pidge mail inbox all                       # go through the inbox, a deck at a time
+pidge mail act archive --kind receipt      # every receipt; pidge undo takes it back
 pidge calendar agenda this_week
-pidge calendar event create --title "Q3 planning" --start "tomorrow 15:00" --end +90m --attendees anna
+pidge calendar act create --title "Q3 planning" --start "tomorrow 15:00" --end +90m --attendees anna
 ```
 
 More in [docs/usage.md](docs/usage.md), or `pidge --help`.

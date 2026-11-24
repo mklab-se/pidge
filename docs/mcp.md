@@ -68,7 +68,7 @@ accounts and tokens from `config.yaml` (keychain or token files) and
 preferences in `prefs.json` next to it, in `${XDG_CONFIG_HOME:-~/.config}/pidge`
 (`%APPDATA%\pidge` on Windows), and the index (`index.db`) in
 `${XDG_CACHE_HOME:-~/.cache}/pidge` (`%LOCALAPPDATA%\pidge`). `mail_attachment mode=save`
-saves into your Downloads folder, and `accounts action=ai` points the user
+saves into your Downloads folder, and `settings action=ai` points the user
 at `pidge ai config` for their own AI key. No hosting, allowlist or Entra app
 registration is involved.
 
@@ -202,44 +202,40 @@ all appointments today", ...).
 
 | Tool | What it does |
 |---|---|
-| `mail_brief` | "Any new e-mail?": an inbox map and the mail that matters since the user last looked, with a reason each, and counts for the bulk. Moves "last seen" unless `mark_seen=false`; `importance=high` for "anything important?". |
-| `mail_find` | Find mail by words, sender, time (`since`, `before`), folder, kind (`receipt`, `newsletter`, `promotion`, ...), category, importance, unread, flagged or attachments; `count_only` for "how many". |
-| `mail_read` | One message, or its conversation with `thread=true`, its internet headers with `headers=true`; shows attachments and, for invitations, the event id. |
-| `mail_triage` | Goes through the inbox with the user: sweeps of bulk mail, then small batches, then one by one, with a suggested action each; `decision=...` after every user answer. |
-| `mail_act` | Archive, delete, read, unread, flag, unflag, move, categorize, unsubscribe, classify, or undo, on ids or on a selector (`kind=receipt`). Answers at once; bulk and selector changes return a plan first. |
-| `mail_draft` | Write or revise a draft (new, reply, reply_all, forward); recipients may be names of people the user mails with. Returns `d4` and a preview. |
-| `mail_send` | Sends a draft through the outbox with a short hold (`action=cancel`, `now`, `approve`, `status`). |
+| `mail_inbox` | The state of the inbox: "anything new?", "anything important?" (`importance=high`), "help me go through it" (`scope=unread`, `all`). Numbers and a deck: the mail in groups (`g4`) with a suggestion each, times compared with the calendar, parcels with where they are. `next=true` for the next deck. |
+| `mail_find` | Something in particular, by words, sender, time, folder, kind, category, importance, unread, flagged or attachments. Alternatives in one call (`text="invoice OR faktura"`, `from="npm, GitHub"`). `kind=delivery` answers per parcel, `happening=true` lists mail about something that happens at a time, `everywhere=true` also asks the mail service, `count_only` for "how many". |
+| `mail_read` | Up to 10 messages, or a conversation with `thread=true`, internet headers with `headers=true`; shows attachments, times compared with the calendar and, for invitations, the event id. Long tracking links are cut to where they lead (`links=true` for all of them). |
+| `mail_act` | Archive, delete, read, unread, flag, unflag, move, categorize, file or unsubscribe, on ids and groups or on a description (`kind=promotion`). `actions=[...]` does several things at once, `next=true` brings the next deck, `always=sender` or `kind` makes it a standing rule. Categorizing teaches pidge. |
+| `mail_draft` | Write or revise a draft (new, reply, reply_all, forward); recipients may be names of people the user mails with. Returns `d4` and a preview; `send=true` also sends it. |
+| `mail_send` | Sends a draft (`action=approve` for a sensitive one, `cancel`, `now`, `status`). |
 | `mail_attachment` | An attachment as text (documents converted to Markdown), or `mode=save` for a download link (hosted) or a file in Downloads (local). |
-| `mail_setup` | Categories, rules, examples, VIPs, muted senders, policy (send, notify, bulk, delete, `bulk_threshold`, `sends_per_hour`) and settings (timezone, default sender, working hours, ...); `label_mail` writes pidge's categories onto recent inbox mail. |
 | `calendar_agenda` | Events for today, tomorrow, this or next week, N days or just the next one, across all calendars, in the user's timezone; `pending_only` for unanswered invitations. |
-| `calendar_event` | Create (also from an e-mail's `.ics`), update, invite or uninvite people, cancel (attendees told) or delete (silently) one event. |
-| `calendar_act` | Many events at once: clear a day, cancel, decline, delete or move; always a plan first. |
-| `calendar_respond` | Accept, tentatively accept or decline an invitation (by event or by the invitation e-mail), with an optional note. |
+| `calendar_act` | Every change: create (also from the time a mail says, or its `.ics`), update, invite or uninvite, accept, tentative, decline, cancel, delete, move; or many events at once with `range` (`clear` does the right thing per event). |
 | `calendar_availability` | Free windows of a given length within working hours, optionally with other people's free/busy. |
-| `intent` | First call for every request: what the user asked, in a sentence or two. Returns an id (`i4kq2x`) that every other tool takes as `intent`. Requests and their calls are logged to improve pidge. |
-| `accounts` | The user's mailboxes and their health; `connect` (Microsoft or Google), `disconnect`, `ai` (set up the user's own AI key), `ai_off`, `sign_out_everywhere`. |
+| `undo` | Takes back a change to mail or the calendar, or mail on its way: the latest, or `id=q7`. `instead=archive` does something else with the same messages. |
+| `settings` | Mailboxes (`connect`, `disconnect`, `ai`, `ai_off`, `sign_out_everywhere`), categories and rules, standing rules (`forget`), VIPs, muted senders, policy (`send`, `notify`, `bulk`, `delete`, `ask_over`, `sends_per_hour`) and preferences (timezone, default sender, working hours, ...). |
+
+Every tool takes `intent`: what the user asked, in a few words. Requests and their calls are logged
+to improve pidge.
 
 How the tools behave together:
 
-- **Changes are fire-and-forget.** `mail_act` updates pidge's index and
-  answers at once ("Archived."); the call to Microsoft or Google runs in
-  the background on a per-user worker. A failure puts the message back and
-  is reported once, as a `Note:` line at the top of the next answer.
-- **Plans.** A change to more messages than the policy's `bulk_threshold`
-  (5 by default), every selector-based change, `calendar_act`, and anything
-  in `calendar_event` that e-mails other people return a plan (`p5`) that
-  says what will happen and to whom. The agent tells the user and applies
-  it with `plan=p5` when they agree. Plans expire after 15 minutes.
-  `mail_act action=undo` reverses the last mail change.
-- **Sending.** `mail_send` puts a draft in the outbox and it goes out by
-  itself after a hold that grows with risk: 10 s for a short reply to one
-  known person, 30 s normally, 2 min for a first mail to an address, more
-  than 5 recipients, a forward or attachments. Sensitive mail (what looks
-  like an identity, card or IBAN number, words such as "password" or
-  "confidential", more than 20 recipients, or the user's own AI judging it
-  highly sensitive) waits for `action=approve`.
-- **Triage keeps going.** Acting on the current triage message with
-  `mail_act` (for example after a reply) also returns the next step.
+- **Changes are instant.** A change shows in pidge's index and is answered at once with an id
+  ("Archived 10 (q7)."); the call to Microsoft or Google is made in the background, shortly after,
+  and tried again if the service hiccups. Reads already show it. What fails for good is put back and
+  told once, as a `Note:` line at the top of a later answer. A message that was already gone counts
+  as deleted. When the server stops, it first finishes what it has promised.
+- **Undo.** `undo` takes back any change, whether or not it has been carried out, and stops mail that
+  has not gone out yet. What cannot be taken back says so.
+- **Plans.** Only a description that matches more than `ask_over` messages (50 by default), and
+  calendar changes that e-mail other people, return a plan (`p5`) that says what will happen and to
+  whom. The agent tells the user and applies it with `plan=p5`. Plans expire after 15 minutes.
+- **Sending.** Mail goes out by itself after a moment that grows with risk. Sensitive mail (what looks
+  like an identity, card or IBAN number, words such as "password" or "confidential", more than 20
+  recipients, or the user's own AI judging it highly sensitive) waits for `action=approve`. A reply
+  is judged by what the user wrote, not by the mail it quotes.
+- **Standing rules** apply to mail that arrives after the user said "always", never to mail that
+  matters, and say what they did once.
 
 See [`deploy/azure/README.md`](../deploy/azure/README.md#tools) for the full
 behaviour notes (thread mode, reply recipients, rate limits, attachment

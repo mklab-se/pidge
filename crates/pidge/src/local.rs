@@ -90,6 +90,7 @@ pub async fn open_user(frontend: Frontend) -> Result<Arc<User>> {
     {
         user.set_ai(Some(Arc::new(ai)));
     }
+    user.prepare().await;
     Ok(user)
 }
 
@@ -253,11 +254,8 @@ impl Host for LocalHost {
             .map_err(|e| e.to_string())
     }
 
-    /// A short-lived CLI cannot hold a send: start a detached runner.
+    /// A process that ends cannot hold a send: start a detached runner.
     fn outbox_due(&self, _at: DateTime<Utc>) {
-        if self.frontend != Frontend::Cli {
-            return;
-        }
         let Ok(exe) = std::env::current_exe() else {
             return;
         };
@@ -300,12 +298,16 @@ fn which(name: &str) -> Option<PathBuf> {
 pub async fn serve_stdio() -> Result<()> {
     use rmcp::ServiceExt;
     let user = open_user(Frontend::Mcp).await?;
-    let server = pidge_engine::mcp::PidgeServer::new(Local(user));
+    user.record(pidge_engine::activity::start_line()).await;
+    let server = pidge_engine::mcp::PidgeServer::new(Local(user.clone()));
     let running = server
         .serve(rmcp::transport::stdio())
         .await
         .context("could not start the MCP server on stdio")?;
-    running.waiting().await?;
+    let ended = running.waiting().await;
+    // The client is gone; what it was promised is done all the same.
+    let _ = tokio::time::timeout(Duration::from_secs(20), user.finish()).await;
+    ended?;
     Ok(())
 }
 

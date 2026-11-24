@@ -70,6 +70,34 @@ impl Engines {
             .map(|e| (e.user.clone(), e.refreshed.elapsed() < REFRESH))
     }
 
+    /// Get every known user ready before they call (the server just started):
+    /// their index loads in the background.
+    pub async fn warm(&self, state: &SharedState) {
+        for signin in &state.config.allowed_emails {
+            match state.users.load(signin).await {
+                Ok(Some(_)) => {
+                    if let Err(e) = self.user(state, signin).await {
+                        log_store_error("warming up the user", signin, &e);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => log_store_error("loading the user", signin, &e),
+            }
+        }
+    }
+
+    /// Finish what users were promised (the server is stopping).
+    pub async fn finish(&self) {
+        let users: Vec<Arc<User>> = self
+            .users
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .values()
+            .map(|e| e.user.clone())
+            .collect();
+        futures::future::join_all(users.iter().map(|u| u.finish())).await;
+    }
+
     /// The engine user for `signin`.
     pub async fn user(&self, state: &SharedState, signin: &str) -> Result<Arc<User>> {
         let key = signin.to_ascii_lowercase();
@@ -121,7 +149,11 @@ impl Engines {
                     signin: key.clone(),
                     activity,
                 });
-                User::new(user_hash(&key), store, prefs, providers, host)
+                let user = User::new(user_hash(&key), store, prefs, providers, host);
+                user.prepare().await;
+                user.record(pidge_engine::activity::start_line()).await;
+                pidge_engine::sync::keep(&user);
+                user
             }
         };
         user.set_ai(ai.map(Arc::new));
@@ -541,7 +573,7 @@ impl Host for HostedHost {
         Ok(format!(
             "Connect {target} by opening: {}/connect?state={key}  (valid {} minutes)\n\
              The user signs in at {at} with that mailbox's account.\n\
-             next: accounts once they have finished",
+             next: settings once they have finished",
             state.config.base_url(),
             PENDING_TTL.num_minutes()
         ))
@@ -699,6 +731,10 @@ impl Host for HostedHost {
     }
 
     fn outbox_due(&self, _at: DateTime<Utc>) {}
+
+    fn always_on(&self) -> bool {
+        true
+    }
 }
 
 /// The MCP side: who is calling, from the bearer token the HTTP layer
@@ -724,6 +760,22 @@ impl UserSource for HttpSource {
                 log_store_error("loading the user", &signin, &e);
                 "could not load your account; try again shortly".to_string()
             })
+    }
+
+    /// Claude.ai and ChatGPT call without an MCP session: the user agent is
+    /// what there is.
+    fn client(&self, ctx: &RequestContext<RoleServer>) -> Option<pidge_engine::activity::Client> {
+        let agent = ctx
+            .extensions
+            .get::<http::request::Parts>()?
+            .headers
+            .get(http::header::USER_AGENT)?
+            .to_str()
+            .ok()?;
+        Some(pidge_engine::activity::Client {
+            name: agent.chars().take(100).collect(),
+            version: String::new(),
+        })
     }
 
     fn log_call(&self, tool: &str, ctx: &RequestContext<RoleServer>, ms: u64, outcome: &str) {
@@ -769,14 +821,10 @@ mod tests {
     async fn a_users_calls_land_in_their_own_activity_folder() {
         let h = ToolHarness::new(&[JANE]).await;
         let user = h.state.engines.user(&h.state, JANE).await.unwrap();
-        let op = pidge_engine::registry::find("intent").unwrap();
-        pidge_engine::registry::run(
-            &user,
-            &op,
-            serde_json::json!({ "summary": "Any new mail?" }),
-        )
-        .await
-        .unwrap();
+        let op = pidge_engine::registry::find("settings").unwrap();
+        pidge_engine::registry::run(&user, &op, serde_json::json!({ "intent": "Any new mail?" }))
+            .await
+            .unwrap();
         user.drain().await;
 
         let crate::config::ActivityBackend::Dir(root) = &h.state.config.engine.activity else {
@@ -786,7 +834,8 @@ mod tests {
             .join(crate::users::user_hash_long(JANE))
             .join(pidge_engine::activity::day_file(chrono::Utc::now()));
         let text = std::fs::read_to_string(&file).unwrap();
-        assert!(text.contains("\"summary\":\"Any new mail?\""), "{text}");
+        assert!(text.contains("\"intent\":\"Any new mail?\""), "{text}");
+        assert!(text.contains("\"kind\":\"start\""), "{text}");
     }
 
     #[tokio::test]

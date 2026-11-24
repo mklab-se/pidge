@@ -1,9 +1,10 @@
 //! The activity log: what the user asked (the intent, as their agent puts
-//! it) and every call made to answer it, one JSON line each. The `Host`
-//! decides where the lines go; the engine only builds them.
+//! it), every call made to answer it, and what was carried out behind the
+//! answers, one JSON line each. Every line names the pidge version, so that
+//! before and after a release can be told apart. The `Host` decides where
+//! the lines go; the engine only builds them.
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use rand::{Rng, rng};
 use serde_json::{Value, json};
 
 /// The program making the calls, as it names itself when it connects
@@ -14,20 +15,11 @@ pub struct Client {
     pub version: String,
 }
 
+/// The pidge version every line carries.
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Most characters of an answer kept in a line.
 pub const ANSWER_CAP: usize = 4_000;
-
-/// A fresh intent id: `i` and six characters of `[a-z0-9]`.
-pub fn new_intent_id() -> String {
-    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut bytes = [0u8; 6];
-    rng().fill_bytes(&mut bytes);
-    let tail: String = bytes
-        .iter()
-        .map(|b| ALPHABET[usize::from(*b) % ALPHABET.len()] as char)
-        .collect();
-    format!("i{tail}")
-}
 
 /// The file a line written at `t` goes to: `2026-11-22.jsonl`.
 pub fn day_file(t: DateTime<Utc>) -> String {
@@ -38,13 +30,44 @@ fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// The line for a new intent.
-pub fn intent_line(client: Option<&Client>, id: &str, summary: &str) -> String {
-    json!({ "t": now(), "kind": "intent", "client": client, "intent": id, "summary": summary })
+/// The line that marks a server (re)starting with this version.
+pub fn start_line() -> String {
+    json!({ "t": now(), "v": VERSION, "kind": "start" }).to_string()
+}
+
+/// The line for an instruction the queue has carried out.
+pub fn job_line(
+    id: &str,
+    label: &str,
+    ms: u64,
+    attempt: u32,
+    done: usize,
+    failed: usize,
+    retrying: usize,
+) -> String {
+    json!({
+        "t": now(),
+        "v": VERSION,
+        "kind": "job",
+        "id": id,
+        "label": label,
+        "ms": ms,
+        "attempt": attempt + 1,
+        "done": done,
+        "failed": failed,
+        "retrying": retrying,
+    })
+    .to_string()
+}
+
+/// The line for questions put to the user's AI.
+pub fn ai_line(purpose: &str, questions: usize) -> String {
+    json!({ "t": now(), "v": VERSION, "kind": "ai", "purpose": purpose, "n": questions })
         .to_string()
 }
 
-/// The line for one call: its answer text, or its error message.
+/// The line for one call: its answer text, or its error message. `intent`
+/// is what the user asked, in the agent's words.
 pub fn call_line(
     client: Option<&Client>,
     intent: Option<&str>,
@@ -60,6 +83,7 @@ pub fn call_line(
     let capped: String = answer.chars().take(ANSWER_CAP).collect();
     json!({
         "t": now(),
+        "v": VERSION,
         "kind": "call",
         "client": client,
         "intent": intent,

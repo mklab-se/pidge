@@ -199,7 +199,7 @@ async fn home(json: bool) -> Result<()> {
     let user = local::open_user(Frontend::Cli).await?;
     let brief = registry::run(
         &user,
-        &registry::find("mail_brief").expect("mail_brief"),
+        &registry::find("mail_inbox").expect("mail_inbox"),
         serde_json::json!({}),
     )
     .await?;

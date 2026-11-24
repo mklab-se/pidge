@@ -104,7 +104,7 @@ impl From<ProviderError> for OpError {
                 ErrorKind::AuthExpired,
                 format!("{account} has to sign in again"),
             )
-            .with_hint("accounts action=connect with that address reconnects it"),
+            .with_hint("settings action=connect with that address reconnects it"),
             ProviderError::NotFound(m) => OpError::not_found(format!("not found: {m}")),
             ProviderError::Throttled { retry_after } => OpError::new(
                 ErrorKind::Throttled,

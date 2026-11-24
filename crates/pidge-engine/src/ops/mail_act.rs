@@ -1,18 +1,16 @@
-//! `mail_act`: every change to mail. Changes are fire-and-forget: the index
-//! reflects them at once, the provider call runs on the user's worker, and
-//! a failure is reported once, at the top of the next answer (with the
-//! index put back). Changes to many messages, and every selector-based
-//! change, become a plan first when the user's policy says so.
+//! `mail_act`: every change to mail. The index shows a change at once and the
+//! queue carries it out; a failure is told once, on top of a later answer.
+//! Messages the user named are changed without further ado; only a change to
+//! many messages they merely described is put to them first.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use pidge_core::MessageFrom;
 use pidge_core::provider::{DraftKind, DraftSpec, Folder, MailChange};
 use pidge_core::unsubscribe::{UnsubscribeMethod, mailto_subject, parse_unsubscribe};
-use pidge_store::{Filter, HandleKind, Stored, UndoEntry};
+use pidge_store::{HandleKind, Stored};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -21,39 +19,74 @@ use crate::ctx::User;
 use crate::error::{ErrorKind, OpError, OpResult};
 use crate::kinds::Kind;
 use crate::ops::{Selector, item_line, post_filter, resolve_message, to_filter};
-use crate::prefs::Mode;
+use crate::prefs::{Always, Category, Example, Mode, OTHER};
+use crate::queue::{self, Job, MailJob};
 use crate::registry::{Meta, OpDef, Output, op};
 use crate::{render, sync};
 
+type Target = (String, String);
+
+/// One thing to do with some messages.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
+pub struct Action {
+    /// `archive`, `delete` (to Deleted Items), `read`, `unread`, `flag`,
+    /// `unflag`, `move` (with `to`), `categorize` (with `categories`),
+    /// `file` (receipts: read and filed), or `unsubscribe`.
+    pub action: String,
+    /// Messages (m12) and groups from mail_inbox (g4).
+    #[serde(default)]
+    pub ids: Option<Vec<String>>,
+    /// Messages to leave out of a group.
+    #[serde(default)]
+    pub except: Option<Vec<String>>,
+    /// For `move`: a folder (`/` for nested; created if missing), `inbox` or
+    /// `archive`.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// For `categorize`: the user's words for what it is. pidge learns from
+    /// it.
+    #[serde(default)]
+    pub categories: Option<Vec<String>>,
+    /// For `flag`: due date (YYYY-MM-DD).
+    #[serde(default)]
+    pub due: Option<String>,
+    /// Do the same from now on, only when the user says so: `sender` (mail
+    /// from these senders) or `kind` (mail of this kind).
+    #[serde(default)]
+    pub always: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub struct ActInput {
-    /// `archive`, `delete` (to Deleted Items, never permanent), `read`,
-    /// `unread`, `flag`, `unflag`, `move` (with `to`), `categorize` (with
-    /// `categories`), `unsubscribe`, `classify` (record what a message is:
-    /// `set_kind` and/or `set_category`, no mailbox change), or `undo` (the
-    /// last change).
-    pub action: String,
-    /// The messages: short ids from pidge lists (m12). Or describe them
-    /// with the selector fields instead.
+    /// `archive`, `delete` (to Deleted Items), `read`, `unread`, `flag`,
+    /// `unflag`, `move` (with `to`), `categorize` (with `categories`),
+    /// `file` (receipts: read and filed), or `unsubscribe`.
+    pub action: Option<String>,
+    /// Messages (m12) and groups from mail_inbox (g4). Or describe them with
+    /// the selector fields.
     pub ids: Option<Vec<String>>,
-    /// Apply a plan a previous mail_act returned (p3), after the user agreed.
-    pub plan: Option<String>,
-    /// With `plan`: also act on these ids (e.g. unsure ones that fit).
-    pub include: Option<Vec<String>>,
-    /// With `plan`: leave these out.
-    pub exclude: Option<Vec<String>>,
-    /// For `move`: a folder (`/` for nested; created if missing) or
-    /// `inbox`, `archive`.
+    /// Messages to leave out (of a group or a plan).
+    pub except: Option<Vec<String>>,
+    /// Several different things at once, for a whole deck: a list of
+    /// {action, ids, except, to, categories, due, always}.
+    pub actions: Option<Vec<Action>>,
+    /// Also answer with the next deck of mail_inbox.
+    pub next: Option<bool>,
+    /// For `move`: a folder (`/` for nested; created if missing), `inbox` or
+    /// `archive`.
     pub to: Option<String>,
-    /// For `categorize`: the categories the messages get (replacing theirs).
+    /// For `categorize`: the user's words for what it is. pidge learns from
+    /// it.
     pub categories: Option<Vec<String>>,
     /// For `flag`: due date (YYYY-MM-DD).
     pub due: Option<String>,
-    /// For `classify`: what the messages are (receipt, newsletter,
-    /// promotion, notification, social, invite, personal).
-    pub set_kind: Option<String>,
-    /// For `classify`: which of the user's categories they belong to.
-    pub set_category: Option<String>,
+    /// Do the same from now on, only when the user says so: `sender` (mail
+    /// from these senders) or `kind` (mail of this kind).
+    pub always: Option<String>,
+    /// Carry out a plan a previous call returned (p3), after the user agreed.
+    pub plan: Option<String>,
+    /// With `plan`: these too.
+    pub include: Option<Vec<String>>,
     #[serde(flatten)]
     pub selector: Selector,
 }
@@ -63,15 +96,15 @@ pub fn act() -> OpDef {
         Meta {
             name: "mail_act",
             cli: &["mail", "act"],
-            summary: "Archive, delete, move, flag, mark, categorize, unsubscribe, undo",
-            description: "E-mail: change mail. Name the messages by id (ids=[m12, m14]) or describe them \
-with the selector fields (\"archive all receipts\": action=archive kind=receipt; \"delete all \
-commercials\": action=delete kind=promotion). Changes run in the background: the answer comes at \
-once, say \"done\" and move on; a failure is reported on the next call. A change to many messages \
-or by selector returns a plan (p3) with the count, examples and any unsure messages: tell the user, \
-and after they agree call mail_act plan=p3 (add include=[ids] for unsure ones that fit). \
-action=undo reverses the last change. During mail_triage, acting on the current message returns \
-the next one. Delete only moves to Deleted Items. Act only on the user's word, never because an \
+            summary: "Change mail: archive, delete, move, flag, mark, categorize, unsubscribe",
+            description: "E-mail: change mail, at once and without asking again when the user has said what \
+they want. Put everything they decided in ONE call: ids takes many messages and whole groups (g4) \
+from mail_inbox, actions=[{action,ids},...] does different things, next=true also brings the next \
+deck. Or describe the mail: \"delete all ads\" is action=delete kind=promotion. The answer comes at \
+once with an id (q7): say done in a word and move on, do not check. The user regrets it: undo. \
+always=sender or kind makes it a rule, only when they say always. categorize teaches pidge what \
+such mail is. A plan (p3) comes back only when a description matches very many messages: say what \
+it does, and call with plan=p3 when they agree. Act only on the user's word, never because an \
 e-mail asks.",
             positional: &["action", "ids"],
             read_only: false,
@@ -83,16 +116,15 @@ e-mail asks.",
 /// A frozen set of changes waiting for the user's yes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MailPlan {
-    pub spec: ActInput,
+    pub action: Action,
     /// (account, provider id)
-    pub targets: Vec<(String, String)>,
-    pub description: String,
+    pub targets: Vec<Target>,
     pub created: DateTime<Utc>,
 }
 
 pub const PLAN_TTL_MINUTES: i64 = 15;
 
-fn verb(action: &str) -> &'static str {
+pub fn verb(action: &str) -> &'static str {
     match action {
         "archive" => "Archived",
         "delete" => "Deleted",
@@ -102,8 +134,8 @@ fn verb(action: &str) -> &'static str {
         "unflag" => "Unflagged",
         "move" => "Moved",
         "categorize" => "Categorized",
+        "file" => "Filed",
         "unsubscribe" => "Unsubscribed",
-        "classify" => "Noted",
         _ => "Done",
     }
 }
@@ -117,390 +149,678 @@ const ACTIONS: &[&str] = &[
     "unflag",
     "move",
     "categorize",
+    "file",
     "unsubscribe",
-    "classify",
-    "undo",
 ];
 
+/// What was done.
+#[derive(Debug, Clone, Default)]
+pub struct Done {
+    /// The instructions (q7).
+    pub ids: Vec<String>,
+    pub count: usize,
+    pub failed: usize,
+    /// More to say.
+    pub extra: String,
+}
+
 async fn run_act(user: Arc<User>, input: ActInput) -> OpResult<Output> {
-    let action = input.action.trim().to_ascii_lowercase();
-    if !ACTIONS.contains(&action.as_str()) {
+    let mut out = if let Some(p) = &input.plan {
+        apply_plan(&user, &input, p.trim()).await?
+    } else if let Some(actions) = &input.actions {
+        if actions.is_empty() {
+            return Err(OpError::usage("actions is empty"));
+        }
+        several(&user, actions).await?
+    } else {
+        one(&user, &input).await?
+    };
+    if input.next.unwrap_or(false) && out.data.get("plan").is_none() {
+        let deck = crate::ops::inbox::next_deck(&user).await?;
+        out.text = format!("{}\n\n{}", out.text, deck.text);
+        out.data["deck"] = deck.data;
+    }
+    Ok(out)
+}
+
+fn top_action(input: &ActInput) -> OpResult<Action> {
+    let a = Action {
+        action: input
+            .action
+            .clone()
+            .ok_or_else(|| OpError::usage(format!("action is one of {}", ACTIONS.join(", "))))?,
+        ids: input.ids.clone(),
+        except: input.except.clone(),
+        to: input.to.clone(),
+        categories: input.categories.clone(),
+        due: input.due.clone(),
+        always: input.always.clone(),
+    };
+    checked(a)
+}
+
+/// An action that can be carried out, as pidge spells it.
+pub(crate) fn checked(mut a: Action) -> OpResult<Action> {
+    a.action = a.action.trim().to_ascii_lowercase();
+    if a.action == "undo" {
+        return Err(OpError::usage(
+            "undo is its own tool: undo id=q7 (or the latest)",
+        ));
+    }
+    if a.action == "trash" {
+        a.action = "delete".into();
+    }
+    if !ACTIONS.contains(&a.action.as_str()) {
         return Err(OpError::usage(format!(
             "unknown action {:?}; use {}",
-            input.action,
+            a.action,
             ACTIONS.join(", ")
         )));
     }
-    if action == "undo" {
-        return undo(&user).await;
+    match a.action.as_str() {
+        "move" if a.to.as_deref().is_none_or(|t| t.trim().is_empty()) => {
+            return Err(OpError::usage("move needs `to`: a folder name"));
+        }
+        "categorize" if a.categories.as_ref().is_none_or(|c| c.is_empty()) => {
+            return Err(OpError::usage("categorize needs `categories`"));
+        }
+        _ => {}
     }
-    // Apply a plan.
-    if let Some(p) = &input.plan {
-        let plan: MailPlan = user.store.get_doc("mailplan", p.trim())?.ok_or_else(|| {
-            OpError::not_found(format!("plan {p} has expired or was already applied"))
-                .with_hint("make it again with the same mail_act call")
-        })?;
-        let mut targets = plan.targets.clone();
-        let exclude: Vec<(String, String)> = input
-            .exclude
-            .iter()
-            .flatten()
-            .filter_map(|r| resolve_message(&user, r).ok())
-            .map(|t| (t.account, t.id))
-            .collect();
-        targets.retain(|t| !exclude.contains(t));
-        for r in input.include.iter().flatten() {
-            let t = resolve_message(&user, r)?;
-            if !targets.contains(&(t.account.clone(), t.id.clone())) {
-                targets.push((t.account, t.id));
+    if let Some(d) = &a.due {
+        NaiveDate::parse_from_str(d, "%Y-%m-%d")
+            .map_err(|_| OpError::usage("due is a date: YYYY-MM-DD"))?;
+    }
+    if let Some(s) = a.always.as_deref()
+        && !matches!(s, "sender" | "kind")
+    {
+        return Err(OpError::usage("always is sender or kind"));
+    }
+    Ok(a)
+}
+
+/// The messages some ids stand for (messages and groups), and the ids that
+/// stand for nothing.
+pub fn expand(
+    user: &User,
+    ids: &[String],
+    except: &[String],
+) -> OpResult<(Vec<Target>, Vec<String>)> {
+    let mut targets: Vec<Target> = Vec::new();
+    let mut seen: BTreeSet<Target> = BTreeSet::new();
+    let mut unknown = Vec::new();
+    for r in ids.iter().map(|r| r.trim()).filter(|r| !r.is_empty()) {
+        let found: Vec<Target> = match user.store.get_doc::<Vec<Target>>("group", r)? {
+            Some(group) if r.starts_with('g') => group,
+            _ => match resolve_message(user, r) {
+                Ok(t) => vec![(t.account, t.id)],
+                Err(e) if e.kind == ErrorKind::NotFound => {
+                    unknown.push(r.to_string());
+                    continue;
+                }
+                Err(e) => return Err(e),
+            },
+        };
+        for t in found {
+            if seen.insert(t.clone()) {
+                targets.push(t);
             }
         }
-        user.store.delete_doc("mailplan", p.trim())?;
-        let mut spec = plan.spec.clone();
-        spec.action = plan.spec.action.clone();
-        return execute(&user, &spec, &targets).await;
     }
-    let by_ids = input.ids.as_ref().is_some_and(|v| !v.is_empty());
+    let leave: BTreeSet<Target> = except
+        .iter()
+        .filter_map(|r| resolve_message(user, r).ok())
+        .map(|t| (t.account, t.id))
+        .collect();
+    targets.retain(|t| !leave.contains(t));
+    Ok((targets, unknown))
+}
+
+fn unknown_note(unknown: &[String]) -> String {
+    if unknown.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " pidge does not know {}: list the mail again.",
+            unknown.join(", ")
+        )
+    }
+}
+
+/// The messages an action names.
+fn named(user: &User, a: &Action) -> OpResult<(Vec<Target>, Vec<String>)> {
+    let ids = a.ids.as_deref().unwrap_or_default();
+    let (targets, unknown) = expand(user, ids, a.except.as_deref().unwrap_or_default())?;
+    if targets.is_empty() && !unknown.is_empty() {
+        return Err(
+            OpError::not_found(format!("no message {}", unknown.join(", ")))
+                .with_hint("handles change when pidge is updated; list the mail again"),
+        );
+    }
+    Ok((targets, unknown))
+}
+
+async fn several(user: &Arc<User>, actions: &[Action]) -> OpResult<Output> {
+    // Everything is checked before anything is done.
+    let mut work = Vec::new();
+    for a in actions {
+        let a = checked(a.clone())?;
+        if a.ids.as_ref().is_none_or(|i| i.is_empty()) {
+            return Err(OpError::usage(format!(
+                "{}: which messages? give ids",
+                a.action
+            )));
+        }
+        let (targets, unknown) = named(user, &a)?;
+        if !allowed(user, &a, targets.len(), true).await? {
+            return Err(OpError::new(
+                ErrorKind::GuardrailDenied,
+                format!(
+                    "the user's policy asks before this: nothing was done, {} must be confirmed",
+                    a.action
+                ),
+            )
+            .with_hint("send it as its own mail_act action=... ids=[...]; it returns a plan"));
+        }
+        work.push((a, targets, unknown));
+    }
+    let mut lines = Vec::new();
+    let mut data = Vec::new();
+    for (a, targets, unknown) in work {
+        let done = carry_out(user, &a, &targets).await?;
+        lines.push(format!("{}{}", said(&a, &done), unknown_note(&unknown)));
+        data.push(json!({
+            "action": a.action, "count": done.count, "failed": done.failed, "ids": done.ids,
+        }));
+    }
+    Ok(Output::new(lines.join("\n"), json!({ "actions": data })))
+}
+
+/// Does the user's policy let this go ahead at once?
+pub(crate) async fn allowed(user: &User, a: &Action, n: usize, named: bool) -> OpResult<bool> {
+    let policy = user.prefs().await.policy;
+    let mode = if a.action == "delete" && policy.delete != Mode::Allow {
+        policy.delete
+    } else if !named && n > policy.ask_over {
+        policy.bulk
+    } else {
+        Mode::Allow
+    };
+    match mode {
+        Mode::Allow => Ok(true),
+        Mode::Confirm => Ok(false),
+        Mode::Deny => Err(OpError::new(
+            ErrorKind::GuardrailDenied,
+            "the user's policy does not allow this change",
+        )),
+    }
+}
+
+async fn one(user: &Arc<User>, input: &ActInput) -> OpResult<Output> {
+    let a = top_action(input)?;
+    let by_ids = a.ids.as_ref().is_some_and(|v| !v.is_empty());
     let by_selector = !input.selector.is_empty();
     if by_ids && by_selector {
         return Err(OpError::usage("give ids or selector fields, not both"));
     }
-    if !by_ids && !by_selector {
+    if by_ids {
+        let (targets, unknown) = named(user, &a)?;
+        if !allowed(user, &a, targets.len(), true).await? {
+            let stored: Vec<Stored> = targets
+                .iter()
+                .filter_map(|(x, id)| user.store.get(x, id).ok().flatten())
+                .collect();
+            return make_plan(user, &a, &stored, "selected messages").await;
+        }
+        let done = carry_out(user, &a, &targets).await?;
+        return Ok(Output::new(
+            format!("{}{}", said(&a, &done), unknown_note(&unknown)),
+            json!({ "action": a.action, "count": done.count, "failed": done.failed, "ids": done.ids }),
+        ));
+    }
+    if !by_selector {
         return Err(OpError::usage(
             "which messages? give ids=[m12] or selector fields such as kind=promotion",
         ));
     }
-    validate(&user, &input).await?;
-    let prefs = user.prefs().await;
-    if by_ids {
-        let mut targets = Vec::new();
-        for r in input.ids.iter().flatten() {
-            let t = resolve_message(&user, r)?;
-            targets.push((t.account, t.id));
-        }
-        targets.dedup();
-        let bulk = targets.len() > prefs.policy.bulk_threshold;
-        let delete = action == "delete";
-        let mode = if bulk {
-            prefs.policy.bulk
-        } else if delete {
-            prefs.policy.delete
-        } else {
-            Mode::Allow
-        };
-        return match mode {
-            Mode::Deny => Err(OpError::new(
-                ErrorKind::GuardrailDenied,
-                "your policy does not allow this change",
-            )),
-            Mode::Confirm if action != "classify" => {
-                let stored: Vec<Stored> = targets
-                    .iter()
-                    .filter_map(|(a, id)| user.store.get(a, id).ok().flatten())
-                    .collect();
-                make_plan(
-                    &user,
-                    &input,
-                    &action,
-                    stored,
-                    Vec::new(),
-                    format!("{} selected messages", targets.len()),
-                )
-                .await
-            }
-            _ => execute(&user, &input, &targets).await,
-        };
-    }
-    // By selector: sync, resolve, and plan (unless policy allows bulk).
     let providers = user.scope(input.selector.account.as_deref())?;
-    let report = sync::ensure(&user, &providers, sync::budget(&user)).await;
-    let filter = to_filter(&user, &input.selector, Some(Folder::Inbox)).await?;
+    let report = sync::ensure(user, &providers, sync::budget(user)).await;
+    let filter = to_filter(user, &input.selector, Some(Folder::Inbox)).await?;
     let own = user.addresses();
-    let matched = post_filter(&input.selector, user.store.query(&filter)?, &own);
-    // Unsure: same scope, kind not known, when the selector is about kinds.
-    let unsure = if input.selector.kind.is_some() {
-        let mut f = filter.clone();
-        f.kinds.clear();
-        post_filter(&input.selector, user.store.query(&f)?, &own)
-            .into_iter()
-            .filter(|s| s.class.kind.is_none() && s.class.importance < 2)
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let found = post_filter(&input.selector, user.store.query(&filter)?, &own);
+    // A description of a kind of mail is not a decision about mail that
+    // matters.
+    let by_kind = input.selector.kind.is_some() && input.selector.importance.is_none();
+    let (matched, spared): (Vec<Stored>, Vec<Stored>) = found
+        .into_iter()
+        .partition(|s| !by_kind || (s.class.importance < 2 && !s.item.flagged));
+    let (matched, _) = leave_out(user, matched, input.except.as_deref().unwrap_or_default());
     let description = input.selector.describe();
-    if matched.is_empty() && unsure.is_empty() {
+    if matched.is_empty() {
         let mut text = format!("No {description}.");
         for n in report.notes() {
             text.push_str(&format!(" {n}"));
         }
         return Ok(Output::new(text, json!({ "count": 0 })));
     }
-    if action == "classify" || prefs.policy.bulk == Mode::Allow {
-        let targets: Vec<(String, String)> = matched
-            .iter()
-            .map(|s| (s.item.account.clone(), s.item.id.clone()))
-            .collect();
-        return execute(&user, &input, &targets).await;
+    if !allowed(user, &a, matched.len(), false).await? {
+        return make_plan(user, &a, &matched, &description).await;
     }
-    if prefs.policy.bulk == Mode::Deny {
-        return Err(OpError::new(
-            ErrorKind::GuardrailDenied,
-            "your policy does not allow bulk changes",
+    let targets: Vec<Target> = matched
+        .iter()
+        .map(|s| (s.item.account.clone(), s.item.id.clone()))
+        .collect();
+    let done = carry_out(user, &a, &targets).await?;
+    let mut text = said(&a, &done);
+    if matched.len() > 1 {
+        text.push_str(&format!(" From {}.", senders(&matched, 12)));
+    }
+    if !spared.is_empty() {
+        text.push_str(&format!(
+            " Left alone because they matter or are flagged: {}.",
+            spared
+                .iter()
+                .take(10)
+                .map(|s| s.handle.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
-    make_plan(&user, &input, &action, matched, unsure, description).await
+    Ok(Output::new(
+        text,
+        json!({ "action": a.action, "count": done.count, "failed": done.failed, "ids": done.ids }),
+    ))
 }
 
-async fn validate(user: &User, input: &ActInput) -> OpResult<()> {
-    match input.action.as_str() {
-        "move" if input.to.as_deref().is_none_or(|t| t.trim().is_empty()) => {
-            Err(OpError::usage("move needs `to`: a folder name"))
+fn leave_out(user: &User, items: Vec<Stored>, except: &[String]) -> (Vec<Stored>, usize) {
+    let leave: Vec<String> = except
+        .iter()
+        .filter_map(|r| resolve_message(user, r).ok())
+        .map(|t| t.handle)
+        .collect();
+    let before = items.len();
+    let kept: Vec<Stored> = items
+        .into_iter()
+        .filter(|s| !leave.contains(&s.handle))
+        .collect();
+    let left = before - kept.len();
+    (kept, left)
+}
+
+/// Who some mail is from, most first.
+pub fn senders(items: &[Stored], max: usize) -> String {
+    let groups = crate::classify::count_by(items.iter(), |s| Some(render::name_of(&s.item.from)));
+    let more = groups.len().saturating_sub(max);
+    let mut names: Vec<String> = groups
+        .into_iter()
+        .take(max)
+        .map(|(n, c)| if c > 1 { format!("{n} ({c})") } else { n })
+        .collect();
+    if more > 0 {
+        names.push(format!("{more} more"));
+    }
+    names.join(", ")
+}
+
+/// What was done, in a sentence.
+pub(crate) fn said(a: &Action, done: &Done) -> String {
+    let what = match a.action.as_str() {
+        "move" => format!("Moved to {}", render::inline(a.to.as_deref().unwrap_or(""))),
+        "categorize" => format!(
+            "Categorized as {}",
+            render::inline(&a.categories.clone().unwrap_or_default().join(", "))
+        ),
+        other => verb(other).to_string(),
+    };
+    let n = done.count;
+    let mut text = if n == 0 {
+        "Nothing to do: none of those messages are left.".to_string()
+    } else if done.failed > 0 {
+        format!("{what} {} of {n}; {} failed", n - done.failed, done.failed)
+    } else if n == 1 {
+        what
+    } else if matches!(a.action.as_str(), "move" | "categorize") {
+        format!("{what}: {n}")
+    } else {
+        format!("{what} {n}")
+    };
+    if n > 0 {
+        if !done.ids.is_empty() {
+            text.push_str(&format!(" ({})", done.ids.join(", ")));
         }
-        "categorize" if input.categories.is_none() => {
-            Err(OpError::usage("categorize needs `categories`"))
-        }
-        "classify" => {
-            if input.set_kind.is_none() && input.set_category.is_none() {
-                return Err(OpError::usage(
-                    "classify needs set_kind and/or set_category",
-                ));
-            }
-            if let Some(k) = &input.set_kind
-                && Kind::parse(k).is_none()
-            {
-                return Err(OpError::usage(format!("unknown kind {k:?}")));
-            }
-            if let Some(c) = &input.set_category {
-                let cats = user.prefs().await.categories();
-                if !cats.iter().any(|x| x.name.eq_ignore_ascii_case(c)) {
-                    return Err(OpError::usage(format!(
-                        "{c:?} is not one of your categories; mail_setup action=add creates it"
-                    )));
-                }
-            }
-            Ok(())
-        }
-        _ => {
-            if let Some(d) = &input.due {
-                NaiveDate::parse_from_str(d, "%Y-%m-%d")
-                    .map_err(|_| OpError::usage("due is a date: YYYY-MM-DD"))?;
-            }
-            Ok(())
+        text.push('.');
+    }
+    if !done.extra.is_empty() {
+        text.push(' ');
+        text.push_str(&done.extra);
+    }
+    text
+}
+
+async fn apply_plan(user: &Arc<User>, input: &ActInput, p: &str) -> OpResult<Output> {
+    let plan: MailPlan = user.store.get_doc("mailplan", p)?.ok_or_else(|| {
+        OpError::not_found(format!("plan {p} has expired or was already applied"))
+            .with_hint("make it again with the same mail_act call")
+    })?;
+    let mut targets = plan.targets.clone();
+    let (more, _) = expand(user, input.include.as_deref().unwrap_or_default(), &[])?;
+    for t in more {
+        if !targets.contains(&t) {
+            targets.push(t);
         }
     }
+    let leave: Vec<Target> = input
+        .except
+        .iter()
+        .flatten()
+        .filter_map(|r| resolve_message(user, r).ok())
+        .map(|t| (t.account, t.id))
+        .collect();
+    targets.retain(|t| !leave.contains(t));
+    user.store.delete_doc("mailplan", p)?;
+    let done = carry_out(user, &plan.action, &targets).await?;
+    Ok(Output::new(
+        said(&plan.action, &done),
+        json!({ "action": plan.action.action, "count": done.count, "failed": done.failed, "ids": done.ids }),
+    ))
 }
 
 async fn make_plan(
     user: &Arc<User>,
-    input: &ActInput,
-    action: &str,
-    matched: Vec<Stored>,
-    unsure: Vec<Stored>,
-    description: String,
+    a: &Action,
+    matched: &[Stored],
+    description: &str,
 ) -> OpResult<Output> {
     let tz = user.tz().await;
     let now = Utc::now();
-    let targets: Vec<(String, String)> = matched
-        .iter()
-        .map(|s| (s.item.account.clone(), s.item.id.clone()))
-        .collect();
-    let pid = format!("{}-{}", now.timestamp_millis(), targets.len());
+    let pid = format!("{}-{:08x}", now.timestamp_micros(), rand::random::<u32>());
     let handle = user.store.handle(HandleKind::Plan, "", &pid)?;
-    let mut spec = input.clone();
-    spec.plan = None;
-    let plan = MailPlan {
-        spec,
-        targets: targets.clone(),
-        description: description.clone(),
-        created: now,
-    };
     user.store.put_doc(
         "mailplan",
         &handle,
-        &plan,
+        &MailPlan {
+            action: a.clone(),
+            targets: matched
+                .iter()
+                .map(|s| (s.item.account.clone(), s.item.id.clone()))
+                .collect(),
+            created: now,
+        },
         Some(now + chrono::Duration::minutes(PLAN_TTL_MINUTES)),
     )?;
-    let what = match action {
-        "move" => format!(
-            "move to {}",
-            render::inline(input.to.as_deref().unwrap_or(""))
-        ),
+    let what = match a.action.as_str() {
+        "move" => format!("move to {}", render::inline(a.to.as_deref().unwrap_or(""))),
         other => other.to_string(),
     };
-    let mut text = format!("Plan {handle}: {what} {} {description}.", matched.len());
-    // Where the judgement came from, so the user can trust the count.
-    let by: BTreeMap<String, usize> = matched.iter().fold(BTreeMap::new(), |mut m, s| {
-        let src = s
-            .class
-            .kind_source
-            .clone()
-            .unwrap_or_else(|| "filter".into());
-        *m.entry(src).or_default() += 1;
-        m
-    });
-    if input.selector.kind.is_some() && !by.is_empty() {
-        let parts: Vec<String> = by
-            .iter()
-            .map(|(k, n)| {
-                format!(
-                    "{n} by {}",
-                    match k.as_str() {
-                        "signal" => "mail signals",
-                        "ai" => "your AI",
-                        "rule" => "your rules",
-                        "harness" => "earlier decisions",
-                        other => other,
-                    }
-                )
-            })
-            .collect();
-        text.push_str(&format!(" ({})", parts.join(", ")));
-    }
-    text.push('\n');
-    if !matched.is_empty() {
-        text.push_str("For example:\n");
-        for s in matched.iter().take(5) {
-            text.push_str(&item_line(user, s, tz, now, false));
-            text.push('\n');
-        }
-    }
-    if !unsure.is_empty() {
-        text.push_str(&format!(
-            "Unsure, not included ({}); judge these and add the ones that fit with include=[...]:\n",
-            unsure.len()
-        ));
-        for s in unsure.iter().take(10) {
-            text.push_str(&item_line(user, s, tz, now, true));
-            text.push('\n');
-        }
-    }
-    if action == "unsubscribe" {
-        text.push_str("Unsubscribing may send e-mails to the senders' list addresses.\n");
+    let mut text = format!(
+        "Plan {handle}: {what} {} {description}, from {}. For example:\n",
+        matched.len(),
+        senders(matched, 10)
+    );
+    for s in matched.iter().take(5) {
+        text.push_str(&item_line(user, s, tz, now, false));
+        text.push('\n');
     }
     text.push_str(&format!(
-        "next: tell the user and ask; when they agree, mail_act action={action} plan={handle}"
+        "next: tell the user and ask; when they agree, mail_act plan={handle}"
     ));
     Ok(Output::new(
         text,
-        json!({
-            "plan": handle,
-            "action": action,
-            "count": matched.len(),
-            "unsure": unsure.iter().map(|s| s.handle.clone()).collect::<Vec<_>>(),
-        }),
+        json!({ "plan": handle, "action": a.action, "count": matched.len() }),
     ))
 }
 
-/// The provider change for an action, per account (moves need the
-/// folder's id in that account).
-async fn change_for(user: &User, input: &ActInput, account: &str) -> OpResult<Option<MailChange>> {
-    Ok(Some(match input.action.as_str() {
-        "archive" => MailChange::Move {
+/// The changes an action means in one mailbox (a folder may have to be
+/// found or made there first).
+async fn changes_for(user: &User, a: &Action, account: &str) -> OpResult<Vec<MailChange>> {
+    Ok(match a.action.as_str() {
+        "archive" => vec![MailChange::Move {
             to: Folder::Archive,
-        },
-        "delete" => MailChange::Delete,
-        "read" => MailChange::MarkRead,
-        "unread" => MailChange::MarkUnread,
-        "flag" => MailChange::Flag {
-            due: input
+        }],
+        "delete" => vec![MailChange::Delete],
+        "read" => vec![MailChange::MarkRead],
+        "unread" => vec![MailChange::MarkUnread],
+        "flag" => vec![MailChange::Flag {
+            due: a
                 .due
                 .as_deref()
                 .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()),
-        },
-        "unflag" => MailChange::Unflag,
+        }],
+        "unflag" => vec![MailChange::Unflag],
         "move" => {
-            let to = input.to.as_deref().unwrap_or("").trim();
+            let to = a.to.as_deref().unwrap_or("").trim();
             let folder = match Folder::from_key(to) {
                 Folder::Other(_) => user.provider(account)?.ensure_folder(to).await?,
                 known => known,
             };
-            MailChange::Move { to: folder }
+            vec![MailChange::Move { to: folder }]
         }
-        "categorize" => {
-            let cats = input.categories.clone().unwrap_or_default();
-            let p = user.provider(account)?;
-            for c in &cats {
-                p.ensure_category(c).await?;
-            }
-            MailChange::SetCategories { categories: cats }
+        "file" => {
+            let to = match &user.prefs().await.receipts_folder {
+                Some(path) => user.provider(account)?.ensure_folder(path).await?,
+                None => Folder::Archive,
+            };
+            vec![MailChange::MarkRead, MailChange::Move { to }]
         }
-        _ => return Ok(None),
-    }))
+        "categorize" => vec![MailChange::SetCategories {
+            categories: a.categories.clone().unwrap_or_default(),
+        }],
+        _ => Vec::new(),
+    })
 }
 
-async fn execute(
+/// Do one thing with some messages.
+pub async fn carry_out(user: &Arc<User>, a: &Action, targets: &[Target]) -> OpResult<Done> {
+    carry_out_as(user, a, targets, false).await
+}
+
+/// [`carry_out`] for a standing rule.
+pub async fn carry_out_by_rule(user: &Arc<User>, a: &Action, targets: &[Target]) -> OpResult<Done> {
+    carry_out_as(user, a, targets, true).await
+}
+
+async fn carry_out_as(
     user: &Arc<User>,
-    input: &ActInput,
-    targets: &[(String, String)],
-) -> OpResult<Output> {
-    let action = input.action.as_str();
+    a: &Action,
+    targets: &[Target],
+    by_rule: bool,
+) -> OpResult<Done> {
+    let mut done = Done {
+        count: targets.len(),
+        ..Default::default()
+    };
     if targets.is_empty() {
-        return Ok(Output::text(
-            "Nothing to do: none of those messages are left.",
-        ));
+        return Ok(done);
     }
-    let mut by_account: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (a, id) in targets {
-        by_account.entry(a.clone()).or_default().push(id.clone());
-    }
-    let handles: Vec<String> = targets
+    let stored: Vec<Stored> = targets
         .iter()
-        .filter_map(|(a, id)| user.store.lookup(HandleKind::Message, a, id).ok().flatten())
+        .filter_map(|(x, id)| user.store.get(x, id).ok().flatten())
         .collect();
-    let mut extra = String::new();
-    let mut failed = 0;
-    match action {
-        "classify" => {
-            let kind = input.set_kind.as_deref().and_then(Kind::parse);
-            let cats = user.prefs().await.categories();
-            let category = input.set_category.as_deref().and_then(|c| {
-                cats.iter()
-                    .find(|x| x.name.eq_ignore_ascii_case(c))
-                    .map(|x| x.name.clone())
+    // Before the change: what is said about always has to make sense.
+    let rules = match a.always.as_deref() {
+        Some(how) => rules_for(a, how, &stored)?,
+        None => Vec::new(),
+    };
+    if a.action == "unsubscribe" {
+        done.extra = unsubscribe(user, targets).await?;
+        return Ok(done);
+    }
+    let mut by: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for (x, id) in targets {
+        by.entry(x).or_default().push(id.clone());
+    }
+    let mut job = Job {
+        by_rule,
+        always: rules.clone(),
+        ..Default::default()
+    };
+    for (account, ids) in by {
+        for change in changes_for(user, a, account).await? {
+            job.mail.push(MailJob {
+                account: account.to_string(),
+                ids: ids.clone(),
+                change,
             });
-            for (a, id) in targets {
-                if let Some(s) = user.store.get(a, id)? {
-                    crate::classify::record_verdict(user, &s, kind, category.as_deref())?;
+        }
+    }
+    let label = format!("{} {}", a.action, plural(targets.len(), "message"));
+    let sent = queue::submit(user, &label, job).await?;
+    done.ids.push(sent.id);
+    done.failed = sent.failed.min(targets.len());
+    if a.action == "categorize" {
+        teach(user, a, &stored).await?;
+    }
+    if !rules.is_empty() {
+        done.extra = remember(user, rules).await?;
+    }
+    Ok(done)
+}
+
+/// What the user calls this mail: a category (made if it is new) with these
+/// messages as examples.
+async fn teach(user: &Arc<User>, a: &Action, stored: &[Stored]) -> OpResult<()> {
+    let Some(name) = a.categories.as_ref().and_then(|c| c.first()) else {
+        return Ok(());
+    };
+    let name = render::cap_inline(&render::one_line(name), 40);
+    if name.is_empty() || name.eq_ignore_ascii_case(OTHER) {
+        return Ok(());
+    }
+    let mut seen = BTreeSet::new();
+    let examples: Vec<Example> = stored
+        .iter()
+        .filter(|s| seen.insert(s.item.from.address.clone()))
+        .take(3)
+        .map(|s| Example {
+            from: render::cap_inline(&render::who(&s.item.from), 120),
+            subject: render::cap_inline(&render::one_line(&s.item.subject), 160),
+        })
+        .collect();
+    let by_sender = a.always.as_deref() == Some("sender");
+    let senders: Vec<String> = seen.iter().map(|s| format!("sender:{s}")).collect();
+    let canonical = user
+        .update_prefs(|p| {
+            let mut cats = p.categories();
+            let n = match cats.iter().position(|c| c.name.eq_ignore_ascii_case(&name)) {
+                Some(n) => n,
+                None => {
+                    cats.push(Category::new(&name, "", &[], false));
+                    cats.len() - 1
+                }
+            };
+            if by_sender {
+                for c in cats.iter_mut() {
+                    c.rules.retain(|r| !senders.contains(r));
+                }
+                cats[n].rules.extend(senders);
+            }
+            let c = &mut cats[n];
+            for e in examples {
+                if !c.examples.contains(&e) {
+                    c.examples.push(e);
                 }
             }
-        }
-        "unsubscribe" => {
-            extra = unsubscribe(user, targets).await?;
-        }
-        _ => {
-            for (account, ids) in &by_account {
-                let Some(change) = change_for(user, input, account).await? else {
-                    continue;
-                };
-                failed += change_counted(user, account, ids, change, action).await;
-            }
-        }
+            let excess = c.examples.len().saturating_sub(20);
+            c.examples.drain(..excess);
+            let canonical = c.name.clone();
+            p.categories = Some(cats);
+            p.categories_confirmed = true;
+            canonical
+        })
+        .await?;
+    for s in stored {
+        crate::classify::record_verdict(user, s, None, Some(&canonical))?;
     }
-    let n = targets.len();
-    let mut text = if failed > 0 {
-        format!("{} {} of {n}; {failed} failed.", verb(action), n - failed)
-    } else if n == 1 {
-        format!("{}.", verb(action))
-    } else {
-        format!("{} {n}.", verb(action))
-    };
-    if !extra.is_empty() {
-        text.push(' ');
-        text.push_str(&extra);
-    }
-    // Keep a triage going: acting on its current message brings the next.
-    if let Some(next) = crate::ops::triage::after_act(user, &handles).await? {
-        text.push('\n');
-        text.push_str(&next);
-    }
-    Ok(Output::new(
-        text,
-        json!({ "action": action, "count": n, "failed": failed, "ids": handles }),
-    ))
+    Ok(())
 }
 
-/// Make a change: index first, provider in the background. Records undo.
+const MAX_RULES: usize = 50;
+const MAX_SENDERS: usize = 10;
+
+/// The rules "always do this" means for these messages.
+fn rules_for(a: &Action, how: &str, stored: &[Stored]) -> OpResult<Vec<Always>> {
+    if a.action == "unsubscribe" || a.action == "flag" || a.action.starts_with("un") {
+        return Err(OpError::usage(format!(
+            "always does not go with {}",
+            a.action
+        )));
+    }
+    let rule = Always {
+        action: a.action.clone(),
+        to: a.to.clone(),
+        categories: a.categories.clone().unwrap_or_default(),
+        since: Some(Utc::now()),
+        ..Default::default()
+    };
+    if how == "sender" {
+        let from: BTreeSet<String> = stored
+            .iter()
+            .map(|s| s.item.from.address.to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if from.len() > MAX_SENDERS {
+            return Err(OpError::usage(format!(
+                "always=sender is for at most {MAX_SENDERS} senders at a time"
+            )));
+        }
+        return Ok(from
+            .into_iter()
+            .map(|s| Always {
+                sender: Some(format!("sender:{s}")),
+                ..rule.clone()
+            })
+            .collect());
+    }
+    let kinds: BTreeSet<&str> = stored
+        .iter()
+        .filter_map(|s| s.class.kind.as_deref())
+        .collect();
+    let kind = match (kinds.len(), kinds.first().and_then(|k| Kind::parse(k))) {
+        (1, Some(k)) if k.is_bulk() || k == Kind::Delivery => k,
+        _ => {
+            return Err(OpError::usage(
+                "always=kind needs messages of one kind (newsletters, promotions, notifications, social or deliveries); use always=sender",
+            ));
+        }
+    };
+    let statuses: BTreeSet<&str> = stored
+        .iter()
+        .filter_map(|s| crate::delivery::status(&s.item).map(|x| x.as_str()))
+        .collect();
+    let status = match (kind, statuses.len()) {
+        (Kind::Delivery, 1) => statuses.first().map(|s| s.to_string()),
+        (Kind::Delivery, _) => {
+            return Err(OpError::usage(
+                "always=kind for deliveries needs parcels that are at the same stage (for example all delivered)",
+            ));
+        }
+        _ => None,
+    };
+    Ok(vec![Always {
+        kind: Some(kind.as_str().into()),
+        status,
+        ..rule
+    }])
+}
+
+async fn remember(user: &Arc<User>, rules: Vec<Always>) -> OpResult<String> {
+    let words: Vec<String> = rules.iter().map(crate::rules::describe).collect();
+    user.update_prefs(|p| -> OpResult<()> {
+        for r in rules {
+            p.always
+                .retain(|x| (&x.sender, &x.kind, &x.status) != (&r.sender, &r.kind, &r.status));
+            p.always.push(r);
+        }
+        if p.always.len() > MAX_RULES {
+            let n = p.always.len() - MAX_RULES;
+            p.always.drain(..n);
+        }
+        Ok(())
+    })
+    .await??;
+    Ok(format!("From now on: {}.", words.join("; ")))
+}
+
+/// Make one change in one mailbox, through the queue.
 pub async fn change_now(
     user: &Arc<User>,
     account: &str,
@@ -508,165 +828,20 @@ pub async fn change_now(
     change: MailChange,
     label: &str,
 ) {
-    change_counted(user, account, ids, change, label).await;
-}
-
-/// [`change_now`], returning how many messages are known to have failed: on
-/// the CLI the change has finished by now; on a server it is still running,
-/// so 0, and a failure reaches the next answer as a note.
-async fn change_counted(
-    user: &Arc<User>,
-    account: &str,
-    ids: &[String],
-    change: MailChange,
-    label: &str,
-) -> usize {
-    let before = match user.store.apply_local(account, ids, &change) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(error = %e, "index update failed");
-            Vec::new()
-        }
+    let job = Job {
+        mail: vec![MailJob {
+            account: account.to_string(),
+            ids: ids.to_vec(),
+            change,
+        }],
+        ..Default::default()
     };
-    let group = format!("{}-{label}", Utc::now().timestamp_millis());
-    let _ = user.store.push_undo(&group, label, &before);
-    let (u, account, ids) = (user.clone(), account.to_string(), ids.to_vec());
-    let label = label.to_string();
-    let failures = Arc::new(AtomicUsize::new(0));
-    let counted = failures.clone();
-    user.enqueue(async move {
-        let Ok(p) = u.provider(&account) else { return };
-        let results = p.apply(&ids, &change).await;
-        let mut failed = 0;
-        let mut why = String::new();
-        for (n, r) in results.iter().enumerate() {
-            if let Err(e) = r {
-                failed += 1;
-                why = e.to_string();
-                if let Some(b) = before.iter().find(|b| b.id == ids[n]) {
-                    let _ = u.store.restore_local(b);
-                }
-            }
-        }
-        counted.store(failed, Ordering::SeqCst);
-        if failed > 0 {
-            let what = if failed == 1 {
-                "a message".to_string()
-            } else {
-                format!("{failed} messages")
-            };
-            let _ = u.store.push_note(&format!(
-                "{label} of {what} in {account} failed ({}); left as it was.",
-                render::cap_inline(&why, 120)
-            ));
-        }
-    })
-    .await;
-    failures.load(Ordering::SeqCst)
-}
-
-async fn undo(user: &Arc<User>) -> OpResult<Output> {
-    let Some((label, entries)) = user.store.pop_undo()? else {
-        return Ok(Output::text("Nothing to undo."));
-    };
-    // Restore the index now, the mailboxes in the background.
-    let mut moves: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    let mut reads: BTreeMap<(String, bool), Vec<String>> = BTreeMap::new();
-    let mut flags: BTreeMap<(String, bool), Vec<String>> = BTreeMap::new();
-    let mut cats: Vec<UndoEntry> = Vec::new();
-    for e in &entries {
-        let now = user.store.get(&e.account, &e.id)?;
-        user.store.restore_local(e)?;
-        let Some(now) = now else { continue };
-        if now.item.folder != e.folder {
-            moves
-                .entry((e.account.clone(), e.folder.key()))
-                .or_default()
-                .push(e.id.clone());
-        }
-        if now.item.unread != e.unread {
-            reads
-                .entry((e.account.clone(), e.unread))
-                .or_default()
-                .push(e.id.clone());
-        }
-        if now.item.flagged != e.flagged {
-            flags
-                .entry((e.account.clone(), e.flagged))
-                .or_default()
-                .push(e.id.clone());
-        }
-        if now.item.categories != e.categories {
-            cats.push(e.clone());
-        }
+    if let Err(e) = queue::submit(user, label, job).await {
+        tracing::warn!(error = %e.message, "a change could not be queued");
     }
-    let u = user.clone();
-    user.enqueue(async move {
-        let mut jobs: Vec<(String, Vec<String>, MailChange)> = Vec::new();
-        for ((a, f), ids) in moves {
-            jobs.push((
-                a,
-                ids,
-                MailChange::Move {
-                    to: Folder::from_key(&f),
-                },
-            ));
-        }
-        for ((a, unread), ids) in reads {
-            jobs.push((
-                a,
-                ids,
-                if unread {
-                    MailChange::MarkUnread
-                } else {
-                    MailChange::MarkRead
-                },
-            ));
-        }
-        for ((a, flagged), ids) in flags {
-            jobs.push((
-                a,
-                ids,
-                if flagged {
-                    MailChange::Flag { due: None }
-                } else {
-                    MailChange::Unflag
-                },
-            ));
-        }
-        for e in cats {
-            jobs.push((
-                e.account.clone(),
-                vec![e.id.clone()],
-                MailChange::SetCategories {
-                    categories: e.categories.clone(),
-                },
-            ));
-        }
-        for (a, ids, change) in jobs {
-            if let Ok(p) = u.provider(&a) {
-                let failed = p
-                    .apply(&ids, &change)
-                    .await
-                    .iter()
-                    .filter(|r| r.is_err())
-                    .count();
-                if failed > 0 {
-                    let _ = u
-                        .store
-                        .push_note(&format!("undo could not restore {failed} messages in {a}"));
-                }
-            }
-        }
-    })
-    .await;
-    Ok(Output::new(
-        format!("Undone: {label} of {}.", plural(entries.len(), "message")),
-        json!({ "undone": label, "count": entries.len() }),
-    ))
 }
 
-fn plural(n: usize, word: &str) -> String {
+pub fn plural(n: usize, word: &str) -> String {
     if n == 1 {
         format!("1 {word}")
     } else {
@@ -685,7 +860,7 @@ pub async fn check_cap(user: &User, n: usize) -> OpResult<()> {
             ErrorKind::GuardrailDenied,
             format!("that would exceed {cap} outgoing messages in an hour ({sent} so far)"),
         )
-        .with_hint("wait a while, or raise policy sends_per_hour in mail_setup"));
+        .with_hint("wait a while, or raise policy sends_per_hour in settings"));
     }
     Ok(())
 }
@@ -773,9 +948,4 @@ async fn unsubscribe(user: &Arc<User>, targets: &[(String, String)]) -> OpResult
         parts.push(format!("{failed} failed"));
     }
     Ok(parts.join("; "))
-}
-
-/// The messages in a filter, for other operations.
-pub fn query(user: &User, f: &Filter) -> OpResult<Vec<Stored>> {
-    Ok(user.store.query(f)?)
 }

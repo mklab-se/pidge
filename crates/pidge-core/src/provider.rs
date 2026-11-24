@@ -151,6 +151,10 @@ pub struct MailItem {
     pub list_unsubscribe: bool,
     #[serde(default)]
     pub is_invite: bool,
+    /// The internet Message-ID, when the provider gives it: the same for a
+    /// message however the provider names it.
+    #[serde(default)]
+    pub message_id: String,
 }
 
 /// One round of mailbox sync.
@@ -370,6 +374,13 @@ pub trait Provider: Send + Sync {
 
     /// Metadata of a few messages (a refresh after a change).
     async fn get_items(&self, ids: &[String]) -> ProviderResult<Vec<MailItem>>;
+
+    /// The messages with this internet Message-ID (the received copy and the
+    /// sent one can both have it), when the provider's ids can go stale and
+    /// it can look them up.
+    async fn find_by_message_id(&self, _message_id: &str) -> ProviderResult<Vec<MailItem>> {
+        Ok(Vec::new())
+    }
 
     async fn get_message(&self, id: &str) -> ProviderResult<FullMessage>;
 

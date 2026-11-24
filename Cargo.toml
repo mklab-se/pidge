@@ -14,7 +14,7 @@ members = [
 default-members = ["crates/pidge"]
 
 [workspace.package]
-version = "2.1.2"
+version = "3.0.0"
 edition = "2024"
 authors = ["Kristofer Liljeblad <kristofer@mklab.se>"]
 license = "MIT"
@@ -86,6 +86,9 @@ wiremock = "0.6"
 comfy-table = { version = "8", features = ["custom_styling"] }
 sha2 = "0.11"
 
+# Dates in mail text
+regex = "1"
+
 # HTML rendering
 html2text = "0.17"
 
@@ -132,9 +135,9 @@ azure_identity = "1"
 azure_security_keyvault_secrets = "1"
 
 # Internal crates
-pidge-core = { version = "2.1.2", path = "crates/pidge-core" }
-pidge-client = { version = "2.1.2", path = "crates/pidge-client" }
-pidge-store = { version = "2.1.2", path = "crates/pidge-store" }
-pidge-engine = { version = "2.1.2", path = "crates/pidge-engine" }
+pidge-core = { version = "3.0.0", path = "crates/pidge-core" }
+pidge-client = { version = "3.0.0", path = "crates/pidge-client" }
+pidge-store = { version = "3.0.0", path = "crates/pidge-store" }
+pidge-engine = { version = "3.0.0", path = "crates/pidge-engine" }
 
-pidge-gmail = { version = "2.1.2", path = "crates/pidge-gmail" }
+pidge-gmail = { version = "3.0.0", path = "crates/pidge-gmail" }

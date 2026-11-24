@@ -24,15 +24,17 @@ crates/
   pidge-client/   # Microsoft Graph: OAuth (browser PKCE, refresh, keychain/file `TokenBackend`), `send_with_retry`,
                   # $batch, delta, immutable ids; `graph/provider.rs` = `GraphProvider`; `mcp/` = client side of `pidge mcp connect`
   pidge-gmail/    # Gmail + Google Calendar behind `Provider`: Google OAuth, labels, history sync, RFC 5322 drafts
-  pidge-store/    # Per-user SQLite (rusqlite, bundled): short handles (m12, e3, d4, p5, s1), the mail index with
-                  # pidge's classification, events, plans/sessions (docs), undo log, outbox, notes, send log
-  pidge-engine/   # Every operation, once: `ops/` (mail_brief, mail_find, mail_read, mail_triage, mail_act,
-                  # mail_draft, mail_send, mail_attachment, mail_setup, calendar_agenda/event/act/respond/
-                  # availability, accounts), `registry.rs` (op defs + JSON Schema, run with notes), `ctx.rs`
-                  # (`User`, the `Host` seam, background worker), `sync.rs`, `kinds.rs` + `classify.rs`
-                  # (rules, signals, importance, optional Ailloy eval), `outbox.rs` (risk-based send hold),
-                  # `prefs.rs`, `render.rs` (untrusted wrapper), `playbooks.rs` (MCP instructions + SKILL.md),
-                  # `mcp.rs` (feature `mcp`: the rmcp handler both servers use)
+  pidge-store/    # Per-user SQLite (rusqlite, bundled): short handles (m12, g4, e3, d4, p5, q7), the mail index with
+                  # pidge's classification, events, the queue and its pending overlay, plans/decks (docs), outbox, notes, send log
+  pidge-engine/   # Every operation, once: `ops/` (mail_inbox, mail_find, mail_read, mail_act, mail_draft,
+                  # mail_send, mail_attachment, calendar_agenda/act/availability, undo, settings),
+                  # `registry.rs` (op defs + JSON Schema, run with notes), `ctx.rs` (`User`, the `Host` seam,
+                  # background worker), `queue.rs` (every change: instructions, retries, undo), `sync.rs`
+                  # (also the keeper that syncs between calls), `kinds.rs` + `classify.rs` (rules, signals,
+                  # importance, optional Ailloy eval), `dates.rs` + `happenings.rs` (times in mail, calendar
+                  # mirror), `delivery.rs` (parcels), `rules.rs` ("always do that"), `outbox.rs` (risk-based
+                  # send hold), `prefs.rs`, `render.rs` (untrusted wrapper), `playbooks.rs` (MCP instructions
+                  # + SKILL.md), `activity.rs` (the log), `mcp.rs` (feature `mcp`: the rmcp handler)
   pidge/          # CLI: `dynamic.rs` builds `pidge mail|calendar|accounts ...` from the registry; `cli.rs` the
                   # fixed commands (account, mcp serve/connect/status/logout, ai, skill, op, completion);
                   # `local.rs` = `LocalHost` (config.yaml mailboxes, Downloads, markitdown if installed,
@@ -49,11 +51,12 @@ deploy/azure/     # Bicep + deploy.sh + Dockerfile for pidge-mcp on Container Ap
 
 ### Engine patterns
 
-- **Handles:** operations take and return short handles; `ops::resolve_message` / `resolve_event` map them through the store. Graph ids are immutable ids (`Prefer: IdType="ImmutableId"`, also on every `$batch` sub-request), so a handle survives moves.
-- **Fire-and-forget:** `ops::mail_act::change_now` applies a change to the index, records undo, and enqueues the provider call on the user's worker (`User::enqueue`; inline on the CLI). A failure restores the index and leaves a note; `registry::run` puts notes on top of the next answer.
-- **Plans:** selector-based changes, more than `policy.bulk_threshold` messages, and calendar changes that e-mail people return a plan (a doc in the store, 15 min) that the next call applies. Policy lives in prefs (`send: hold|confirm|allow|deny`, `notify`, `bulk`, `delete`).
+- **Handles:** operations take and return short handles; `ops::resolve_message` / `resolve_event` map them through the store. Graph ids are immutable ids (`Prefer: IdType="ImmutableId"`, also on every `$batch` sub-request), so a handle survives moves. A new database starts its handles past every earlier one (`User::prepare`, `prefs.handle_base`). Search hits are adopted by Message-ID (`Store::adopt_found`).
+- **Queue:** a change goes through `queue::submit`: the index changes now (with a `pending` row that survives syncs), the provider is called when the instruction is due. How long that is (0 s to 60 s) is internal: never mention it in an answer. On the CLI it runs inline. `queue::undo` drops what is queued and sends the opposite of what is done. A failure restores the index and leaves a note; `registry::run` puts notes on top of the next answer.
+- **Few calls:** answers carry everything needed to talk without another call; an operation takes many ids, groups (`g4`) and alternatives at once. Reads never wait for sorting, AI or lookups (`classify::sort_new` runs them in the background).
+- **Plans:** only a description that matches more than `policy.ask_over` messages, and calendar changes that e-mail people, return a plan (a doc in the store, 15 min) that the next call applies. Policy lives in prefs (`send: hold|confirm|allow|deny`, `notify`, `bulk`, `delete`).
 - **Sending:** only `mail_send` sends, only drafts, through `outbox.rs`: risk assessment (recipients, first contact, forwards, attachments, identity/card numbers, the user's AI) sets a 10 s / 30 s / 2 min hold or approval. The hourly cap (`policy.sends_per_hour`, default 30) counts sends, invitations, cancellations, RSVP messages and unsubscribe e-mails.
-- **Triage:** `ops/triage.rs` plans sweeps, batches, then singles; every answer ends with what to do next; `after_act` advances a session when `mail_act` touches its current message.
+- **Decks:** `ops/inbox.rs` deals the inbox in groups from a session (doc `deck`); `mail_act next=true` answers with the next one.
 - **Classification:** kind (fixed set), category (the user's, with rules and examples) and importance (with reasons) per message, stored in the index with their source (rule, signal, ai, harness). Changing categories or rules resets them (`reset_classifications`).
 - **Untrusted content:** bodies, previews, converted attachments and quoted text go out inside `<untrusted-email-content>` via `render::untrusted`; header fields through `render::one_line`/`inline`.
 - **Time:** inputs are interpreted in the user's timezone (prefs, else the machine's or Europe/Stockholm hosted); `calendar::parse_start` reads `tomorrow 15:00`, `fri 9:30`, ISO, dates.
@@ -63,7 +66,7 @@ deploy/azure/     # Bicep + deploy.sh + Dockerfile for pidge-mcp on Container Ap
 - **Bearer identity:** no tool takes a user id. The bearer middleware attaches `AuthenticatedUser`; `engine::HttpSource` turns it into that user's engine.
 - **Ownership:** `engine::providers` hands the engine only mailboxes the user record lists *and* whose `MailboxRecord { owner, tokens, identity, provider }` names the user. Ids are confined to each provider's id alphabet before a path is built.
 - **One browser per flow:** the Continue step (`/authorize/go`, `/connect/go`) sets a cookie that `/callback` and `/callback/google` require. Mailbox secrets are named `mailbox-<sanitized address>-<hash8>`.
-- **State:** Key Vault holds the signing key, user records, mailbox tokens and AI keys; preferences are one JSON blob per user (`PIDGE_MCP_PREFS_URL`, Azure Blob via the managed identity; `PIDGE_MCP_PREFS_DIR` in dev); the activity log (each request's intent and its calls, `pidge_engine::activity`) is one append blob per user per day in the `activity` container (`PIDGE_MCP_ACTIVITY_URL`; a temp folder in dev), kept indefinitely; the index is a per-user SQLite file in `PIDGE_MCP_INDEX_DIR` (a cache). First use seeds prefs from the 1.x record (review categories, timezone, default sender, trusted senders as VIPs).
+- **State:** Key Vault holds the signing key, user records, mailbox tokens and AI keys; preferences are one JSON blob per user (`PIDGE_MCP_PREFS_URL`, Azure Blob via the managed identity; `PIDGE_MCP_PREFS_DIR` in dev); the activity log (each call with what the user asked, jobs, AI use, server starts; every line with the version; `pidge_engine::activity`) is one append blob per user per day in the `activity` container (`PIDGE_MCP_ACTIVITY_URL`; a temp folder in dev), kept indefinitely; the index is a per-user SQLite file in `PIDGE_MCP_INDEX_DIR` (a cache). First use seeds prefs from the 1.x record (review categories, timezone, default sender, trusted senders as VIPs).
 - **markitdown hardening:** scrubbed environment; a fresh per-conversion work dir as `HOME`/`TMPDIR`, removed on every path; 30 s timeout with kill-on-drop; 4 GB address-space limit on Linux; 2 MB output cap; stderr discarded; at most 2 concurrent conversions. The server marks itself non-dumpable on Linux.
 - **Deploy:** the `deploy` job of `.github/workflows/release.yml` deploys on every `v*` tag and on manual dispatch, never on a push to `main`. Every env var the running server reads is documented on `Config::from_env` in `crates/pidge-mcp/src/config.rs`; `deploy.sh` also reads deploy-time vars (`PIDGE_RG`, `PIDGE_CLIENT_ID`, `IMAGE_TAG`, `PIDGE_MCP_CUSTOM_DOMAIN`, `PIDGE_MCP_CUTOVER`, `PIDGE_MCP_MIN_REPLICAS`, `PIDGE_GOOGLE_CLIENT_ID`, `PIDGE_GOOGLE_CLIENT_SECRET`).
 - **CLI side:** `pidge mcp connect/status/logout` sign a local user into a hosted server and move local Microsoft mailboxes onto it (`crates/pidge-client/src/mcp/`); user guide: `docs/mcp.md`.

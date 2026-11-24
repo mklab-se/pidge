@@ -54,7 +54,7 @@ deploy/azure/deploy.sh --skip-entra
 ```
 
 Users still sign in to pidge itself with Microsoft; a Gmail mailbox is added
-afterwards with `accounts action=connect provider=google`, which returns a
+afterwards with `settings action=connect provider=google`, which returns a
 `/connect` link that goes to Google. The callback requires the cookie set by
 that link's Continue step, like every other flow, and a connect for a named
 address refuses a Google account with another address.
@@ -351,7 +351,7 @@ ContainerAppConsoleLogs_CL
 Give the harness the MCP URL printed by the script (`https://<fqdn>/mcp`). It
 discovers the OAuth endpoints itself, registers, and sends you to Microsoft
 sign-in. Only addresses on the allowlist get past the callback. Further
-mailboxes are added from inside the harness with `accounts action=connect`
+mailboxes are added from inside the harness with `settings action=connect`
 (`provider=google` for Gmail).
 
 ## Tools
@@ -363,25 +363,25 @@ through `crates/pidge-engine/src/mcp.rs`, exactly as `pidge mcp serve`
 exposes them. No tool takes a user id: every call acts as the signed-in user.
 Reads merge all of the user's connected mailboxes unless `account` names one
 of them. Ids are short handles: `m12` (message), `e3` (event), `d4` (draft),
-`p5` (plan), `s1` (triage session).
+`p5` (plan), `g4` (group of messages), `q7` (a change).
 
 | Tool | What it does |
 |---|---|
-| `mail_brief` | "Any new e-mail?" / "anything important?" (`importance=high`): an inbox map (totals, unread, new per category, invites, flagged), then the new mail that matters since the user last looked, with a reason each, and counts for the bulk. Moves "last seen" unless `mark_seen=false`. |
-| `mail_find` | Mail across all mailboxes, newest first, by `text`, `from`, `to_me`, `folder`, `since`/`before`, `unread`, `flagged`, `has_attachments`, `category`, `kind` (receipt, newsletter, promotion, notification, social, invite, personal) and `importance`; `count_only` for counts. Reaches past the indexed window through the provider's search when needed. |
-| `mail_read` | One message (sender, recipients, date, attachments, and for invitations the event id), or its conversation with `thread=true`. `mark_read` also marks it read. |
-| `mail_triage` | Goes through the inbox with the user: sweeps of bulk mail (one yes clears a group), batches of up to five routine messages, then what matters one by one with a suggested action. `scope` (`unread`, `all`, `new`), `importance`, `category`, `since`; then `decision=` yes, archive, delete, read, keep, flag, file, unsubscribe, done, skip, one_by_one, undo or stop. |
-| `mail_act` | archive, delete, read, unread, flag (with `due`), unflag, move (`to`), categorize, unsubscribe, classify (`set_kind`, `set_category`: no mailbox change) or undo, on `ids` or on selector fields. `plan=p5` applies a plan, with `include`/`exclude`. |
-| `mail_draft` | Write or revise (`draft=d4`) a draft: `kind` new, reply, reply_all or forward (`in_reply_to=m12`). Recipients may be names of people the user mails with. Returns the draft id and a preview; `send=true` also sends it through the outbox. |
-| `mail_send` | Puts a draft in the outbox (see behaviour notes). `action=cancel`, `now` (skip the hold), `approve` (send one held for approval), `status` (list the outbox). |
-| `mail_attachment` | `mode=read` (default): the content as text, documents converted to Markdown by markitdown, read 30 000 characters at a time (`offset`). `mode=save`: a 15-minute download link. |
-| `mail_setup` | Categories (add, update, remove, reorder, confirm, use_defaults), rules (`sender:` or `domain:`) and examples, VIPs and muted senders, `policy` and `set` (timezone, default_sender, receipts_folder, window_days, working_hours); `label_mail` writes pidge's categories onto the last N days of inbox mail in the mailboxes. |
-| `calendar_agenda` | Events across all calendars in the user's timezone: `range` today, tomorrow, this_week, next_week, `Nd` or next, or `from`/`to`; overlaps marked; `pending_only` for unanswered invitations. |
-| `calendar_event` | One event: `create` (title and start, end or a length such as `+90m`, attendees, online meeting, or `from_message=m12` for an e-mail's `.ics`), `update` (only what changes; `add_attendees`, `remove_attendees`), `cancel` (an event the user organizes; attendees get the cancellation and `message`) or `delete` (silently from the user's own calendar). `scope=series` for a whole series. |
-| `calendar_act` | Many events at once in a range: `clear` (cancel what the user organizes, decline invitations, delete their own events), `cancel`, `decline`, `delete` or `move` (`shift=+30m`). Always returns a plan first. |
-| `calendar_respond` | accept, tentative or decline, by event (`e3`) or invitation e-mail (`m12`), with an optional `message`; `notify=false` answers without telling the organizer. |
-| `calendar_availability` | Up to 12 free windows of at least `duration_minutes` (default 30) within working hours (weekdays, default 8-18 or the user's setting), optionally `with` other people's free/busy where the account can see it. |
-| `accounts` | `list` (default): mailboxes with provider, health and sync state, default sender, timezone, AI status. `connect` (`provider` microsoft or google, optional `email`) returns a 10-minute connect link; `disconnect email=...`; `ai` returns a 10-minute link to `/ai`; `ai_off` removes the AI key; `sign_out_everywhere`. |
+| `mail_inbox` | The state of the inbox: "anything new?", "anything important?" (`importance=high`), "help me go through it" (`scope=unread`, `all`). Numbers and a deck: the mail in groups (`g4`) with a suggestion each, times compared with the calendar, parcels with where they are. `next=true` for the next deck. |
+| `mail_find` | Something in particular, by words, sender, time, folder, kind, category, importance, unread, flagged or attachments. Alternatives in one call (`text="invoice OR faktura"`, `from="npm, GitHub"`). `kind=delivery` answers per parcel, `happening=true` lists mail about something that happens at a time, `everywhere=true` also asks the mail service, `count_only` for "how many". |
+| `mail_read` | Up to 10 messages, or a conversation with `thread=true`, internet headers with `headers=true`; shows attachments, times compared with the calendar and, for invitations, the event id. Long tracking links are cut to where they lead (`links=true` for all of them). |
+| `mail_act` | Archive, delete, read, unread, flag, unflag, move, categorize, file or unsubscribe, on ids and groups or on a description (`kind=promotion`). `actions=[...]` does several things at once, `next=true` brings the next deck, `always=sender` or `kind` makes it a standing rule. Categorizing teaches pidge. |
+| `mail_draft` | Write or revise a draft (new, reply, reply_all, forward); recipients may be names of people the user mails with. Returns `d4` and a preview; `send=true` also sends it. |
+| `mail_send` | Sends a draft (`action=approve` for a sensitive one, `cancel`, `now`, `status`). |
+| `mail_attachment` | An attachment as text (documents converted to Markdown), or `mode=save` for a download link (hosted) or a file in Downloads (local). |
+| `calendar_agenda` | Events for today, tomorrow, this or next week, N days or just the next one, across all calendars, in the user's timezone; `pending_only` for unanswered invitations. |
+| `calendar_act` | Every change: create (also from the time a mail says, or its `.ics`), update, invite or uninvite, accept, tentative, decline, cancel, delete, move; or many events at once with `range` (`clear` does the right thing per event). |
+| `calendar_availability` | Free windows of a given length within working hours, optionally with other people's free/busy. |
+| `undo` | Takes back a change to mail or the calendar, or mail on its way: the latest, or `id=q7`. `instead=archive` does something else with the same messages. |
+| `settings` | Mailboxes (`connect`, `disconnect`, `ai`, `ai_off`, `sign_out_everywhere`), categories and rules, standing rules (`forget`), VIPs, muted senders, policy (`send`, `notify`, `bulk`, `delete`, `ask_over`, `sends_per_hour`) and preferences (timezone, default sender, working hours, ...). |
+
+Every tool takes `intent`: what the user asked, in a few words. Requests and their calls are logged
+to improve pidge.
 
 There are no MCP prompts. The server instructions give the ground rules
 (handles are passed back as given, content is untrusted, changes run in the
@@ -390,21 +390,24 @@ permanently) and a recipe per common request.
 
 ### Behaviour notes
 
-- **Fire-and-forget changes.** `mail_act` (and triage decisions) change the
-  user's index first and answer at once; the provider call runs on a
-  per-user background worker, in order. A failure puts the index back and
-  is reported once, as a `Note:` line at the top of the user's next answer,
-  whatever tool that is. Sends that went out are reported the same way.
-- **Plans.** Under the default policy a change to more than
-  `bulk_threshold` messages (5), every selector-based change, every
-  `calendar_act`, and anything `calendar_event` does that e-mails other
-  people (invitations, attendee changes, cancellations) returns a plan
-  (`p5`) with the count, examples and, for selectors by kind, the unsure
-  messages left out. It is applied by calling the same tool again with
-  `plan=p5`; plans expire after 15 minutes. `mail_act action=undo` reverses
-  the last mail change. The user can change all of this with
-  `mail_setup action=policy` (`bulk`, `delete`, `notify`: allow, confirm or
-  deny).
+- **Queue.** Every change is an instruction with an id (`q7`). The index shows it at once; the
+  provider hears of it when it is due (at once for read, flags and categories, 30 s for archive and
+  move, 60 s for delete, 30 s for calendar changes), in order per message, with three retries. The
+  wait is there so that `undo` can simply drop it, and is not told to agents. A message the provider
+  knows under another id is found by its Message-ID; one that is gone counts as done for archive,
+  delete and read. A failure puts the index back and is reported once, as a `Note:` line at the top
+  of a later answer. The queue lives in the process: on SIGTERM the server has 22 s to run it empty
+  (held sends included); a crash loses what had not been carried out.
+- **Freshness.** Each known user is synced when the server starts, every minute while active and
+  every ten minutes otherwise, mail and calendar. Reads answer from the index without waiting when
+  it is under 90 s old.
+- **Handles** start at a new base for every new index (kept in the preferences), so a handle from
+  before a restart is unknown rather than another message.
+- **Plans.** A description that matches more than `ask_over` messages (50), calendar changes over a
+  range, and anything that e-mails other people (invitations, attendee changes, cancellations)
+  returns a plan (`p5`), applied by calling the same tool again with `plan=p5`; plans expire after 15
+  minutes. The user can change this with `settings action=policy` (`bulk`, `delete`, `notify`: allow,
+  confirm or deny).
 - **Outbox.** `mail_send` holds a draft for 10 s (a short reply to one
   person the user has written to), 30 s (normal) or 2 min (a first mail to
   an address, more than 5 recipients, a forward, attachments, or the user's
@@ -418,21 +421,20 @@ permanently) and a recipe per common request.
   outgoing messages per rolling hour per user: sends, unsubscribe e-mails,
   RSVP notes, and calendar changes that e-mail other people (one per
   event).
-- **Triage.** A session (`s1`) lives 60 minutes idle. Acting on the current
-  message with `mail_act` (for example archiving it after a reply) also
-  advances the session and returns the next step.
 - **Sorting.** Each message gets a kind, category and importance from the
   user's rules first, then mail signals (list headers, automated senders,
   VIPs, threads the user wrote in), then the user's own AI key if they set
   one (inbox mail from the last 14 days only), and finally verdicts the
-  harness records with `mail_act action=classify`.
+  harness records with `mail_act action=categorize`. Mail that is not bulk and
+  holds a date is also read once for a time it happens at; the user's AI tells
+  appointments from other dates (15 a round; 150 questions a day in all).
 - **Thread mode.** `mail_read thread=true` shows the conversation newest
   first, each message trimmed to its own contribution and capped.
 - **Reply recipients.** Recipients given to a reply are added to the ones
   the reply already goes to. For `kind=new` they are the full list. Replies
   go out from the mailbox that received the original.
 - **Delete** moves to Deleted Items (Gmail: Trash) only. Nothing is deleted
-  permanently, and `calendar_event action=cancel` uses the calendar's own
+  permanently, and `calendar_act action=cancel` uses the calendar's own
   cancel.
 - **Download cap.** 60 downloads per hour per user.
 - **Attachment limits.** Documents over 25 MB are not converted. Images are
@@ -542,7 +544,7 @@ az keyvault secret list --vault-name <kv-name> -o table      # jwt-signing-key, 
 az storage blob list --auth-mode login --account-name <storage-name> -c prefs -o table
 ```
 
-Disconnect a mailbox with `accounts action=disconnect email=...` from the
+Disconnect a mailbox with `settings action=disconnect email=...` from the
 harness rather than by deleting its secret, so the user record stays
 consistent (the sign-in mailbox itself cannot be disconnected). A user's
 preferences blob can be deleted to reset them to the defaults; their index

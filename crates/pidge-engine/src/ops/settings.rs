@@ -1,11 +1,11 @@
-//! `mail_setup`: the user's categories, rules, examples, VIPs, muted
-//! senders, policy and settings. Teaching pidge happens here ("everything
-//! from the climbing club is Leisure", "Anna always matters").
+//! `settings`: the user's mailboxes, categories, standing rules, VIPs, muted
+//! senders, policy and preferences.
 
 use std::sync::Arc;
 
-use pidge_core::provider::{Folder, MailChange};
-use pidge_store::{Filter, HandleKind};
+use chrono::Utc;
+use pidge_core::provider::{Folder, MailChange, ProviderKind};
+use pidge_store::Filter;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -18,14 +18,23 @@ use crate::registry::{Meta, OpDef, Output, op};
 use crate::render;
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct SetupInput {
-    /// `show` (default), `add`, `update`, `remove`, `reorder`, `add_rule`,
-    /// `remove_rule`, `add_example`, `confirm` (keep the categories in use),
-    /// `use_defaults`, `vip` / `unvip`, `mute` / `unmute`, `policy`,
-    /// `set` (timezone, default_sender, receipts_folder, window_days,
-    /// working_hours), or `label_mail` (write pidge's categories onto recent
-    /// inbox mail in the mailboxes).
+pub struct SettingsInput {
+    /// `show` (default: mailboxes, categories, rules, policy).
+    /// Mailboxes: `connect` (with `provider`), `disconnect` (with `email`),
+    /// `ai` / `ai_off` (the user's own AI key), `sign_out_everywhere`.
+    /// Categories: `add`, `update`, `remove`, `reorder`, `add_rule`,
+    /// `remove_rule`, `add_example`, `confirm`, `use_defaults`,
+    /// `label_mail` (write them onto recent mail in the mailboxes).
+    /// Senders: `vip` / `unvip`, `mute` / `unmute`.
+    /// Standing rules ("always archive ..."): `forget` (with `rule`: its
+    /// number). `policy` and `set` with `key` and `value`.
     pub action: Option<String>,
+    /// For `connect`: `microsoft` (default; Outlook.com and Microsoft 365)
+    /// or `google` (Gmail).
+    pub provider: Option<String>,
+    /// For `connect`: the address to connect (a hint); for `disconnect`:
+    /// the mailbox.
+    pub email: Option<String>,
     /// The category acted on.
     pub name: Option<String>,
     /// For `add`/`update`: what belongs there, in the user's words.
@@ -33,19 +42,19 @@ pub struct SetupInput {
     /// For `update`: a new name.
     pub new_name: Option<String>,
     /// For `add`/`add_rule`/`remove_rule`: `sender:<address>` or
-    /// `domain:<domain>` (a bare address or domain works too).
+    /// `domain:<domain>` (a bare address or domain works too). For `forget`:
+    /// the number of the standing rule.
     pub rule: Option<String>,
     /// For `add_example`: a message that belongs in the category (m12).
     pub example: Option<String>,
-    /// For `add`/`update`: offer the category as a one-decision sweep in
-    /// triage.
+    /// For `add`/`update`: offer the category as one decision in the inbox.
     pub sweep: Option<bool>,
     /// For `reorder`: category names in the new order.
     pub order: Option<Vec<String>>,
     /// For `vip`/`unvip`/`mute`/`unmute`: an address or `domain:x`.
     pub who: Option<String>,
     /// For `policy`: `send` (hold, confirm, allow, deny), `notify`,
-    /// `bulk`, `delete` (allow, confirm, deny), `bulk_threshold`,
+    /// `bulk`, `delete` (allow, confirm, deny), `ask_over`,
     /// `sends_per_hour`. For `set`: `timezone`, `default_sender`,
     /// `receipts_folder`, `window_days`, `working_hours` (e.g. 8-17).
     pub key: Option<String>,
@@ -54,24 +63,24 @@ pub struct SetupInput {
     pub days: Option<u32>,
 }
 
-pub fn setup() -> OpDef {
+pub fn settings() -> OpDef {
     op(
         Meta {
-            name: "mail_setup",
-            cli: &["mail", "setup"],
-            summary: "Categories, rules, VIPs, muted senders, policy and settings",
-            description: "E-mail: what pidge knows about sorting the user's mail and how it may act. \
-Categories (the user's own, or the standard set): add, update, remove, reorder; teach with rules \
-(\"everything from the climbing club is Leisure\": action=add_rule name=Leisure \
-rule=domain:klatterklubben.se) and examples (action=add_example name=Leisure example=m12). VIPs \
-always matter (action=vip who=anna@x.se), muted senders never do. Policy: how sending (hold by \
-default), notifications to others, bulk changes and deletes are allowed (action=policy key=bulk \
-value=allow). Settings: timezone, default_sender, receipts_folder, window_days. Changes re-sort \
-mail on the next read.",
+            name: "settings",
+            cli: &["settings"],
+            summary: "Mailboxes, categories, standing rules, VIPs, policy and settings",
+            description: "How pidge is set up, for when the user asks to see or change that; never needed to \
+read or handle mail. Mailboxes: show, connect provider=microsoft|google (give the user the link it \
+returns), disconnect, ai (their own AI key). Categories and what belongs in them (add, add_rule \
+rule=domain:klatterklubben.se, ...; in daily use mail_act categorize teaches pidge). VIPs always \
+matter (action=vip who=anna@x.se), muted senders never do. Standing rules made with always in \
+mail_act: shown here, forget removes one. Policy: how sending, notifications to others, changes to \
+very many messages and deletes are allowed. Settings: timezone, default_sender, receipts_folder, \
+window_days, working_hours.",
             positional: &["action"],
             read_only: false,
         },
-        run_setup,
+        run_settings,
     )
 }
 
@@ -138,7 +147,7 @@ fn show(p: &Prefs) -> String {
             facts.push(format!("{} examples", c.examples.len()));
         }
         if c.sweep {
-            facts.push("swept in triage".into());
+            facts.push("one decision in the inbox".into());
         }
         let facts = if facts.is_empty() {
             String::new()
@@ -162,10 +171,16 @@ fn show(p: &Prefs) -> String {
     if !p.muted.is_empty() {
         text.push_str(&format!("Muted: {}\n", p.muted.join(", ")));
     }
+    if !p.always.is_empty() {
+        text.push_str("Standing rules:\n");
+        for (n, rule) in p.always.iter().enumerate() {
+            text.push_str(&format!("{}. {}\n", n + 1, crate::rules::describe(rule)));
+        }
+    }
     let pol = &p.policy;
     text.push_str(&format!(
         "Policy: send {:?}, notify {:?}, bulk {:?} (over {}), delete {:?}, at most {} outgoing per hour\n",
-        pol.send, pol.notify, pol.bulk, pol.bulk_threshold, pol.delete, pol.sends_per_hour
+        pol.send, pol.notify, pol.bulk, pol.ask_over, pol.delete, pol.sends_per_hour
     ).to_lowercase());
     text.push_str(&format!(
         "Settings: timezone {}, default sender {}, receipts filed to {}, {} days indexed\n",
@@ -180,6 +195,107 @@ fn show(p: &Prefs) -> String {
     text
 }
 
+/// The mailboxes and their health.
+async fn accounts(user: &Arc<User>) -> OpResult<String> {
+    let prefs = user.prefs().await;
+    let tz = user.tz().await;
+    let list = user.host.accounts().await;
+    if list.is_empty() {
+        return Ok(
+                    "No mailbox is connected yet.\nnext: settings action=connect provider=microsoft (or google)\n"
+                        .into(),
+                );
+    }
+    let mut text = String::from("Mailboxes:\n");
+    for a in &list {
+        let st = user.store.sync_state(&a.address)?;
+        let synced = match (st.complete, st.synced_at) {
+            (true, Some(t)) => format!("synced {} ago", crate::render::age(t, Utc::now())),
+            (false, _) if st.cursor.is_some() => "loading".into(),
+            _ => "not synced yet".into(),
+        };
+        let default = prefs.default_sender.as_deref() == Some(&a.address)
+            || (prefs.default_sender.is_none()
+                && Some(&a.address) == list.first().map(|x| &x.address));
+        text.push_str(&format!(
+            "- {} ({}): {}, {synced}{}\n",
+            a.address,
+            match a.provider {
+                ProviderKind::Microsoft => "Microsoft",
+                ProviderKind::Google => "Gmail",
+            },
+            a.status,
+            if default { ", default sender" } else { "" }
+        ));
+    }
+    text.push_str(&format!("Timezone: {tz}\n"));
+    let ai = if user.ai().is_some() {
+        format!(
+            "Your AI: {}",
+            if prefs.ai.status.is_empty() {
+                "ok"
+            } else {
+                &prefs.ai.status
+            }
+        )
+    } else {
+        "Your AI: off (optional; settings action=ai)".into()
+    };
+    text.push_str(&ai);
+    text.push('\n');
+    Ok(text)
+}
+
+/// The actions on mailboxes and the AI key.
+async fn mailboxes(
+    user: &Arc<User>,
+    action: &str,
+    input: &SettingsInput,
+) -> OpResult<Option<Output>> {
+    match action {
+        "connect" => {
+            let provider = match input
+                .provider
+                .as_deref()
+                .unwrap_or("microsoft")
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "microsoft" | "outlook" | "m365" | "office365" | "hotmail" => {
+                    ProviderKind::Microsoft
+                }
+                "google" | "gmail" => ProviderKind::Google,
+                other => {
+                    return Err(OpError::usage(format!(
+                        "provider is microsoft or google, not {other:?}"
+                    )));
+                }
+            };
+            let text = user.host.connect(provider, input.email.as_deref()).await?;
+            Ok(Some(Output::text(text)))
+        }
+        "disconnect" => {
+            let email = input
+                .email
+                .clone()
+                .ok_or_else(|| OpError::usage("disconnect needs email"))?;
+            let p = user.provider(&email)?;
+            let address = p.address().to_string();
+            let text = user.host.disconnect(&address).await?;
+            user.store.forget_account(&address)?;
+            Ok(Some(Output::text(text)))
+        }
+        "ai" => Ok(Some(Output::text(user.host.ai_setup().await?))),
+        "ai_off" => {
+            let text = user.host.remove_ai_key().await?;
+            user.set_ai(None);
+            Ok(Some(Output::text(text)))
+        }
+        "sign_out_everywhere" => Ok(Some(Output::text(user.host.sign_out_everywhere().await?))),
+        _ => Ok(None),
+    }
+}
+
 fn mode(v: &str) -> OpResult<Mode> {
     match v.trim().to_ascii_lowercase().as_str() {
         "allow" => Ok(Mode::Allow),
@@ -191,13 +307,16 @@ fn mode(v: &str) -> OpResult<Mode> {
     }
 }
 
-async fn run_setup(user: Arc<User>, input: SetupInput) -> OpResult<Output> {
+async fn run_settings(user: Arc<User>, input: SettingsInput) -> OpResult<Output> {
     let action = input
         .action
         .as_deref()
         .unwrap_or("show")
         .trim()
         .to_ascii_lowercase();
+    if let Some(out) = mailboxes(&user, &action, &input).await? {
+        return Ok(out);
+    }
     let need = |v: &Option<String>, what: &str| {
         v.clone()
             .filter(|s| !s.trim().is_empty())
@@ -384,6 +503,21 @@ async fn run_setup(user: Arc<User>, input: SetupInput) -> OpResult<Output> {
             .await?;
             "OK.".into()
         }
+        "forget" => {
+            let n: usize = need(&input.rule, "rule")?
+                .trim()
+                .parse()
+                .map_err(|_| OpError::usage("rule is the number of the standing rule"))?;
+            let gone = user
+                .update_prefs(|p| {
+                    (1..=p.always.len())
+                        .contains(&n)
+                        .then(|| p.always.remove(n - 1))
+                })
+                .await?
+                .ok_or_else(|| OpError::not_found(format!("no standing rule {n}")))?;
+            format!("Forgotten: {}.", crate::rules::describe(&gone))
+        }
         "policy" => {
             let key = need(&input.key, "key")?;
             let value = need(&input.value, "value")?;
@@ -409,14 +543,14 @@ async fn run_setup(user: Arc<User>, input: SetupInput) -> OpResult<Output> {
                     "notify" => pol.notify = mode(&value)?,
                     "bulk" => pol.bulk = mode(&value)?,
                     "delete" => pol.delete = mode(&value)?,
-                    "bulk_threshold" => pol.bulk_threshold = value.parse().map_err(|_| OpError::usage("a number"))?,
+                    "ask_over" => pol.ask_over = value.parse().map_err(|_| OpError::usage("a number"))?,
                     "sends_per_hour" => {
                         pol.sends_per_hour = value
                             .parse::<usize>()
                             .map_err(|_| OpError::usage("a number"))?
                             .clamp(1, 60)
                     }
-                    _ => return Err(OpError::usage("policy keys: send, notify, bulk, delete, bulk_threshold, sends_per_hour")),
+                    _ => return Err(OpError::usage("policy keys: send, notify, bulk, delete, ask_over, sends_per_hour")),
                 }
                 Ok(())
             })
@@ -518,11 +652,10 @@ async fn run_setup(user: Arc<User>, input: SetupInput) -> OpResult<Output> {
     }
     let p = user.prefs().await;
     let text = if said.is_empty() {
-        show(&p)
+        format!("{}\n{}", accounts(&user).await?, show(&p))
     } else {
         format!("{said}\n{}", show(&p))
     };
-    let _ = HandleKind::Message;
     Ok(Output::new(
         text,
         json!({
@@ -531,6 +664,8 @@ async fn run_setup(user: Arc<User>, input: SetupInput) -> OpResult<Output> {
             "vips": p.vips,
             "muted": p.muted,
             "policy": p.policy,
+            "always": p.always,
+            "accounts": user.host.accounts().await.iter().map(|a| json!({ "address": a.address, "provider": a.provider.as_str(), "status": a.status })).collect::<Vec<_>>(),
         }),
     ))
 }

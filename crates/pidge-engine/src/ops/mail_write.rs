@@ -129,7 +129,7 @@ async fn run_draft(user: Arc<User>, input: DraftInput) -> OpResult<Output> {
                 .is_some_and(|e| e.status == "held")
             {
                 return Err(OpError::usage(format!(
-                    "{} is on its way out; mail_send action=cancel draft={} first",
+                    "{} is on its way out; stop it first (mail_send action=cancel draft={})",
                     t.handle, t.handle
                 )));
             }
@@ -149,6 +149,22 @@ async fn run_draft(user: Arc<User>, input: DraftInput) -> OpResult<Output> {
         &kind_word,
         Some(Utc::now() + chrono::Duration::days(30)),
     )?;
+    // And who the mail it answers was from and to.
+    if let Some(o) = &original
+        && let Some(s) = user.store.get(&o.account, &o.id)?
+    {
+        let people: Vec<String> = std::iter::once(&s.item.from)
+            .chain(&s.item.to)
+            .chain(&s.item.cc)
+            .map(|p| p.address.clone())
+            .collect();
+        user.store.put_doc(
+            "draftanswers",
+            &handle,
+            &people,
+            Some(Utc::now() + chrono::Duration::days(30)),
+        )?;
+    }
     let mut text = preview(&handle, &account, &draft);
     if input.send.unwrap_or(false) {
         let sent = queue_send(&user, &handle, SendHow::Hold).await?;
@@ -210,9 +226,9 @@ fn preview(handle: &str, account: &str, d: &pidge_core::provider::Draft) -> Stri
 pub struct SendInput {
     /// The draft (d4). Optional for `status`.
     pub draft: Option<String>,
-    /// `send` (default: through the outbox hold), `now` (skip the hold),
-    /// `cancel` (stop a held send; it stays a draft), `approve` (send one
-    /// that waits for approval), `status` (what is in the outbox).
+    /// `send` (default), `approve` (the user's second yes to a sensitive
+    /// one), `now` (only when the user is in a hurry), `cancel` (it stays a
+    /// draft), `status` (what has not gone out).
     pub action: Option<String>,
 }
 
@@ -221,14 +237,12 @@ pub fn send() -> OpDef {
         Meta {
             name: "mail_send",
             cli: &["mail", "send"],
-            summary: "Send a draft through the outbox (held briefly; cancel within the hold)",
-            description: "E-mail: send a draft (d4) after the user approved it. It goes to pidge's outbox \
-and out by itself after a short hold that grows with risk (10 s for a short reply to someone the \
-user knows, up to 2 min for a first mail to an address, a forward or attachments): tell the user \
-it goes out in that time and that they can say \"cancel\" (action=cancel). Sensitive mail (identity \
-or card numbers, credentials, many recipients) waits for a second yes: read the reason to the user \
-and call action=approve only if they confirm. action=now skips the hold, action=status lists the \
-outbox. Sends and other outgoing mail are capped per hour.",
+            summary: "Send a draft the user has approved",
+            description: "E-mail: send a draft (d4) after the user approved it. The answer is that it is on \
+its way, with an id (q7): say so in a few words. If the user regrets it, undo id=q7 at once. \
+Sensitive mail (identity or card numbers, credentials, many recipients) waits for a second yes: \
+read the reason to the user and call action=approve only if they confirm. action=status lists what \
+has not gone out. Sends and other outgoing mail are capped per hour.",
             positional: &["draft"],
             read_only: false,
         },
@@ -320,12 +334,16 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResul
         .store
         .get_doc("draftkind", &t.handle)?
         .unwrap_or_else(|| "new".into());
+    let answers: Vec<String> = user
+        .store
+        .get_doc("draftanswers", &t.handle)?
+        .unwrap_or_default();
     let risk = outbox::assess(
         user,
         &draft,
         &t.account,
         kind == "forward",
-        kind.starts_with("reply"),
+        kind.starts_with("reply").then_some(answers.as_slice()),
     )
     .await;
     let n = draft.to.len() + draft.cc.len() + draft.bcc.len();
@@ -374,6 +392,16 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResul
     };
     entry.send_at = Some(Utc::now() + hold);
     user.store.put_outbox(&entry)?;
+    let sent = crate::queue::submit(
+        user,
+        &format!("mail {summary}"),
+        crate::queue::Job {
+            draft: Some(t.handle.clone()),
+            done: true,
+            ..Default::default()
+        },
+    )
+    .await?;
     if hold.is_zero() {
         outbox::tick(user).await;
         let notes = user.store.take_notes().unwrap_or_default();
@@ -387,17 +415,14 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResul
         };
     }
     outbox::schedule(user);
-    let secs = hold.num_seconds();
-    let why = if risk.reasons.is_empty() {
-        String::new()
-    } else {
-        format!(" (held longer: {})", risk.reasons.join("; "))
-    };
     Ok(Output::new(
-        format!(
-            "Sending {summary} in {secs} s{why}. The user can say \"cancel\" until then.\nnext: mail_send draft={} action=cancel stops it",
-            t.handle
-        ),
-        json!({ "draft": t.handle, "status": "held", "seconds": secs, "reasons": risk.reasons }),
+        format!("On its way {summary} ({}).", sent.id),
+        json!({
+            "draft": t.handle,
+            "status": "held",
+            "seconds": hold.num_seconds(),
+            "reasons": risk.reasons,
+            "ids": [sent.id],
+        }),
     ))
 }

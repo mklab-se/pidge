@@ -1,7 +1,7 @@
 //! pidge's judgement of each message: kind, category and importance, with
 //! the source of each. Order: the user's rules, deterministic signals, the
 //! user's own AI key (optional), and finally the harness (which records its
-//! verdicts through `mail_setup` / `mail_act categorize`).
+//! verdicts through `mail_act categorize`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -79,10 +79,18 @@ fn rule_category(categories: &[Category], address: &str) -> Option<String> {
 }
 
 fn category_for_kind(categories: &[Category], kind: Kind) -> Option<String> {
-    categories
-        .iter()
-        .find(|c| c.kinds.contains(&kind))
-        .map(|c| c.name.clone())
+    let of = |k: Kind| {
+        categories
+            .iter()
+            .find(|c| c.kinds.contains(&k))
+            .map(|c| c.name.clone())
+    };
+    of(kind).or_else(|| {
+        // Deliveries were notifications before they were a kind.
+        (kind == Kind::Delivery)
+            .then(|| of(Kind::Notification))
+            .flatten()
+    })
 }
 
 /// The deterministic part: rules, signals, importance with reasons.
@@ -121,10 +129,14 @@ pub fn judge_without_ai(m: &MailItem, prefs: &Prefs, known: &Known) -> Classific
 
     // Importance, with reasons a person would accept.
     let mut reasons: Vec<String> = Vec::new();
-    let bulk = kind.is_some_and(Kind::is_bulk);
+    // A parcel that has come is as done as any notice.
+    let delivered = kind == Some(Kind::Delivery)
+        && crate::delivery::status(m) == Some(crate::delivery::Status::Delivered);
+    let bulk = kind.is_some_and(Kind::is_bulk) || delivered;
     // A machine replying in a thread, or a receipt ending in "?", asks nothing.
-    let conversational =
-        !bulk && !crate::kinds::automated_sender(&from) && kind != Some(Kind::Receipt);
+    let conversational = !bulk
+        && !crate::kinds::automated_sender(&from)
+        && !matches!(kind, Some(Kind::Receipt | Kind::Delivery));
     if prefs.is_vip(&from) {
         reasons.push("vip".into());
     }
@@ -179,10 +191,9 @@ const AI_CONCURRENCY: usize = 4;
 const AI_MAX_PER_RUN: usize = 40;
 /// Senders asked about `List-Unsubscribe` per round, at most.
 const MAX_SENDER_LOOKUPS: usize = 200;
-/// A voice harness cannot wait: on a server, what does not fit is picked up
-/// on the next call (answers are remembered, so each round gets further).
+/// Answers are remembered, so a round that runs out of time gets further
+/// next time.
 const SENDER_LOOKUP_BUDGET: Duration = Duration::from_secs(25);
-const SENDER_LOOKUP_BUDGET_MCP: Duration = Duration::from_secs(3);
 const AI_TIMEOUT: Duration = Duration::from_secs(20);
 /// A category or kind the model is less sure of than this is left open.
 const MIN_PROBABILITY: f64 = 0.6;
@@ -213,6 +224,9 @@ fn questions(categories: &[Category]) -> Questions {
             Kind::Newsletter => "Editorial content the recipient subscribed to",
             Kind::Promotion => "Marketing, an offer, a sale or an advertisement",
             Kind::Notification => "An automated notice from a service or system",
+            Kind::Delivery => {
+                "Where a parcel or delivery is: shipped, on its way, to collect, delivered"
+            }
             Kind::Social => "A notice from a social network",
             Kind::Invite => "A meeting invitation",
             Kind::Personal => "Written by a person to the recipient",
@@ -389,19 +403,50 @@ async fn learn_list_senders(user: &Arc<User>, pending: &[Stored], known: &Known)
             }
         }
     };
-    let budget = match user.frontend() {
-        crate::ctx::Frontend::Cli => SENDER_LOOKUP_BUDGET,
-        crate::ctx::Frontend::Mcp => SENDER_LOOKUP_BUDGET_MCP,
-    };
-    let _ = tokio::time::timeout(budget, collect).await;
+    let _ = tokio::time::timeout(SENDER_LOOKUP_BUDGET, collect).await;
 }
 
-/// Classify every unclassified message in the index: rules and signals at
-/// once, the AI (when configured) for what they left open, within `budget`.
-/// Requests still running when the budget ends keep going.
-pub async fn classify_pending(user: &Arc<User>, budget: Duration) {
+/// Whether the user's AI is worth asking.
+pub fn ai_usable(prefs: &Prefs) -> bool {
+    !matches!(
+        prefs.ai.status.as_str(),
+        "no_credits" | "key_rejected" | "failing"
+    )
+}
+
+/// Time the CLI lets the AI take: its process would end the requests.
+const AI_BUDGET: Duration = Duration::from_secs(30);
+
+/// Sort what is new. Rules and signals at once; what they leave open, times
+/// in the mail and the user's standing rules in the background (on the CLI:
+/// before the answer, there is no background).
+pub async fn sort_new(user: &Arc<User>) {
+    let fresh = sort_at_once(user).await;
+    let u = user.clone();
+    let rest = async move {
+        let Ok(_one_round) = u.sorting.try_lock() else {
+            if !fresh.is_empty() {
+                // The round under way may have started before this mail came.
+                let _turn = u.sorting.lock().await;
+                sort_open(&u, fresh).await;
+            }
+            return;
+        };
+        sort_open(&u, fresh).await;
+        crate::rules::apply(&u).await;
+        crate::happenings::check(&u).await;
+    };
+    match user.frontend() {
+        crate::ctx::Frontend::Cli => rest.await,
+        crate::ctx::Frontend::Mcp => {
+            tokio::spawn(rest);
+        }
+    }
+}
+
+/// Rules and signals for every message not yet sorted. Returns them.
+async fn sort_at_once(user: &Arc<User>) -> Vec<Stored> {
     let prefs = user.prefs().await;
-    let known = Known::load(user);
     let pending = match user.store.query(&Filter {
         unclassified: true,
         ..Default::default()
@@ -409,46 +454,60 @@ pub async fn classify_pending(user: &Arc<User>, budget: Duration) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "classify: index query failed");
-            return;
+            return Vec::new();
         }
     };
     if pending.is_empty() {
+        return pending;
+    }
+    let known = Known::load(user);
+    for s in &pending {
+        let c = judge_without_ai(&s.item, &prefs, &known);
+        let _ = user
+            .store
+            .set_classification(&s.item.account, &s.item.id, &c);
+    }
+    pending
+}
+
+/// What takes longer: asking the provider about senders, and the user's AI.
+async fn sort_open(user: &Arc<User>, fresh: Vec<Stored>) {
+    if fresh.is_empty() {
         return;
     }
-    learn_list_senders(user, &pending, &known).await;
-    // Read again: what was just learned is on the rows now.
-    let pending = user
-        .store
-        .query(&Filter {
-            unclassified: true,
-            ..Default::default()
-        })
-        .unwrap_or(pending);
-    let ai = user.ai().filter(|_| {
-        !matches!(
-            prefs.ai.status.as_str(),
-            "no_credits" | "key_rejected" | "failing"
-        )
-    });
+    let prefs = user.prefs().await;
+    let known = Known::load(user);
+    learn_list_senders(user, &fresh, &known).await;
+    let ai = user.ai().filter(|_| ai_usable(&prefs));
     let mut ask: Vec<(Stored, Classification)> = Vec::new();
-    for s in pending {
+    for s in fresh {
+        // Read again: what was just learned is on the row now.
+        let Ok(Some(s)) = user.store.get(&s.item.account, &s.item.id) else {
+            continue;
+        };
+        if s.class.kind_source.as_deref() == Some("harness")
+            || s.class.category_source.as_deref() == Some("harness")
+        {
+            continue;
+        }
         let c = judge_without_ai(&s.item, &prefs, &known);
+        let _ = user
+            .store
+            .set_classification(&s.item.account, &s.item.id, &c);
         let open = c.kind.is_none() || c.category.is_none();
         let worth_asking = s.item.folder == Folder::Inbox
             && (chrono::Utc::now() - s.item.received_at).num_days() <= 14;
         // Newest first, and bounded: the AI is an accelerator, not a cost.
         if ai.is_some() && open && worth_asking && ask.len() < AI_MAX_PER_RUN {
             ask.push((s, c));
-        } else {
-            let _ = user
-                .store
-                .set_classification(&s.item.account, &s.item.id, &c);
         }
     }
     let Some(client) = ai else { return };
+    ask.truncate(user.ai_allowance(ask.len()).await);
     if ask.is_empty() {
         return;
     }
+    let asked = ask.len();
     let categories = Arc::new(prefs.categories());
     let questions = Arc::new(questions(&categories));
     let gate = Arc::new(tokio::sync::Semaphore::new(AI_CONCURRENCY));
@@ -483,7 +542,8 @@ pub async fn classify_pending(user: &Arc<User>, budget: Duration) {
         }));
     }
     let all = futures::future::join_all(tasks);
-    let _ = tokio::time::timeout(budget, all).await;
+    let _ = tokio::time::timeout(AI_BUDGET, all).await;
+    user.record(crate::activity::ai_line("sort", asked)).await;
     let failure = *status.lock().unwrap_or_else(|p| p.into_inner());
     let new_status = match failure {
         None => "ok",
@@ -581,6 +641,7 @@ mod tests {
             bulk_hint: Some(BulkHint::Focused),
             list_unsubscribe: false,
             is_invite: false,
+            message_id: String::new(),
         }
     }
 

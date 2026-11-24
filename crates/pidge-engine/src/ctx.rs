@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -102,8 +102,14 @@ pub trait Host: Send + Sync {
     /// cannot be kept is dropped with a warning.
     async fn record(&self, _line: String) {}
 
-    /// The outbox has an entry due at `at`. MCP frontends ignore this (the
-    /// engine's own timer sends it); the CLI starts a detached runner.
+    /// Keep this user's index current between calls (a server that is always
+    /// on), not only while they are active.
+    fn always_on(&self) -> bool {
+        false
+    }
+
+    /// The outbox has an entry due at `at` and nobody here to send it (a
+    /// command that ends, a local server that stops): start a detached runner.
     fn outbox_due(&self, _at: DateTime<Utc>) {}
 }
 
@@ -153,6 +159,18 @@ pub struct User {
     worker: Worker,
     /// One sync per mailbox at a time.
     pub(crate) sync_locks: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// One run of the queue at a time.
+    pub(crate) queue_lock: Mutex<()>,
+    /// One round of background sorting at a time.
+    pub(crate) sorting: Mutex<()>,
+    /// When this process started serving the user.
+    pub(crate) started: DateTime<Utc>,
+    /// The instructions this process took (others may share the index).
+    pub(crate) own_instructions: std::sync::Mutex<Vec<i64>>,
+    /// When the user's agent last called (seconds since the epoch).
+    last_call: AtomicI64,
+    /// The task that keeps the index current.
+    pub(crate) keeper: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// One outbox timer at a time.
     pub(crate) outbox_timer: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
@@ -176,6 +194,12 @@ impl User {
             ai: RwLock::new(None),
             worker: Worker::new(frontend),
             sync_locks: std::sync::Mutex::new(HashMap::new()),
+            queue_lock: Mutex::new(()),
+            sorting: Mutex::new(()),
+            started: Utc::now(),
+            own_instructions: std::sync::Mutex::new(Vec::new()),
+            last_call: AtomicI64::new(0),
+            keeper: std::sync::Mutex::new(None),
             outbox_timer: std::sync::Mutex::new(None),
         })
     }
@@ -189,6 +213,52 @@ impl User {
     pub async fn record(self: &Arc<Self>, line: String) {
         let u = self.clone();
         self.enqueue(async move { u.host.record(line).await }).await;
+    }
+
+    /// Get a new database ready: its handles start where no earlier one's
+    /// were, and what a stopped server left in the queue carries on. Call
+    /// once, before the first operation.
+    pub async fn prepare(self: &Arc<Self>) {
+        const PER_DATABASE: u64 = 20_000;
+        if self.store.is_fresh().unwrap_or(false) {
+            let base = self
+                .update_prefs(|p| {
+                    p.handle_base += PER_DATABASE;
+                    p.handle_base
+                })
+                .await
+                // Preferences unreachable: the clock is the next best.
+                .unwrap_or_else(|_| u64::try_from(Utc::now().timestamp()).unwrap_or_default());
+            let _ = self.store.start_handles_at(base);
+        }
+        let _ = self.store.housekeeping();
+        let _ = self
+            .store
+            .abandon_stuck(Utc::now() - chrono::Duration::minutes(10));
+        crate::queue::resume(self).await;
+    }
+
+    pub(crate) fn called(&self) {
+        self.last_call
+            .store(Utc::now().timestamp(), Ordering::Relaxed);
+    }
+
+    /// Whether the user's agent has called in the last half hour.
+    pub(crate) fn is_active(&self) -> bool {
+        Utc::now().timestamp() - self.last_call.load(Ordering::Relaxed) < 30 * 60
+    }
+
+    /// Finish everything at once: the queue, mail approved and held, and the
+    /// log (a server is stopping).
+    pub async fn finish(self: &Arc<Self>) {
+        crate::queue::flush(self).await;
+        if self.host.always_on() {
+            crate::outbox::flush(self).await;
+        } else if let Ok(Some(at)) = self.store.next_due() {
+            // The index outlives this process, and others may share it.
+            self.host.outbox_due(at);
+        }
+        self.drain().await;
     }
 
     // ---- providers --------------------------------------------------------
@@ -220,7 +290,7 @@ impl User {
                     ErrorKind::NotFound,
                     format!("{account} is not one of your mailboxes"),
                 )
-                .with_hint("accounts lists them")
+                .with_hint("settings lists them")
             })
     }
 
@@ -230,7 +300,7 @@ impl User {
         if all.is_empty() {
             return Err(
                 OpError::new(ErrorKind::NotFound, "no mailbox is connected yet")
-                    .with_hint("accounts action=connect adds one"),
+                    .with_hint("settings action=connect adds one"),
             );
         }
         match account
@@ -256,33 +326,58 @@ impl User {
 
     // ---- prefs ------------------------------------------------------------
 
+    /// The preferences; the defaults while they cannot be read (never kept,
+    /// so that a hiccup is not saved over what the user has).
     pub async fn prefs(&self) -> Prefs {
         let mut cached = self.prefs.lock().await;
-        if let Some(p) = cached.as_ref() {
-            return p.clone();
-        }
-        let loaded = match self.prefs_store.load().await {
-            Ok(p) => p.unwrap_or_default(),
+        match self.loaded(&mut cached).await {
+            Ok(p) => p.clone(),
             Err(e) => {
                 tracing::warn!(error = %e, "could not load preferences; using defaults");
                 Prefs::default()
             }
-        };
-        *cached = Some(loaded.clone());
-        loaded
+        }
+    }
+
+    async fn loaded<'a>(&self, cached: &'a mut Option<Prefs>) -> Result<&'a mut Prefs, String> {
+        if cached.is_none() {
+            *cached = Some(self.prefs_store.load().await?.unwrap_or_default());
+        }
+        Ok(cached.get_or_insert_with(Prefs::default))
     }
 
     /// Change preferences and save them.
     pub async fn update_prefs<T>(&self, f: impl FnOnce(&mut Prefs) -> T) -> OpResult<T> {
-        let _ = self.prefs().await;
         let mut cached = self.prefs.lock().await;
-        let prefs = cached.get_or_insert_with(Prefs::default);
+        let prefs = self
+            .loaded(&mut cached)
+            .await
+            .map_err(|e| OpError::internal(format!("could not load preferences: {e}")))?;
         let out = f(prefs);
         self.prefs_store
             .save(prefs)
             .await
             .map_err(|e| OpError::internal(format!("could not save preferences: {e}")))?;
         Ok(out)
+    }
+
+    /// Questions the user's AI may still be asked today, out of `n`; counted
+    /// as asked. Kept in the preferences, so a restart does not start over.
+    pub(crate) async fn ai_allowance(&self, n: usize) -> usize {
+        const PER_DAY: u32 = 150;
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let wanted = u32::try_from(n).unwrap_or(u32::MAX);
+        self.update_prefs(|p| {
+            if p.ai.day != today {
+                p.ai.day = today;
+                p.ai.asked = 0;
+            }
+            let granted = wanted.min(PER_DAY.saturating_sub(p.ai.asked));
+            p.ai.asked += granted;
+            granted
+        })
+        .await
+        .map_or(0, |n| n as usize)
     }
 
     /// Forget cached preferences (another process changed them).

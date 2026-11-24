@@ -85,7 +85,7 @@ mod tests {
         let _guard = LogCapture::install(json_subscriber(EnvFilter::new("info"), capture.clone()));
 
         let h = ToolHarness::new(&["jane@example.com"]).await;
-        let request = rmcp::model::CallToolRequestParams::new("accounts");
+        let request = rmcp::model::CallToolRequestParams::new("settings");
         h.mcp().call_tool(request, h.ctx()).await.unwrap();
         let status = crate::app::build_router(h.state.clone(), CancellationToken::new())
             .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
@@ -97,7 +97,7 @@ mod tests {
         let logged = capture.text();
         let tool = line_for(&logged, "tool_call");
         assert_flat(&tool, &["tool", "user", "duration_ms", "outcome"]);
-        assert_eq!(tool["tool"], "accounts");
+        assert_eq!(tool["tool"], "settings");
         assert_eq!(tool["outcome"], "ok");
         assert_eq!(tool["level"], "INFO");
 

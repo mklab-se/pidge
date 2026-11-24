@@ -25,6 +25,12 @@ pub trait UserSource: Send + Sync + 'static {
     /// The caller's engine user, or a message for the harness.
     async fn user(&self, ctx: &RequestContext<RoleServer>) -> Result<Arc<User>, String>;
 
+    /// The program calling, when the transport knows better than the MCP
+    /// session does (a stateless HTTP request has no session).
+    fn client(&self, _ctx: &RequestContext<RoleServer>) -> Option<crate::activity::Client> {
+        None
+    }
+
     /// One line per call for the operator's logs (no arguments, no content).
     fn log_call(&self, _tool: &str, _ctx: &RequestContext<RoleServer>, _ms: u64, _outcome: &str) {}
 }
@@ -51,6 +57,14 @@ fn tool_of(op: &OpDef) -> Tool {
     let mut schema: JsonObject = op.schema.as_object().cloned().unwrap_or_default();
     schema.remove("$schema");
     schema.remove("title");
+    // pidge learns from what is asked: agents are to say it on every call.
+    // A call without it still runs.
+    let required = schema
+        .entry("required")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Value::Array(list) = required {
+        list.push(Value::String("intent".into()));
+    }
     let mut tool = Tool::new(op.name, op.description, Arc::new(schema));
     tool.annotations = Some(
         ToolAnnotations::new()
@@ -58,6 +72,59 @@ fn tool_of(op: &OpDef) -> Tool {
             .destructive(false),
     );
     tool
+}
+
+/// A tool pidge does not have. Before 3.0 some had other names, and a client
+/// may still hold the old list.
+fn unknown_tool(name: &str) -> String {
+    let now = match name {
+        "mail_brief" | "mail_triage" => "mail_inbox",
+        "mail_setup" | "accounts" => "settings",
+        "calendar_event" | "calendar_respond" => "calendar_act",
+        "intent" => "the intent field every tool takes",
+        _ => return format!("unknown tool {name}"),
+    };
+    format!(
+        "{name} is now {now}. The user should refresh the pidge connection in this app so that it sees the current tools."
+    )
+}
+
+/// Who is calling: what the request itself says, then the MCP session, then
+/// the transport.
+fn caller<S: UserSource>(
+    source: &S,
+    request: &CallToolRequestParams,
+    context: &RequestContext<RoleServer>,
+) -> Option<crate::activity::Client> {
+    const KEY: &str = "io.modelcontextprotocol/clientInfo";
+    let named = |v: &Value| -> Option<crate::activity::Client> {
+        Some(crate::activity::Client {
+            name: v.get("name")?.as_str()?.chars().take(100).collect(),
+            version: v
+                .get("version")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .chars()
+                .take(50)
+                .collect(),
+        })
+    };
+    let in_request = request
+        .meta
+        .as_ref()
+        .and_then(|m| serde_json::to_value(m).ok())
+        .or_else(|| serde_json::to_value(&context.meta).ok())
+        .and_then(|m| m.get(KEY).and_then(named));
+    // Without a session the library fills in its own name.
+    let in_session = context
+        .peer
+        .peer_info()
+        .filter(|p| p.client_info.name != "rmcp")
+        .map(|p| crate::activity::Client {
+            name: p.client_info.name.clone(),
+            version: p.client_info.version.clone(),
+        });
+    in_request.or(in_session).or_else(|| source.client(context))
 }
 
 impl<S: UserSource> PidgeServer<S> {
@@ -85,7 +152,7 @@ impl<S: UserSource> PidgeServer<S> {
         client: Option<&crate::activity::Client>,
     ) -> CallToolResult {
         let Some(op) = self.ops.iter().find(|o| o.name == name) else {
-            return CallToolResult::error(vec![ContentBlock::text(format!("unknown tool {name}"))]);
+            return CallToolResult::error(vec![ContentBlock::text(unknown_tool(name))]);
         };
         match registry::run_from(user, op, args, client).await {
             Ok(out) => CallToolResult::success(vec![ContentBlock::text(out.text)]),
@@ -117,15 +184,10 @@ impl<S: UserSource> ServerHandler for PidgeServer<S> {
     ) -> Result<CallToolResponse, McpError> {
         let start = Instant::now();
         let name = request.name.to_string();
+        let client = caller(self.source.as_ref(), &request, &context);
         let args = request.arguments.map(Value::Object).unwrap_or(Value::Null);
         let result = match self.source.user(&context).await {
-            Ok(user) => {
-                let client = context.peer.peer_info().map(|p| crate::activity::Client {
-                    name: p.client_info.name.clone(),
-                    version: p.client_info.version.clone(),
-                });
-                self.call_for(&user, &name, args, client.as_ref()).await
-            }
+            Ok(user) => self.call_for(&user, &name, args, client.as_ref()).await,
             Err(msg) => CallToolResult::error(vec![ContentBlock::text(msg)]),
         };
         let outcome = if result.is_error == Some(true) {

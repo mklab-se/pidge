@@ -78,7 +78,7 @@ Set the Web application client on the server:
 
 With `deploy/azure/deploy.sh` (or the release workflow), set `PIDGE_GOOGLE_CLIENT_ID` and
 `PIDGE_GOOGLE_CLIENT_SECRET` before deploying; the Bicep template stores the secret as a Container
-App secret. A user then asks their agent to connect Gmail (`accounts action=connect
+App secret. A user then asks their agent to connect Gmail (`settings action=connect
 provider=google`) and opens the link it returns. The same rules as for Microsoft mailboxes apply:
 the link works once, only in the browser that opened it, and a mailbox another user owns cannot be
 connected.

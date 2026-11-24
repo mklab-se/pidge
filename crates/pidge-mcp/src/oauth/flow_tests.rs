@@ -1364,7 +1364,7 @@ async fn sign_out_everywhere_revokes_access_and_refresh_tokens() {
         .user(&h.state, "jane@example.com")
         .await
         .unwrap();
-    let op = pidge_engine::registry::find("accounts").unwrap();
+    let op = pidge_engine::registry::find("settings").unwrap();
     let out = pidge_engine::registry::run(
         &user,
         &op,

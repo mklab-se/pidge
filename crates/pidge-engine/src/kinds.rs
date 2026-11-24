@@ -17,8 +17,10 @@ pub enum Kind {
     Newsletter,
     /// Marketing, offers, ads ("commercials").
     Promotion,
-    /// Automated notices from services: alerts, codes, shipping, status.
+    /// Automated notices from services: alerts, codes, status.
     Notification,
+    /// Where a parcel is: shipped, out for delivery, to collect, delivered.
+    Delivery,
     /// Social network notices.
     Social,
     /// Meeting invitations.
@@ -28,11 +30,12 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub const ALL: [Kind; 7] = [
+    pub const ALL: [Kind; 8] = [
         Kind::Receipt,
         Kind::Newsletter,
         Kind::Promotion,
         Kind::Notification,
+        Kind::Delivery,
         Kind::Social,
         Kind::Invite,
         Kind::Personal,
@@ -44,6 +47,7 @@ impl Kind {
             Kind::Newsletter => "newsletter",
             Kind::Promotion => "promotion",
             Kind::Notification => "notification",
+            Kind::Delivery => "delivery",
             Kind::Social => "social",
             Kind::Invite => "invite",
             Kind::Personal => "personal",
@@ -57,6 +61,9 @@ impl Kind {
             "promotion" | "promotions" | "commercial" | "commercials" | "ad" | "ads"
             | "marketing" | "spam" => Kind::Promotion,
             "notification" | "notifications" | "automated" => Kind::Notification,
+            "delivery" | "deliveries" | "parcel" | "parcels" | "package" | "packages" => {
+                Kind::Delivery
+            }
             "social" => Kind::Social,
             "invite" | "invites" | "invitation" => Kind::Invite,
             "personal" => Kind::Personal,
@@ -71,6 +78,7 @@ impl Kind {
             Kind::Newsletter => "newsletters",
             Kind::Promotion => "promotions",
             Kind::Notification => "notifications",
+            Kind::Delivery => "deliveries",
             Kind::Social => "social notices",
             Kind::Invite => "invitations",
             Kind::Personal => "personal messages",
@@ -329,6 +337,9 @@ pub fn signal_kind(m: &MailItem, knows_sender: bool) -> Option<Kind> {
     if SYSTEM_REPLY_PREFIXES.iter().any(|p| subject.starts_with(p)) {
         return Some(Kind::Notification);
     }
+    if crate::delivery::status(m).is_some() && !(knows_sender && !automated) {
+        return Some(Kind::Delivery);
+    }
     if has_any(&subject, RECEIPT_WORDS)
         || (RECEIPT_SENDERS.iter().any(|s| from.contains(s)) && has_any(&text, RECEIPT_WORDS))
     {
@@ -410,6 +421,7 @@ mod tests {
             bulk_hint: hint,
             list_unsubscribe: list,
             is_invite: false,
+            message_id: String::new(),
         }
     }
 

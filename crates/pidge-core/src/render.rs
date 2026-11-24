@@ -127,11 +127,16 @@ pub fn strip_quoted_history(text: &str) -> String {
     let mut cut = lines.len();
     for (i, line) in lines.iter().enumerate() {
         let t = line.trim_start();
-        let is_outlook_header = t.starts_with("From:")
+        let starts = |l: &str, words: &[&str]| words.iter().any(|w| l.trim_start().starts_with(w));
+        let is_outlook_header = starts(t, &["From:", "Från:"])
             && lines[i..(i + 4).min(lines.len())].iter().any(|l| {
-                l.trim_start().starts_with("Sent:") || l.trim_start().starts_with("Subject:")
+                starts(
+                    l,
+                    &["Sent:", "Subject:", "Skickat:", "Ämne:", "Date:", "Datum:"],
+                )
             });
-        let is_wrote = t.starts_with("On ") && t.trim_end().ends_with("wrote:");
+        let is_wrote = (t.starts_with("On ") && t.trim_end().ends_with("wrote:"))
+            || (t.starts_with("Den ") && t.trim_end().ends_with("skrev:"));
         let is_quote = t.starts_with('>');
         if is_outlook_header || is_wrote || is_quote {
             cut = i;

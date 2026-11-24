@@ -13,6 +13,7 @@ categories = ["email"]
 
 [dependencies]
 rand.workspace = true
+regex.workspace = true
 pidge-core.workspace = true
 pidge-store.workspace = true
 ailloy.workspace = true

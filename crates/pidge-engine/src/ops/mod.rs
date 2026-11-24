@@ -1,14 +1,13 @@
 //! Every operation, and the pieces they share: selectors, handles, item
 //! lines, recipient resolution.
 
-pub mod accounts;
 pub mod calendar;
-pub mod intent;
+pub mod inbox;
 pub mod mail_act;
 pub mod mail_read;
-pub mod mail_setup;
 pub mod mail_write;
-pub mod triage;
+pub mod settings;
+pub mod undo;
 
 use std::sync::Arc;
 
@@ -30,32 +29,29 @@ use crate::render;
 
 pub fn all() -> Vec<OpDef> {
     vec![
-        mail_read::brief(),
+        inbox::inbox(),
         mail_read::find(),
         mail_read::read(),
-        triage::triage(),
         mail_act::act(),
         mail_write::draft(),
         mail_write::send(),
         mail_read::attachment(),
-        mail_setup::setup(),
         calendar::agenda(),
-        calendar::event(),
         calendar::act(),
-        calendar::respond(),
         calendar::availability(),
-        accounts::accounts(),
-        intent::intent(),
+        undo::undo(),
+        settings::settings(),
     ]
 }
 
-/// A set of messages, described rather than listed. Shared by `mail_find`,
-/// `mail_act`, `mail_triage` and the plans they make.
+/// A set of messages, described rather than listed. Shared by `mail_find`
+/// and `mail_act`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, serde::Serialize, JsonSchema)]
 pub struct Selector {
-    /// Words in the subject, preview or sender.
+    /// Words in the subject, preview or sender; alternatives with ` OR `.
     pub text: Option<String>,
-    /// Sender: a name or an address (part of one is enough).
+    /// Sender: a name or an address (part of one is enough); several with
+    /// commas.
     pub from: Option<String>,
     /// Only mail sent directly to the user (in To, not only Cc).
     pub to_me: Option<bool>,
@@ -74,8 +70,12 @@ pub struct Selector {
     pub category: Option<String>,
     /// What the mail is: `receipt` (receipts, invoices, bills),
     /// `newsletter`, `promotion` (ads, "commercials"), `notification`,
-    /// `social`, `invite`, `personal`. Several with commas.
+    /// `delivery` (parcels), `social`, `invite`, `personal`. Several with
+    /// commas.
     pub kind: Option<String>,
+    /// True: only mail about something that happens at a time (an
+    /// appointment, a pickup, a dinner).
+    pub happening: Option<bool>,
     /// `high` (only what matters) or `low` (only bulk).
     pub importance: Option<String>,
     /// One of the user's mailboxes; all when absent.
@@ -98,7 +98,7 @@ impl Selector {
             .map(|s| {
                 Kind::parse(s).ok_or_else(|| {
                     OpError::usage(format!(
-                        "unknown kind {s:?}; use receipt, newsletter, promotion, notification, social, invite or personal"
+                        "unknown kind {s:?}; use receipt, newsletter, promotion, notification, delivery, social, invite or personal"
                     ))
                 })
             })
@@ -229,6 +229,7 @@ pub async fn to_filter(
             .map(|k| k.as_str().to_string())
             .collect(),
         category: sel.category.clone(),
+        happening: sel.happening.unwrap_or(false),
         ..Default::default()
     };
     if let Some(s) = &sel.since {
@@ -374,6 +375,9 @@ pub fn item_line(user: &User, s: &Stored, tz: Tz, now: DateTime<Utc>, preview: b
             line.push_str(&format!("\n    {p}"));
         }
     }
+    if let Some(when) = crate::happenings::line(user, s, tz, now) {
+        line.push_str(&format!("\n    {when}"));
+    }
     line
 }
 
@@ -393,6 +397,8 @@ pub fn item_json(s: &Stored) -> Value {
         "category": s.class.category,
         "importance": match s.class.importance { 2 => "high", 0 => "low", _ => "normal" },
         "reasons": s.class.reasons,
+        "happens": s.happening,
+        "delivery": crate::delivery::status(i).filter(|_| s.class.kind.as_deref() == Some("delivery")).map(|x| x.as_str()),
         "thread": i.thread_id,
         "preview": i.preview,
     })
