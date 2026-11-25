@@ -12,6 +12,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::ctx::User;
@@ -22,6 +23,45 @@ use crate::error::{OpError, OpResult};
 pub struct Output {
     pub text: String,
     pub data: Value,
+    /// A question for the user themself, when the program they use can put
+    /// one to them ([`Asking::CanAsk`]). Until it is answered, nothing has
+    /// been done.
+    pub ask: Option<Ask>,
+}
+
+/// Something only the user can say yes to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ask {
+    /// What they are asked, with what they need to know to answer.
+    pub message: String,
+    /// What a yes is called: "Send it".
+    pub yes: String,
+    /// The operation a yes runs, and its input.
+    pub tool: String,
+    pub input: Value,
+    /// The input a no runs the same operation with, if any.
+    pub on_no: Option<Value>,
+}
+
+/// How this call can get the user's own yes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Asking {
+    /// Their agent asks them, in the conversation.
+    #[default]
+    InChat,
+    /// The program can put a question to them, past the agent.
+    CanAsk,
+    /// They have just answered one, with yes.
+    Said,
+}
+
+tokio::task_local! {
+    static ASKING: Asking;
+}
+
+/// How the running call can get the user's own yes.
+pub fn asking() -> Asking {
+    ASKING.try_with(|a| *a).unwrap_or_default()
 }
 
 impl Output {
@@ -29,7 +69,14 @@ impl Output {
         Self {
             text: text.into(),
             data,
+            ask: None,
         }
+    }
+
+    /// Put a question to the user with it.
+    pub fn asking(mut self, ask: Ask) -> Self {
+        self.ask = Some(ask);
+        self
     }
 
     pub fn text(text: impl Into<String>) -> Self {
@@ -37,6 +84,7 @@ impl Output {
         Self {
             data: serde_json::json!({ "message": text }),
             text,
+            ask: None,
         }
     }
 }
@@ -224,15 +272,17 @@ pub fn find(name: &str) -> Option<OpDef> {
 /// waiting for the user (earlier background failures, sends that went out)
 /// are put on top of the answer.
 pub async fn run(user: &Arc<User>, op: &OpDef, input: Value) -> OpResult<Output> {
-    run_from(user, op, input, None).await
+    run_from(user, op, input, None, Asking::InChat).await
 }
 
-/// [`run`], naming the program that made the call in the activity log.
+/// [`run`], naming the program that made the call in the activity log, and
+/// how it can get the user's own yes.
 pub async fn run_from(
     user: &Arc<User>,
     op: &OpDef,
     mut input: Value,
     client: Option<&crate::activity::Client>,
+    asking: Asking,
 ) -> OpResult<Output> {
     let intent = match &mut input {
         Value::Object(map) => match map.remove("intent") {
@@ -243,7 +293,7 @@ pub async fn run_from(
     };
     user.called();
     let started = std::time::Instant::now();
-    let result = run_op(user, op, input.clone()).await;
+    let result = ASKING.scope(asking, run_op(user, op, input.clone())).await;
     let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let answer = match &result {
         Ok(out) => Ok(out.text.as_str()),

@@ -774,7 +774,7 @@ impl UserSource for HttpSource {
             .ok()?;
         Some(pidge_engine::activity::Client {
             name: agent.chars().take(100).collect(),
-            version: String::new(),
+            ..Default::default()
         })
     }
 

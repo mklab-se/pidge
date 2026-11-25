@@ -127,7 +127,7 @@ async fn run_dry(url: &str, store: TokenStorage, json_output: bool) -> Result<()
 
     let http = reqwest::Client::new();
     let mut raw = McpRpc::new(http, tokens.server.clone(), tokens.access_token.clone());
-    raw.initialize()
+    raw.start()
         .await
         .map_err(|e| remap_401_to_session_expired(&tokens.server, e))
         .context("failed to initialize the MCP session")?;
@@ -233,7 +233,7 @@ async fn run_inner(url: &str, store: TokenStorage, yes: bool, json_output: bool)
         tokens.access_token.clone(),
     );
     let mut rpc = RefreshingRpc::new(http, raw, tokens.clone(), backend);
-    rpc.initialize()
+    rpc.start()
         .await
         .context("failed to initialize the MCP session")?;
 

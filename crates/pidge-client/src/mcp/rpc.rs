@@ -39,11 +39,13 @@ pub struct McpRpc {
     mcp_url: String,
     access_token: String,
     session_id: Option<String>,
+    /// The server speaks the protocol without handshake or session.
+    stateless: bool,
     next_id: u64,
 }
 
 impl McpRpc {
-    /// Start a new (uninitialized) session. Call [`Self::initialize`] before
+    /// A client that has not spoken to the server yet. Call [`Self::start`] before
     /// any other method.
     pub fn new(
         http: reqwest::Client,
@@ -55,6 +57,7 @@ impl McpRpc {
             mcp_url: mcp_url.into(),
             access_token: access_token.into(),
             session_id: None,
+            stateless: false,
             next_id: 1,
         }
     }
@@ -71,6 +74,28 @@ impl McpRpc {
     /// client. The session id and request counter are left untouched.
     pub fn set_access_token(&mut self, access_token: impl Into<String>) {
         self.access_token = access_token.into();
+    }
+
+    /// Find out how the server wants to be spoken to: the current protocol
+    /// (no handshake, no session) when it knows it, else the handshake of
+    /// older ones.
+    pub async fn start(&mut self) -> Result<(), ClientError> {
+        self.stateless = true;
+        match self.request_once("server/discover", json!({})).await {
+            Ok(v) if knows(&v, STATELESS_VERSION) => Ok(()),
+            Err(
+                e @ ClientError::Graph {
+                    status: 401 | 403, ..
+                },
+            ) => {
+                self.stateless = false;
+                Err(e)
+            }
+            _ => {
+                self.stateless = false;
+                self.initialize().await
+            }
+        }
     }
 
     /// Run the MCP `initialize` handshake and send the required
@@ -156,6 +181,15 @@ impl McpRpc {
     async fn request_once(&mut self, method: &str, params: Value) -> Result<Value, ClientError> {
         let id = self.next_id;
         self.next_id += 1;
+        let mut params = params;
+        if self.stateless {
+            params["_meta"] = json!({
+                "io.modelcontextprotocol/protocolVersion": STATELESS_VERSION,
+                "io.modelcontextprotocol/clientInfo":
+                    {"name": "pidge", "version": env!("CARGO_PKG_VERSION")},
+                "io.modelcontextprotocol/clientCapabilities": {},
+            });
+        }
         let body = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
 
         let (session_id, value) = self.send(&body, Some(id)).await?;
@@ -212,9 +246,25 @@ impl McpRpc {
             .post(&self.mcp_url)
             .header(CONTENT_TYPE, "application/json")
             .header(ACCEPT, "application/json, text/event-stream")
-            .header(PROTOCOL_HEADER, PROTOCOL_VERSION)
+            .header(
+                PROTOCOL_HEADER,
+                if self.stateless {
+                    STATELESS_VERSION
+                } else {
+                    PROTOCOL_VERSION
+                },
+            )
             .header(AUTHORIZATION, format!("Bearer {}", self.access_token))
             .json(body);
+        if self.stateless {
+            // Plain HTTP can route on these; the server checks that they
+            // agree with the body.
+            let method = body["method"].as_str().unwrap_or_default();
+            req = req.header("Mcp-Method", method);
+            if let Some(name) = body["params"]["name"].as_str() {
+                req = req.header("Mcp-Name", name);
+            }
+        }
         if let Some(session_id) = &self.session_id {
             req = req.header(SESSION_HEADER, session_id.as_str());
         }
@@ -252,6 +302,15 @@ impl McpRpc {
         };
         Ok((session_id, value))
     }
+}
+
+/// The protocol without handshake or session.
+const STATELESS_VERSION: &str = "2026-07-28";
+
+fn knows(discovered: &Value, version: &str) -> bool {
+    discovered["supportedVersions"]
+        .as_array()
+        .is_some_and(|v| v.iter().any(|x| x.as_str() == Some(version)))
 }
 
 /// Whether `err` is the server's "unknown session" answer: HTTP 404 on a
@@ -354,6 +413,72 @@ mod tests {
 
         assert_eq!(result.text, "hello");
         assert!(!result.is_error);
+    }
+
+    #[tokio::test]
+    async fn a_current_server_is_spoken_to_without_a_handshake() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(body_partial_json(
+                serde_json::json!({"method": "server/discover"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 1,
+                "result": {"supportedVersions": ["2025-11-25", "2026-07-28"]}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(wiremock::matchers::header("mcp-method", "tools/call"))
+            .and(wiremock::matchers::header("mcp-name", "settings"))
+            .and(wiremock::matchers::header(
+                "mcp-protocol-version",
+                "2026-07-28",
+            ))
+            .and(body_partial_json(serde_json::json!({
+                "method": "tools/call",
+                "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0", "id": 2,
+                "result": {"content": [{"type": "text", "text": "hello"}]}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut rpc = McpRpc::new(
+            reqwest::Client::new(),
+            format!("{}/mcp", server.uri()),
+            "token",
+        );
+        rpc.start().await.unwrap();
+        let out = rpc.call_tool("settings", json!({})).await.unwrap();
+        assert_eq!(out.text, "hello");
+        assert!(rpc.session_id().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_older_server_gets_the_handshake() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(body_partial_json(
+                serde_json::json!({"method": "server/discover"}),
+            ))
+            .respond_with(ResponseTemplate::new(400))
+            .mount(&server)
+            .await;
+        mount_handshake(&server, "s1", 1).await;
+        let mut rpc = McpRpc::new(
+            reqwest::Client::new(),
+            format!("{}/mcp", server.uri()),
+            "token",
+        );
+        rpc.start().await.unwrap();
+        assert_eq!(rpc.session_id(), Some("s1"));
     }
 
     #[tokio::test]

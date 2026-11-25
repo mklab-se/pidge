@@ -25,6 +25,8 @@ pub mod queue;
 pub mod registry;
 pub mod render;
 pub mod rules;
+#[cfg(feature = "mcp")]
+pub mod skills;
 pub mod sync;
 
 pub use ctx::{AccountInfo, Frontend, Host, User};

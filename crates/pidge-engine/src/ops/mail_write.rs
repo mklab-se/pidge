@@ -15,7 +15,7 @@ use crate::ops::mail_act::check_cap;
 use crate::ops::{resolve_message, resolve_people};
 use crate::outbox::{self, Level};
 use crate::prefs::SendMode;
-use crate::registry::{Meta, OpDef, Output, op};
+use crate::registry::{Ask, Asking, Meta, OpDef, Output, asking, op};
 use crate::render;
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -169,10 +169,9 @@ async fn run_draft(user: Arc<User>, input: DraftInput) -> OpResult<Output> {
     if input.send.unwrap_or(false) {
         let sent = queue_send(&user, &handle, SendHow::Hold).await?;
         text = format!("{}\n{}", sent.text, text);
-        return Ok(Output::new(
-            text,
-            json!({ "draft": handle, "send": sent.data }),
-        ));
+        let mut out = Output::new(text, json!({ "draft": handle, "send": sent.data }));
+        out.ask = sent.ask;
+        return Ok(out);
     }
     text.push_str(&format!(
         "\nnext: read the draft to the user; when they say send, mail_send draft={handle}"
@@ -308,6 +307,25 @@ pub enum SendHow {
     Approve,
 }
 
+/// What the user is asked before a sensitive mail goes out: the mail itself,
+/// so that their yes does not rest on how their agent put it.
+fn question(account: &str, d: &pidge_core::provider::Draft, why: &str) -> String {
+    let list =
+        |l: &[pidge_core::MessageFrom]| l.iter().map(render::who).collect::<Vec<_>>().join(", ");
+    let mut text = format!("Send this mail from {account}?\n\nTo: {}\n", list(&d.to));
+    for (name, l) in [("Cc", &d.cc), ("Bcc", &d.bcc)] {
+        if !l.is_empty() {
+            text.push_str(&format!("{name}: {}\n", list(l)));
+        }
+    }
+    text.push_str(&format!(
+        "Subject: {}\n\n{}\n\nYou are asked because: {why}.",
+        render::one_line(&d.subject),
+        render::cap(&render::clean_body(&d.body_text), 1_500)
+    ));
+    text
+}
+
 /// Put a draft in the outbox (or send it at once).
 pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResult<Output> {
     let t = resolve_draft(user, handle)?;
@@ -360,7 +378,10 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResul
     ))
     .unwrap_or_default();
     let asked_about: Option<String> = user.store.get_doc("approval", &t.handle)?;
+    // Where the program can ask the user itself, their agent's word is not
+    // the second yes.
     let approved = how == SendHow::Approve
+        && asking() != Asking::CanAsk
         && existing.as_ref().is_some_and(|e| e.status == "approval")
         && asked_about.as_deref() == Some(content.as_str());
     let now = how == SendHow::Now || approved;
@@ -393,13 +414,20 @@ pub async fn queue_send(user: &Arc<User>, handle: &str, how: SendHow) -> OpResul
         } else {
             risk.reasons.join("; ")
         };
-        return Ok(Output::new(
+        let held = Output::new(
             format!(
                 "Held for approval {summary}: {why}.\nnext: read the reason to the user; only if they confirm, mail_send draft={} action=approve",
                 t.handle
             ),
             json!({ "draft": t.handle, "status": "approval", "reasons": risk.reasons, "recipients": n }),
-        ));
+        );
+        return Ok(held.asking(Ask {
+            message: question(&t.account, &draft, &why),
+            yes: "Send it".into(),
+            tool: "mail_send".into(),
+            input: json!({ "draft": t.handle, "action": "approve" }),
+            on_no: Some(json!({ "draft": t.handle, "action": "cancel" })),
+        }));
     }
     let hold = if now || prefs.policy.send == SendMode::Allow {
         chrono::Duration::zero()

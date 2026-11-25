@@ -25,7 +25,8 @@ subjects, not one message at a time. \
 When an answer says `next:`, do that. Plans (p5) are for the user: say what the plan does in one \
 sentence and apply it when they agree. \
 Sending: show the user the draft, and after they say send, call mail_send; sensitive mail waits for \
-a second yes (read the reason). Nothing is deleted permanently.";
+a second yes (read the reason). Where your program can show a question, pidge asks the user itself \
+before sensitive mail or e-mailing others about a meeting: take their answer as it is. Nothing is deleted permanently.";
 
 /// Recipes, keyed by what the user says.
 pub const RECIPES: &[(&str, &str)] = &[

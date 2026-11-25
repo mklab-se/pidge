@@ -503,7 +503,7 @@ permanently) and a recipe per common request.
 |---|---|---|
 | Signing key, user records (mailbox list, token generation, refresh chains), mailbox records (`owner`, `provider`, tokens), AI keys | Key Vault (`jwt-signing-key`, `user-*`, `mailbox-*`, `ai-*`) | No |
 | Preferences: categories, rules, examples, VIPs, muted senders, policy, timezone, default sender, last seen, AI status | One blob per user in the `prefs` container | No |
-| Index: messages and classifications, handles, plans, undo log, triage sessions, outbox, send count, pending notes | One SQLite file per user under `PIDGE_MCP_INDEX_DIR` | Yes, on Azure (`/tmp`): it is rebuilt from the mailboxes, but held sends, plans, handles and the hourly send count start over |
+| Index: messages and classifications, handles, plans, the queue, decks, outbox, send count, pending notes | One SQLite file per user under `PIDGE_MCP_INDEX_DIR` | Yes, on Azure (`/tmp`): it is rebuilt from the mailboxes, but held sends, plans, handles and the hourly send count start over |
 | Each user's engine (worker queue, outbox timer) | Process memory, refreshed from the user record every 2 minutes and after connect, disconnect or an AI key change | Yes |
 
 On a user's first call after 2.0, if they have no preferences yet, their

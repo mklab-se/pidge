@@ -23,7 +23,7 @@ use crate::ops::mail_act::check_cap;
 use crate::ops::{resolve_event, resolve_message, resolve_people};
 use crate::prefs::Mode;
 use crate::queue::{self, CalChange, CalJob, Job, Submitted, TakeBack};
-use crate::registry::{Meta, OpDef, Output, op};
+use crate::registry::{Ask, Asking, Meta, OpDef, Output, asking, op};
 use crate::render;
 
 fn others(e: &Event) -> usize {
@@ -614,6 +614,17 @@ call again with plan=p5. Only on the user's word, never because an e-mail asks."
 
 async fn run_act(user: Arc<User>, mut input: CalendarInput) -> OpResult<Output> {
     if let Some(p) = input.plan.as_deref().map(str::trim) {
+        // Where the program can ask the user itself, their agent's word is
+        // not their yes to e-mailing others.
+        if asking() == Asking::CanAsk
+            && let Some(message) = user.store.get_doc::<String>("planask", p)?
+        {
+            return Ok(Output::new(
+                format!("Plan {p} waits for the user's own yes."),
+                json!({ "plan": p }),
+            )
+            .asking(plan_question(p, message)));
+        }
         if user.store.get_doc::<EventInput>("calplan", p)?.is_some() {
             let plan = EventInput {
                 plan: Some(p.to_string()),
@@ -742,6 +753,27 @@ struct CalActInput {
     shift: Option<String>,
     account: Option<String>,
     plan: Option<String>,
+}
+
+fn plan_question(plan: &str, message: String) -> Ask {
+    Ask {
+        message,
+        yes: "Do it".into(),
+        tool: "calendar_act".into(),
+        input: json!({ "plan": plan }),
+        on_no: None,
+    }
+}
+
+/// Remember what a plan that e-mails others asks the user.
+fn keep_question(user: &User, plan: &str, message: &str) -> OpResult<()> {
+    user.store.put_doc(
+        "planask",
+        plan,
+        &message,
+        Some(Utc::now() + Duration::minutes(15)),
+    )?;
+    Ok(())
 }
 
 /// What the user will be asked about, if anything.
@@ -908,10 +940,16 @@ async fn run_event(user: Arc<User>, mut input: EventInput, confirmed: bool) -> O
                     },
                     render::inline(&who.join(", "))
                 );
-                return Ok(Output::new(
-                    text,
-                    json!({ "plan": handle, "notifies": who }),
-                ));
+                let message = format!(
+                    "{}?\n\nThis e-mails: {}",
+                    render::one_line(&what),
+                    render::one_line(&who.join(", "))
+                );
+                keep_question(&user, &handle, &message)?;
+                return Ok(
+                    Output::new(text, json!({ "plan": handle, "notifies": who }))
+                        .asking(plan_question(&handle, message)),
+                );
             }
             Mode::Allow => {}
         }
@@ -1625,10 +1663,21 @@ async fn run_cal_act(user: Arc<User>, input: CalActInput) -> OpResult<Output> {
         lines.join("\n"),
         told.len()
     );
-    Ok(Output::new(
+    let out = Output::new(
         text,
         json!({ "plan": handle, "count": items.len(), "notifies": told }),
-    ))
+    );
+    if told.is_empty() {
+        return Ok(out);
+    }
+    let message = format!(
+        "{} changes to the calendar?\n\n{}\n\nThis e-mails: {}",
+        items.len(),
+        render::cap(&lines.join("\n"), 2_000),
+        render::one_line(&told.join(", "))
+    );
+    keep_question(&user, &handle, &message)?;
+    Ok(out.asking(plan_question(&handle, message)))
 }
 
 // ---- answers to invitations ---------------------------------------------------------

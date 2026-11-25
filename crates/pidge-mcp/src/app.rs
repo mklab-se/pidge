@@ -34,6 +34,9 @@ pub fn build_router(state: SharedState, cancel: CancellationToken) -> Router {
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default()
             .with_allowed_hosts(allowed_hosts(&state))
+            // Older clients get no session either: nothing pidge does needs
+            // one, and one would not survive a deploy.
+            .with_legacy_session_mode(false)
             .with_cancellation_token(cancel),
     );
 

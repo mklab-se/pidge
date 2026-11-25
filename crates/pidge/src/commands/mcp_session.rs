@@ -241,23 +241,23 @@ impl RefreshingRpc {
         }
     }
 
-    /// Initialize the underlying MCP session, remapping a bare `401` (the
+    /// Start talking to the server, remapping a bare `401` (the
     /// locally-held token looked valid (it wasn't near its recorded
     /// expiry) but the server had already revoked it, e.g. a revoked
     /// session or a rotated signing key) to [`ClientError::SessionExpired`],
     /// the same way [`McpCalls::call_tool`] remaps a mid-session `401`.
-    /// `initialize` runs once, up front, before any `call_tool`, so it
+    /// `start` runs once, up front, before any `call_tool`, so it
     /// needs this same remap rather than inheriting `call_tool`'s.
-    pub(crate) async fn initialize(&mut self) -> Result<()> {
+    pub(crate) async fn start(&mut self) -> Result<()> {
         self.inner
-            .initialize()
+            .start()
             .await
             .map_err(|e| remap_401_to_session_expired(&self.tokens.server, e))
     }
 }
 
 /// Remap a bare `401` to [`ClientError::SessionExpired`]; every other error
-/// passes through unchanged. Factored out of [`RefreshingRpc::initialize`]
+/// passes through unchanged. Factored out of [`RefreshingRpc::start`]
 /// (whose own error comes from a real network call) so this mapping is
 /// directly unit-testable with no network involved. `pub(crate)` since
 /// `connect`'s `--dry-run` path also calls a bare `McpRpc::initialize`

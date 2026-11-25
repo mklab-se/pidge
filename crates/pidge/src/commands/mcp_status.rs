@@ -101,7 +101,7 @@ pub async fn run(
 /// [`ClientError::SessionExpired`], which the caller remaps the same way as
 /// [`session_or_error`]'s `Expired` case.
 async fn accounts_list(rpc: &mut RefreshingRpc) -> Result<String> {
-    rpc.initialize().await?;
+    rpc.start().await?;
     Ok(rpc
         .call_tool("settings", json!({ "action": "list" }))
         .await?

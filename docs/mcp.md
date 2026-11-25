@@ -175,7 +175,7 @@ keychain (headless, no Secret Service), pass `--store file` explicitly, or
 `status`/`logout` will fail trying the keychain first. `logout` forgets the
 stored session for that server, locally only: it removes the session from
 both backends and from the local server index, but revokes nothing on the
-server. To revoke every session on the server as well, call the `accounts`
+server. To revoke every session on the server as well, call the `settings`
 tool with `action=sign_out_everywhere` (see Operations below). `--dry-run`
 reports what it would remove without touching anything. If the server has
 revoked your session (see
@@ -236,6 +236,18 @@ How the tools behave together:
   is judged by what the user wrote, not by the mail it quotes.
 - **Standing rules** apply to mail that arrives after the user said "always", never to mail that
   matters, and say what they did once.
+
+### The protocol
+
+- **Versions.** pidge speaks the MCP specification 2026-07-28 (stateless, sometimes called MCP 2.0) and
+  every version back to 2024-11-05, all without sessions: nothing to lose when the server restarts.
+- **Questions to you.** A client on 2026-07-28 that can show a form gets one, from pidge itself, before
+  sensitive mail goes out (with the mail in it) and before a calendar change e-mails other people. The
+  agent cannot answer it. Other clients work as before: the agent asks, and sends `action=approve` or
+  `plan=p5`. A question can be answered once, within 15 minutes, by the user it was put to.
+- **Skills.** Clients with the Skills over MCP extension can load `pidge-inbox`, `pidge-mail` and
+  `pidge-calendar`, which say how to go about each in more words than the instructions.
+- **Log.** Each call names the client's protocol version and what it can do (extensions, forms).
 
 See [`deploy/azure/README.md`](../deploy/azure/README.md#tools) for the full
 behaviour notes (thread mode, reply recipients, rate limits, attachment
@@ -337,7 +349,7 @@ for domain changes.
   ```bash
   pidge-mcp --convert-check sample.pdf
   ```
-- **Revoke a user's sessions.** Call the `accounts` tool with
+- **Revoke a user's sessions.** Call the `settings` tool with
   `action=sign_out_everywhere` to invalidate every access and refresh token
   already issued to that user, without touching anyone else's. See
   [Revoke a user's sessions](../deploy/azure/README.md#revoke-a-users-sessions)

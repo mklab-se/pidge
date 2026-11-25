@@ -9,10 +9,16 @@ use serde_json::{Value, json};
 
 /// The program making the calls, as it names itself when it connects
 /// (MCP `clientInfo`): `claude-ai 0.1.0`.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Client {
     pub name: String,
     pub version: String,
+    /// The MCP protocol version of the request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
+    /// What it says it can do: extensions, and `form` / `url` questions.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub can: Vec<String>,
 }
 
 /// The pidge version every line carries.
@@ -56,6 +62,19 @@ pub fn job_line(
         "done": done,
         "failed": failed,
         "retrying": retrying,
+    })
+    .to_string()
+}
+
+/// The line for a question put to the user themself, and their answer.
+pub fn ask_line(client: Option<&Client>, tool: &str, answer: &str) -> String {
+    json!({
+        "t": now(),
+        "v": VERSION,
+        "kind": "ask",
+        "client": client,
+        "tool": tool,
+        "answer": answer,
     })
     .to_string()
 }

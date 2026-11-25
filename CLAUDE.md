@@ -34,7 +34,8 @@ crates/
                   # importance, optional Ailloy eval), `dates.rs` + `happenings.rs` (times in mail, calendar
                   # mirror), `delivery.rs` (parcels), `rules.rs` ("always do that"), `outbox.rs` (risk-based
                   # send hold), `prefs.rs`, `render.rs` (untrusted wrapper), `playbooks.rs` (MCP instructions
-                  # + SKILL.md), `activity.rs` (the log), `mcp.rs` (feature `mcp`: the rmcp handler)
+                  # + SKILL.md), `activity.rs` (the log), `mcp.rs` + `skills.rs`
+                  # (feature `mcp`: the rmcp handler, questions to the user, skills)
   pidge/          # CLI: `dynamic.rs` builds `pidge mail|calendar|accounts ...` from the registry; `cli.rs` the
                   # fixed commands (account, mcp serve/connect/status/logout, ai, skill, op, completion);
                   # `local.rs` = `LocalHost` (config.yaml mailboxes, Downloads, markitdown if installed,
@@ -56,6 +57,8 @@ deploy/azure/     # Bicep + deploy.sh + Dockerfile for pidge-mcp on Container Ap
 - **Few calls:** answers carry everything needed to talk without another call; an operation takes many ids, groups (`g4`) and alternatives at once. Reads never wait for sorting, AI or lookups (`classify::sort_new` runs them in the background).
 - **Plans:** only a description that matches more than `policy.ask_over` messages, and calendar changes that e-mail people, return a plan (a doc in the store, 15 min) that the next call applies. Policy lives in prefs (`send: hold|confirm|allow|deny`, `notify`, `bulk`, `delete`).
 - **Sending:** only `mail_send` sends, only drafts, through `outbox.rs`: risk assessment (recipients, first contact, forwards, attachments, identity/card numbers, the user's AI) sets a 10 s / 30 s / 2 min hold or approval. The hourly cap (`policy.sends_per_hour`, default 30) counts sends, invitations, cancellations, RSVP messages and unsubscribe e-mails.
+- **The user's own yes:** an operation that needs one returns `Output::asking(Ask)`. `registry::asking()` says how to get it: `InChat` (the agent asks, as ever), `CanAsk` (the MCP client can put a form to the user: `mcp.rs` does, and an agent's `approve`/`plan` does not count) or `Said` (they just answered yes). Questions are docs of the user, single use, 15 min; `requestState` is only their random name.
+- **Skills over MCP:** `skills.rs`, static `SKILL.md`s; the instructions stay complete for clients without skills.
 - **Decks:** `ops/inbox.rs` deals the inbox in groups from a session (doc `deck`); `mail_act next=true` answers with the next one.
 - **Classification:** kind (fixed set), category (the user's, with rules and examples) and importance (with reasons) per message, stored in the index with their source (rule, signal, ai, harness). Changing categories or rules resets them (`reset_classifications`).
 - **Untrusted content:** bodies, previews, converted attachments and quoted text go out inside `<untrusted-email-content>` via `render::untrusted`; header fields through `render::one_line`/`inline`.
@@ -63,6 +66,7 @@ deploy/azure/     # Bicep + deploy.sh + Dockerfile for pidge-mcp on Container Ap
 
 ### pidge-mcp patterns
 
+- **Protocol:** MCP 2026-07-28 and every older version, all without sessions (`with_legacy_session_mode(false)`).
 - **Bearer identity:** no tool takes a user id. The bearer middleware attaches `AuthenticatedUser`; `engine::HttpSource` turns it into that user's engine.
 - **Ownership:** `engine::providers` hands the engine only mailboxes the user record lists *and* whose `MailboxRecord { owner, tokens, identity, provider }` names the user. Ids are confined to each provider's id alphabet before a path is built.
 - **One browser per flow:** the Continue step (`/authorize/go`, `/connect/go`) sets a cookie that `/callback` and `/callback/google` require. Mailbox secrets are named `mailbox-<sanitized address>-<hash8>`.

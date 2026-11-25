@@ -2343,3 +2343,115 @@ async fn mcp_and_discovery_answer_browsers_cross_origin_but_consent_pages_do_not
             .is_none()
     );
 }
+
+/// One MCP request over HTTP, without a session.
+async fn mcp_request(
+    app: &Router,
+    bearer: &str,
+    version: &str,
+    method: &str,
+    mut params: serde_json::Value,
+) -> (StatusCode, bool, serde_json::Value) {
+    let mut req = Request::post("/mcp")
+        .header(header::HOST, "localhost:8080")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+        .header("mcp-protocol-version", version);
+    if version == "2026-07-28" {
+        params["_meta"] = serde_json::json!({
+            "io.modelcontextprotocol/protocolVersion": version,
+            "io.modelcontextprotocol/clientInfo": {"name": "t", "version": "0"},
+            "io.modelcontextprotocol/clientCapabilities": {},
+        });
+        req = req.header("mcp-method", method);
+        let name = params["name"].as_str().or(params["uri"].as_str());
+        if let Some(name) = name
+            && matches!(method, "tools/call" | "resources/read" | "skills/get")
+        {
+            req = req.header("mcp-name", name);
+        }
+    }
+    let body = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+    let resp = app
+        .clone()
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let session = resp.headers().contains_key("mcp-session-id");
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    let json = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("data:"))
+        .chain([text.as_str()])
+        .find_map(|l| serde_json::from_str(l.trim()).ok())
+        .unwrap_or_default();
+    (status, session, json)
+}
+
+#[tokio::test]
+async fn every_protocol_version_works_without_a_session() {
+    let h = harness("jane@example.com").await;
+    let (_, access, _) = sign_in_and_redeem(&h).await;
+    for version in ["2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"] {
+        if version != "2026-07-28" {
+            let params = serde_json::json!({
+                "protocolVersion": version, "capabilities": {},
+                "clientInfo": {"name": "t", "version": "0"}
+            });
+            let (status, session, v) =
+                mcp_request(&h.app, &access, version, "initialize", params).await;
+            assert_eq!(status, StatusCode::OK, "{version}");
+            assert!(!session, "{version}: no session to lose on a deploy");
+            assert_eq!(v["result"]["protocolVersion"], version);
+        }
+        let (status, _, v) = mcp_request(
+            &h.app,
+            &access,
+            version,
+            "tools/list",
+            serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{version}: {v}");
+        assert_eq!(v["result"]["tools"].as_array().unwrap().len(), 12);
+        let call = serde_json::json!({"name": "settings", "arguments": {"intent": "test"}});
+        let (status, _, v) = mcp_request(&h.app, &access, version, "tools/call", call).await;
+        assert_eq!(status, StatusCode::OK, "{version}: {v}");
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("jane@example.com"), "{version}: {text}");
+    }
+}
+
+#[tokio::test]
+async fn skills_are_served_with_their_files() {
+    let h = harness("jane@example.com").await;
+    let (_, access, _) = sign_in_and_redeem(&h).await;
+    let v = "2026-07-28";
+    let none = || serde_json::json!({});
+    let (_, _, d) = mcp_request(&h.app, &access, v, "server/discover", none()).await;
+    let caps = &d["result"]["capabilities"];
+    assert!(
+        caps["extensions"]["io.modelcontextprotocol/skills"].is_object(),
+        "{caps}"
+    );
+    let (_, _, l) = mcp_request(&h.app, &access, v, "skills/list", none()).await;
+    let skills = l["result"]["skills"].as_array().unwrap();
+    assert_eq!(skills.len(), 3, "{l}");
+    let uri = skills[0]["uri"].as_str().unwrap();
+    let params = serde_json::json!({ "uri": uri });
+    let (_, _, g) = mcp_request(&h.app, &access, v, "skills/get", params.clone()).await;
+    assert_eq!(g["result"]["skill"]["uri"], uri, "{g}");
+    let (_, _, r) = mcp_request(&h.app, &access, v, "resources/read", params).await;
+    let text = r["result"]["contents"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("---\nname: pidge-inbox\n"), "{text}");
+    assert_eq!(
+        skills[0]["resources"][0]["size"].as_u64().unwrap() as usize,
+        text.len()
+    );
+    let wrong = serde_json::json!({ "uri": "skill://pidge-inbox/../../etc/passwd" });
+    let (_, _, e) = mcp_request(&h.app, &access, v, "resources/read", wrong).await;
+    assert!(e["error"].is_object(), "{e}");
+}

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0] - 2026-11-25
+
+More of the MCP specification 2026-07-28. Clients that do not know the new parts work as before.
+
+### Added
+
+- **pidge asks you itself** before sensitive mail goes out and before a calendar change e-mails other
+  people, in clients that can show a form (multi round-trip requests, elicitation). The question shows
+  the mail, and an agent's `approve` or `plan=` is not your yes there.
+- **Skills over MCP:** `pidge-inbox`, `pidge-mail` and `pidge-calendar`, loaded when they are needed.
+- The activity log names each client's protocol version and what it can do, and logs questions put to
+  the user with their answer.
+
+### Changed
+
+- **No sessions for older protocol versions either:** a deploy no longer makes a client reconnect.
+- `pidge mcp connect` and `status` speak 2026-07-28 where the server does, else the older handshake.
+
 ## [3.0.2] - 2026-11-24
 
 What a second independent review found, mostly in the calendar (several older than 3.0).
